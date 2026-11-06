@@ -1,0 +1,30 @@
+{
+  "name": "far-ray-tracer",
+  "private": true,
+  "version": "3.0.0",
+  "license": "MIT",
+  "author": "FARSystems (https://farsystems.com.br)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "tauri": "tauri",
+    "test": "cargo test --release -p far-core",
+    "validate": "bash reference/validate.sh"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.12.4",
+    "lucide-react": "^1.70.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.2.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6"
+  }
+}

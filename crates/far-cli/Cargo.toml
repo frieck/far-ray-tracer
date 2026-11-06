@@ -1,0 +1,15 @@
+[package]
+name = "far-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "far"
+path = "src/main.rs"
+
+[dependencies]
+far-core = { path = "../far-core" }
+image = { version = "0.25", default-features = false, features = ["bmp", "png", "jpeg"] }

@@ -1,0 +1,61 @@
+{
+  "lights": [
+    { "position": [-5, 11, 3], "radius": 0.6 }
+  ],
+  "objects": [
+    {
+      "type": "plane",
+      "points": [[-16, -2, -6], [16, -2, -6], [16, -2, 26], [-16, -2, 26]],
+      "material": { "color": [0.62, 0.6, 0.58], "reflection": 0.12 }
+    },
+    {
+      "type": "plane",
+      "points": [[-16, -2, 22], [-16, 14, 22], [16, 14, 22], [16, -2, 22]],
+      "material": { "color": [0.34, 0.38, 0.46] }
+    },
+    {
+      "type": "box",
+      "center": [-6.2, -0.7, 9],
+      "size": [2.6, 2.6, 2.6],
+      "rotation": [0, 32, 0],
+      "material": { "color": [0.8, 0.22, 0.18], "reflection": 0.1 }
+    },
+    {
+      "type": "cone",
+      "center": [-2.6, -0.4, 11],
+      "radius": 1.6,
+      "height": 3.2,
+      "material": { "color": [0.95, 0.68, 0.2], "reflection": 0.15 }
+    },
+    {
+      "type": "cylinder",
+      "center": [1.2, -0.4, 12],
+      "radius": 1.2,
+      "height": 3.2,
+      "material": { "color": [0.22, 0.6, 0.42], "reflection": 0.1 }
+    },
+    {
+      "type": "tube",
+      "center": [5.6, -0.2, 10],
+      "radius": 1.7,
+      "inner_radius": 1.15,
+      "height": 3.6,
+      "rotation": [62, 0, 18],
+      "material": { "color": [0.25, 0.42, 0.85], "reflection": 0.25, "glossy": 0.1 }
+    },
+    {
+      "type": "torus",
+      "center": [-1.4, 0.1, 5.2],
+      "major_radius": 1.5,
+      "minor_radius": 0.55,
+      "rotation": [68, 0, 14],
+      "material": { "diffuse": 0, "specular": 0.6, "refraction": 1, "ior": 1.45 }
+    },
+    {
+      "type": "sphere",
+      "center": [2.4, -0.9, 5.4],
+      "radius": 1.1,
+      "material": { "color": [0.95, 0.95, 0.97], "diffuse": 0.1, "reflection": 0.95 }
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "productName": "Far Ray Tracer",
+  "version": "3.0.0",
+  "identifier": "br.com.farsystems.far-ray-tracer",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "title": "Far Ray Tracer",
+        "width": 1360,
+        "height": 860,
+        "minWidth": 1040,
+        "minHeight": 640,
+        "transparent": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "theme": "Dark",
+        "windowEffects": {
+          "effects": [
+            "hudWindow",
+            "mica"
+          ],
+          "state": "active"
+        },
+        "acceptFirstMouse": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "app"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "resources": {
+      "../assets": "assets"
+    },
+    "publisher": "FARSystems",
+    "copyright": "Copyright (c) 2026 FARSystems"
+  }
+}
