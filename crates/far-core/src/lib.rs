@@ -5,6 +5,7 @@
 //! commented where it happens. Enhanced mode fixes them.
 
 pub mod bump;
+pub mod displace;
 pub mod environment;
 pub mod ggx;
 pub mod surface;

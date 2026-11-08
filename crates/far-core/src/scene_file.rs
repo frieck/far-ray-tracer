@@ -95,6 +95,21 @@ struct MaterialFile {
     scale_u: f32,
     scale_v: f32,
     bump: Option<BumpFile>,
+    displacement: Option<DisplacementFile>,
+}
+
+/// A displacement map: `{"map": "rocks.png", "height": 0.1, "detail": 128}`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DisplacementFile {
+    map: String,
+    height: f32,
+    #[serde(default = "default_detail")]
+    detail: u32,
+}
+
+fn default_detail() -> u32 {
+    crate::displace::DEFAULT_DETAIL
 }
 
 /// A bump or normal map: `{"map": "bricks.png", "kind": "height", "strength": 0.02}`.
@@ -127,6 +142,7 @@ impl Default for MaterialFile {
             scale_u: 1.0,
             scale_v: 1.0,
             bump: None,
+            displacement: None,
         }
     }
 }
@@ -146,6 +162,7 @@ impl From<MaterialFile> for MaterialData {
             v_scale: m.scale_v,
             texture: m.texture,
             bump: m.bump.map(|b| (b.map, b.kind, b.strength)),
+            displacement: m.displacement.map(|d| (d.map, d.height, d.detail)),
         }
     }
 }
@@ -320,6 +337,7 @@ impl Scene {
                 }
             }
         }
+        scene.apply_displacement();
         if let Some([low, high]) = file.bounds {
             let (low, high) = (vector(low), vector(high));
             require_positive(&(high - low).array(), "Scene bounds")?;
@@ -390,7 +408,7 @@ impl Scene {
 
     /// Grows the KD-Tree bounds to hold the whole scene. Explicit bounds preserve the
     /// historical volume when requested by a reference scene.
-    fn fit_bounds(&mut self) {
+    pub(crate) fn fit_bounds(&mut self) {
         let (mut low, mut high) = (self.extends.pos, self.extends.pos + self.extends.size);
         let mut grow = |a: Vec3, b: Vec3| {
             low = Vec3::new(low.x.min(a.x), low.y.min(a.y), low.z.min(a.z));

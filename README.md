@@ -437,6 +437,42 @@ Changing only the strength keeps a 2008 material as it is. Classic and Fixed ign
 maps. Open `assets/scenes/bump-maps.far` for tiles (height map) and hammered metal (normal
 map); `tools/bump_maps.py` builds its images.
 
+### Displacement
+
+A material's `displacement` moves the surface itself by a grayscale height map, so the
+outline, the shadows and the contact with other objects show the relief, which a bump map
+cannot do.
+```json
+{
+  "color": [0.55, 0.52, 0.48],
+  "displacement": { "map": "cobbles-height.png", "height": 0.12, "detail": 128 }
+}
+```
+- `height` is how far white moves the surface out, in scene units; black stays in place.
+- `detail` (default 128, 4 to 4096) is the number of divisions across the object. Higher
+  shows smaller relief in the outline and costs memory.
+- The map follows the material's texture coordinates and scale, like color and bump maps.
+
+How it works:
+- **Objects** (spheres, solids and meshes) become dense meshes when the scene loads. Each
+  point moves along the surface normal by the map's height; points shared by two faces, at
+  seams and box edges, move together so the surface does not tear. The meshes join the
+  KD-Tree. Shading does not use the facets: each triangle remembers where it lies on the
+  original shape, so color and normal come from the shape and the map at the exact point.
+  All displaced objects together are limited to 4 million triangles; past that, detail is
+  lowered evenly, with a warning.
+- **The infinite ground** cannot become a mesh. Rays crossing the thin slab its relief can
+  fill march over the map about half a texel at a time and refine the crossing, so its
+  relief is exact to the map's resolution.
+
+Displacement is geometry, so every stage sees it, although Classic and Fixed shade the
+displaced meshes by their facets. Scenes over 50 000 primitives build the KD-Tree with a
+sweep over primitive extents, and without the original's starting cost of 10 000, which
+left them with an empty tree; smaller scenes build exactly as before. The material preview
+displaces its ball at a lower detail. Open `assets/scenes/displacement.far`: a cobbled
+ground, a displaced sphere and box, and the same map as a bump on a smaller sphere, whose
+outline stays smooth. `tools/displacement_maps.py` builds it.
+
 ### Denoising (Enhanced)
 
 **Denoise** is off by default, and the app suggests it when HDR lighting is active; the

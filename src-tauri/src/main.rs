@@ -421,6 +421,8 @@ fn material_preview(
     if let Some(previous) = state.previews.lock().unwrap().insert(view, progress.clone()) {
         previous.cancel.store(true, Relaxed);
     }
+    // A displaced ball is a dense mesh; the few shapes of a plain one are quicker without a tree.
+    let kd = (ball.prims.len() >= far_core::preview::BALL_TREE_FROM).then(|| KdTree::build_corrected(&ball));
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
     // While a render runs, half the cores keep the preview from stalling it.
     let threads = if state.rendering.load(Relaxed) { (cores / 2).max(1) } else { cores };
@@ -432,12 +434,12 @@ fn material_preview(
         samples,
         denoise: true,
         max_depth: 6,
-        use_kd: false,
+        use_kd: kd.is_some(),
         threads,
         ..Options::default()
     };
     let image = Image::new(width, height);
-    render(&ball, None, &options, &image, &progress);
+    render(&ball, kd.as_ref(), &options, &image, &progress);
     if progress.cancel.load(Relaxed) {
         return Err("Replaced by a newer preview".into());
     }

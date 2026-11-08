@@ -13,6 +13,12 @@ const MAX_DEPTH: i32 = 20;
 const LEAF_AXIS: u32 = 3;
 /// Below this, splitting the work between threads does not pay off.
 const MIN_PARALLEL: usize = 256;
+/// Scenes beyond this size, far larger than any the original could load, such as displaced
+/// meshes, choose splits by a sweep over primitive extents. The original's exact counting
+/// tests every primitive at every candidate, which grows with the square of the primitives.
+const LARGE_SCENE: usize = 50_000;
+/// In a large scene, nodes with at least this many primitives use the sweep.
+const SWEEP_FROM: usize = 512;
 
 #[derive(Clone, Copy)]
 pub struct Node {
@@ -77,7 +83,8 @@ impl KdTree {
         // The original inserts at the head of a list, hence the reversed order.
         // Infinite planes have no bounds; the traversal tests them on its own.
         let root: Vec<u32> = (0..scene.prims.len() as u32).rev().filter(|&i| !scene.grounds.contains(&(i as usize))).collect();
-        let tree = subdivide(scene, corrected, root, scene.extends, 0);
+        let sweep_from = if scene.prims.len() > LARGE_SCENE { SWEEP_FROM } else { usize::MAX };
+        let tree = subdivide(scene, corrected, sweep_from, root, scene.extends, 0);
         let mut kd = KdTree { nodes: vec![Node { a: 0, b: LEAF_AXIS }], list: Vec::new() };
         kd.flatten(tree, 0);
         kd
@@ -282,7 +289,22 @@ impl SplitPlan<'_> {
     }
 }
 
-fn subdivide(scene: &Scene, corrected: bool, list: Vec<u32>, bounds: Aabb, depth: i32) -> BuildNode {
+/// Primitives on the left and on the right of each candidate, from their extents along the axis:
+/// a primitive counts on a side when its extent reaches into it.
+fn sweep_counts(spans: &[(f32, f32)], candidates: &[f32]) -> (Vec<u32>, Vec<u32>) {
+    let mut lows: Vec<f32> = spans.iter().map(|s| s.0).collect();
+    let mut highs: Vec<f32> = spans.iter().map(|s| s.1).collect();
+    lows.sort_by(f32::total_cmp);
+    highs.sort_by(f32::total_cmp);
+    let n = spans.len() as u32;
+    candidates.iter().map(|&x| {
+        let left = lows.partition_point(|&v| v <= x) as u32;
+        let right = n - highs.partition_point(|&v| v < x) as u32;
+        (left, right)
+    }).unzip()
+}
+
+fn subdivide(scene: &Scene, corrected: bool, sweep_from: usize, list: Vec<u32>, bounds: Aabb, depth: i32) -> BuildNode {
     let n = list.len();
     let s = bounds.size;
     let axis = if s.x >= s.y && s.x >= s.z {
@@ -325,7 +347,44 @@ fn subdivide(scene: &Scene, corrected: bool, list: Vec<u32>, bounds: Aabb, depth
     candidates.sort_by(|a, b| a.partial_cmp(b).expect("candidates are never NaN"));
     candidates.dedup();
 
-    let plan = SplitPlan { scene, corrected, bounds, axis, pos1, pos2, candidates: &candidates };
+    let (left_counts, right_counts) = if n >= sweep_from {
+        sweep_counts(&spans, &candidates)
+    } else {
+        exact_counts(scene, corrected, &list, &spans, &candidates, bounds, axis, pos1, pos2)
+    };
+
+    let sav = 0.5 / bounds.semi_area();
+    let leaf_cost = n as f32;
+    // The original starts from a cost of 10000. Past about 10000 primitives no split costs less,
+    // and it splits into two empty boxes, losing everything; large scenes start from infinity.
+    let mut lowest = if sweep_from == usize::MAX { 10000.0f32 } else { f32::INFINITY };
+    let mut best = 0.0f32;
+    let (mut b1, mut b2) = (Aabb::default(), Aabb::default());
+    for (k, &position) in candidates.iter().enumerate() {
+        let (b3, b4) = split_bounds(&bounds, axis, position, pos1, pos2);
+        let n1 = left_counts[k] as f32;
+        let n2 = right_counts[k] as f32;
+        let sa1 = 2.0 * b3.semi_area();
+        let sa2 = 2.0 * b4.semi_area();
+        let cost = 0.3 + 1.0 * (sa1 * sav * n1 + sa2 * sav * n2);
+        if cost < lowest {
+            lowest = cost;
+            best = position;
+            b1 = b3;
+            b2 = b4;
+        }
+    }
+    finish(scene, corrected, sweep_from, list, spans, axis, best, b1, b2, lowest, leaf_cost, depth)
+}
+
+/// The original's counts: each primitive tested exactly against the boxes of every candidate.
+#[allow(clippy::too_many_arguments)]
+fn exact_counts(
+    scene: &Scene, corrected: bool, list: &[u32], spans: &[(f32, f32)], candidates: &[f32],
+    bounds: Aabb, axis: usize, pos1: f32, pos2: f32,
+) -> (Vec<u32>, Vec<u32>) {
+    let n = list.len();
+    let plan = SplitPlan { scene, corrected, bounds, axis, pos1, pos2, candidates };
     let m = candidates.len();
     let counts = if n >= MIN_PARALLEL {
         (0..n)
@@ -345,29 +404,21 @@ fn subdivide(scene: &Scene, corrected: bool, list: Vec<u32>, bounds: Aabb, depth
             plan.count(c, &scene.prims[list[k] as usize], lo, hi)
         })
     };
-
-    let sav = 0.5 / bounds.semi_area();
-    let leaf_cost = n as f32;
-    let mut lowest = 10000.0f32;
-    let mut best = 0.0f32;
-    let (mut b1, mut b2) = (Aabb::default(), Aabb::default());
     let mut running = 0;
-    for (k, &position) in candidates.iter().enumerate() {
+    let left = (0..m).map(|k| {
         running += counts.rest[k];
-        let (b3, b4) = split_bounds(&bounds, axis, position, pos1, pos2);
-        let n1 = (counts.n1[k] + running) as f32;
-        let n2 = counts.n2[k] as f32;
-        let sa1 = 2.0 * b3.semi_area();
-        let sa2 = 2.0 * b4.semi_area();
-        let cost = 0.3 + 1.0 * (sa1 * sav * n1 + sa2 * sav * n2);
-        if cost < lowest {
-            lowest = cost;
-            best = position;
-            b1 = b3;
-            b2 = b4;
-        }
-    }
+        counts.n1[k] + running
+    }).collect();
+    (left, counts.n2)
+}
 
+/// Makes a leaf, or splits `list` at `best` into the two boxes and builds both sides.
+#[allow(clippy::too_many_arguments)]
+fn finish(
+    scene: &Scene, corrected: bool, sweep_from: usize, list: Vec<u32>, spans: Vec<(f32, f32)>,
+    axis: usize, best: f32, b1: Aabb, b2: Aabb, lowest: f32, leaf_cost: f32, depth: i32,
+) -> BuildNode {
+    let n = list.len();
     if lowest > leaf_cost {
         return BuildNode::Leaf(list);
     }
@@ -393,7 +444,7 @@ fn subdivide(scene: &Scene, corrected: bool, list: Vec<u32>, bounds: Aabb, depth
     let may_split = depth < MAX_DEPTH;
     let branch = |l: Vec<u32>, c: Aabb| {
         if may_split && l.len() > 2 {
-            subdivide(scene, corrected, l, c, depth + 1)
+            subdivide(scene, corrected, sweep_from, l, c, depth + 1)
         } else {
             BuildNode::Leaf(l)
         }

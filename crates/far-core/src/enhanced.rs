@@ -233,6 +233,15 @@ impl<'a> Tracer<'a> {
                 let n = s.normal(pos);
                 (scene.solid_color(s, pos), n, n)
             }
+            Primitive::Triangle(t) if scene.displaced_face(prim).is_some() => {
+                // A displaced triangle shades as the original shape at the point under it, with
+                // the normal of the displaced surface from the map itself, not from the facet.
+                let face = scene.displaced_face(prim).expect("displaced");
+                let source = &scene.displaced_sources[face.source as usize];
+                let (base, normal) = face.base_at(self.ctx.uv[prim]);
+                let smooth = crate::displace::displaced_normal(scene, source, base, normal);
+                (scene.color_on(source, base), t.n, smooth)
+            }
             Primitive::Triangle(t) => {
                 let uv = self.ctx.uv[prim];
                 let [a, b, c] = scene.corner_normals[prim];
@@ -241,9 +250,22 @@ impl<'a> Tracer<'a> {
                 let n = if n.x.is_finite() { n } else { t.n };
                 (scene.triangle_color_fixed(t, uv), t.n, n)
             }
-            Primitive::Ground(g) => (scene.ground_color(g, pos), g.normal, g.normal),
+            Primitive::Ground(g) => {
+                let smooth = crate::displace::displaced_normal(scene, p, pos, g.normal);
+                (scene.ground_color(g, pos), g.normal, smooth)
+            }
         };
-        let smooth = if !self.fixed && m.bump.is_some() { crate::bump::bumped_normal(scene, prim, pos, smooth) } else { smooth };
+        let smooth = if !self.fixed && m.bump.is_some() {
+            match scene.displaced_face(prim) {
+                Some(face) => {
+                    let source = &scene.displaced_sources[face.source as usize];
+                    crate::bump::bumped_normal(scene, source, face.base_at(self.ctx.uv[prim]).0, smooth)
+                }
+                None => crate::bump::bumped_normal(scene, p, pos, smooth),
+            }
+        } else {
+            smooth
+        };
         let original = smooth;
         let geo = if r.d.dot(geo) > 0.0 { -geo } else { geo };
         let smooth = if r.d.dot(smooth) > 0.0 { -smooth } else { smooth };

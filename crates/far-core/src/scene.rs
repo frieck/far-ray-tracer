@@ -30,6 +30,8 @@ pub struct Material {
     pub rv_scale: f32,
     /// Surface detail from a height or normal map; Enhanced mode only.
     pub bump: Option<crate::bump::Bump>,
+    /// A height map that moves the surface itself.
+    pub displacement: Option<crate::displace::Displacement>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -260,6 +262,11 @@ pub struct Scene {
     pub bulbs: Vec<Sphere>,
     /// Indices in `prims` of the infinite planes, which the KD-Tree leaves out.
     pub grounds: Vec<usize>,
+    /// For each primitive, where a displaced triangle lies on the shape it came from. Empty
+    /// when nothing is displaced.
+    pub displaced: Vec<Option<crate::displace::DisplacedFace>>,
+    /// The original shapes of displaced objects, which `displaced` points into.
+    pub displaced_sources: Vec<Primitive>,
     pub vertices: Vec<Vertex>,
     /// Corrected normals of each triangle corner, indexed like `prims`.
     /// Only Enhanced mode uses them; Classic mode keeps `Vertex::normal`.
@@ -286,6 +293,8 @@ pub(crate) struct MaterialData {
     pub(crate) texture: String,
     /// Image, kind and strength of a bump or normal map.
     pub(crate) bump: Option<(String, crate::bump::BumpKind, f32)>,
+    /// Image, height and detail of a displacement map.
+    pub(crate) displacement: Option<(String, f32, u32)>,
 }
 
 /// Stored paths may come from Windows (`C:\...`); only the file name matters.
@@ -356,6 +365,8 @@ impl Scene {
             grounds: Vec::new(),
             vertices: Vec::new(),
             corner_normals: Vec::new(),
+            displaced: Vec::new(),
+            displaced_sources: Vec::new(),
             materials: Vec::new(),
             textures: Vec::new(),
             extends: Aabb::new(Vec3::new(-14.0, -6.0, -6.0), Vec3::new(28.0, 14.0, 36.0)),
@@ -369,6 +380,7 @@ impl Scene {
         dir: Option<&Path>,
         cache: &mut HashMap<String, Option<usize>>,
     ) -> usize {
+        let mut problems = Vec::new();
         let mut texture_named = |path: &str| {
             let name = base_name(path).to_string();
             match cache.get(&name) {
@@ -383,11 +395,21 @@ impl Scene {
         let texture = (!m.texture.is_empty()).then(|| texture_named(&m.texture)).flatten();
         let bump = match &m.bump {
             Some((map, _, strength)) if !strength.is_finite() || *strength < 0.0 => {
-                self.warnings.push(format!("Skipped bump map {map}: its strength must be zero or more"));
+                problems.push(format!("Skipped bump map {map}: its strength must be zero or more"));
                 None
             }
             Some((map, kind, strength)) => texture_named(map)
                 .map(|texture| crate::bump::Bump { texture, kind: *kind, strength: *strength }),
+            None => None,
+        };
+        let displacement = match &m.displacement {
+            Some((map, height, detail)) if !height.is_finite() || *height < 0.0 || *detail < 4 || *detail > 4096 => {
+                problems.push(format!(
+                    "Skipped displacement map {map}: its height must be zero or more and its detail 4 to 4096"));
+                None
+            }
+            Some((map, height, detail)) => texture_named(map)
+                .map(|texture| crate::displace::Displacement { texture, height: *height, detail: *detail }),
             None => None,
         };
         let surface = m.surface;
@@ -405,7 +427,9 @@ impl Scene {
             ru_scale: 1.0 / m.u_scale,
             rv_scale: 1.0 / m.v_scale,
             bump,
+            displacement,
         };
+        self.warnings.extend(problems);
         if let Some(surface) = surface { surface.apply(&mut material); }
         self.materials.push(material);
         self.materials.len() - 1
@@ -629,10 +653,11 @@ impl Scene {
     }
 
     /// Texture coordinates at a point of a primitive, as its Enhanced color lookup reads them,
-    /// scale included. The point may lie slightly off the surface.
-    pub fn texture_uv(&self, prim: usize, pos: Vec3) -> Option<(f32, f32)> {
-        let m = &self.materials[self.prims[prim].material()];
-        Some(match &self.prims[prim] {
+    /// scale included. The point may lie slightly off the surface. The primitive need not be in
+    /// `prims`: displaced shapes keep their original here.
+    pub fn texture_uv_on(&self, p: &Primitive, pos: Vec3) -> Option<(f32, f32)> {
+        let m = &self.materials[p.material()];
+        Some(match p {
             Primitive::Sphere(e) => {
                 let mut vp = pos - e.center;
                 vp.normalize();
@@ -666,6 +691,15 @@ impl Scene {
                 (a.u + s1 * (b.u - a.u) + s2 * (c.u - a.u), a.v + s1 * (b.v - a.v) + s2 * (c.v - a.v))
             }
         })
+    }
+
+    /// Color of a primitive at a point, with its texture, as Enhanced mode reads it.
+    pub fn color_on(&self, p: &Primitive, pos: Vec3) -> Color {
+        let m = &self.materials[p.material()];
+        match (m.texture, self.texture_uv_on(p, pos)) {
+            (Some(texture), Some((u, v))) => self.textures[texture].texel_fixed(u, v) * m.color,
+            _ => m.color,
+        }
     }
 
     /// Triangle color in Enhanced mode.

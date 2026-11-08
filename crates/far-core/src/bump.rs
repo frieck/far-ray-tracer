@@ -6,7 +6,7 @@
 //! the surface is measured numerically: two small steps in the tangent plane show how the
 //! texture coordinates change, and that gives both the height gradient and the tangent axes.
 
-use crate::scene::Scene;
+use crate::scene::{Primitive, Scene};
 use crate::vector::Vec3;
 use serde::{Deserialize, Serialize};
 
@@ -44,28 +44,36 @@ fn base(n: Vec3) -> (Vec3, Vec3) {
 
 /// Change of texture coordinates per scene unit along `dir`. A step that crosses a seam, where
 /// the coordinates jump, is measured backward instead.
-fn rate(scene: &Scene, prim: usize, pos: Vec3, dir: Vec3, at: (f32, f32)) -> Option<(f32, f32)> {
-    let forward = scene.texture_uv(prim, pos + dir * STEP)?;
+fn rate(scene: &Scene, p: &Primitive, pos: Vec3, dir: Vec3, at: (f32, f32)) -> Option<(f32, f32)> {
+    let forward = scene.texture_uv_on(p, pos + dir * STEP)?;
     let (du, dv) = (forward.0 - at.0, forward.1 - at.1);
     if du.abs() < 0.25 && dv.abs() < 0.25 {
         return Some((du / STEP, dv / STEP));
     }
-    let backward = scene.texture_uv(prim, pos - dir * STEP)?;
+    let backward = scene.texture_uv_on(p, pos - dir * STEP)?;
     let (du, dv) = (at.0 - backward.0, at.1 - backward.1);
     (du.abs() < 0.25 && dv.abs() < 0.25).then_some((du / STEP, dv / STEP))
 }
 
-/// The shading normal at `pos` with the material's bump or normal map applied. `normal` is the
-/// unit normal the primitive gives there; it comes back unchanged where the map does not apply.
-pub fn bumped_normal(scene: &Scene, prim: usize, pos: Vec3, normal: Vec3) -> Vec3 {
-    let p = &scene.prims[prim];
-    let Some(bump) = scene.materials[p.material()].bump else { return normal };
-    let Some(at) = scene.texture_uv(prim, pos) else { return normal };
+/// The shading normal at `pos` of `p` with the material's bump or normal map applied. `normal`
+/// is the unit normal the primitive gives there; it comes back unchanged where the map does not
+/// apply.
+pub fn bumped_normal(scene: &Scene, p: &Primitive, pos: Vec3, normal: Vec3) -> Vec3 {
+    match scene.materials[p.material()].bump {
+        Some(bump) => tilt(scene, p, pos, normal, bump),
+        None => normal,
+    }
+}
+
+/// `normal` tilted by `bump`, read through the texture coordinates of `p` at `pos`. A height map
+/// with the displacement's height as strength gives the normal of the displaced surface.
+pub fn tilt(scene: &Scene, p: &Primitive, pos: Vec3, normal: Vec3, bump: Bump) -> Vec3 {
+    let Some(at) = scene.texture_uv_on(p, pos) else { return normal };
     let texture = &scene.textures[bump.texture];
     let (t1, t2) = base(normal);
     // A ground or box face is flat, so its steps stay on the surface; on curved shapes the step
     // is small enough that leaving the surface by STEP² does not change the coordinates.
-    let (Some(d1), Some(d2)) = (rate(scene, prim, pos, t1, at), rate(scene, prim, pos, t2, at)) else {
+    let (Some(d1), Some(d2)) = (rate(scene, p, pos, t1, at), rate(scene, p, pos, t2, at)) else {
         return normal;
     };
     let tilted = match bump.kind {
@@ -142,13 +150,13 @@ mod tests {
             let (u, v, n) = axes(&height, prim);
             let axis = if along_v { v } else { u };
             let pos = n * 0.0 + u * 3.0 + v * 2.0;
-            let bumped = bumped_normal(&height, prim, pos, n);
+            let bumped = bumped_normal(&height, &height.prims[prim], pos, n);
             assert!(bumped.dot(axis) < -0.01, "a slope rising along the axis leans the normal back: {}", bumped.dot(axis));
             // The same lean drawn as a normal map: against u is red below half; against v,
             // which is up in the image, is green above half.
             let color = if along_v { Color::new(0.5, 0.75, 0.93) } else { Color::new(0.25, 0.5, 0.93) };
             let (normal, prim) = ground_with(BumpKind::Normal, 1.0, 4, |_, _| color);
-            let bumped = bumped_normal(&normal, prim, pos, n);
+            let bumped = bumped_normal(&normal, &normal.prims[prim], pos, n);
             assert!(bumped.dot(axis) < -0.1, "the normal map leans the same way: {}", bumped.dot(axis));
             assert!((bumped.length() - 1.0).abs() < 1e-4);
         }
@@ -159,8 +167,8 @@ mod tests {
         let (scene, prim) = ground_with(BumpKind::Height, 1.0, 8, |_, _| Color::new(0.3, 0.3, 0.3));
         let (u, v, n) = axes(&scene, prim);
         let pos = u * 1.3 + v * 0.7;
-        assert!((bumped_normal(&scene, prim, pos, n) - n).length() < 1e-5);
+        assert!((bumped_normal(&scene, &scene.prims[prim], pos, n) - n).length() < 1e-5);
         let (scene, prim) = ground_with(BumpKind::Normal, 1.0, 8, |_, _| Color::new(0.5, 0.5, 1.0));
-        assert!((bumped_normal(&scene, prim, pos, n) - n).length() < 1e-3);
+        assert!((bumped_normal(&scene, &scene.prims[prim], pos, n) - n).length() < 1e-3);
     }
 }

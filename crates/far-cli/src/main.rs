@@ -189,11 +189,13 @@ fn material_ball(mut args: impl Iterator<Item = String>) {
     let environment = if no_env { None } else { far_core::environment::Environment::load(studio).ok() };
     let ball = far_core::preview::material_ball(&scene, index, None, environment, &data).unwrap_or_else(|e| fail(&e));
     let options = Options { mode: Mode::Enhanced, width: size, height: size, samples, denoise: true, max_depth: 6, use_kd: false, max_bounces: bounces, ..Options::default() };
+    let kd = (ball.prims.len() >= far_core::preview::BALL_TREE_FROM).then(|| KdTree::build_corrected(&ball));
+    let options = Options { use_kd: kd.is_some(), ..options };
     let options = Options { threads: threads.unwrap_or(options.threads), ..options };
     let image = Image::new(size, size);
     let t0 = Instant::now();
-    render(&ball, None, &options, &image, &Progress::default());
-    println!("render={}ms", t0.elapsed().as_millis());
+    render(&ball, kd.as_ref(), &options, &image, &Progress::default());
+    println!("primitives={} render={}ms", ball.prims.len(), t0.elapsed().as_millis());
     let rgb: Vec<u8> = image.rgba().chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
     image::RgbImage::from_raw(size, size, rgb).expect("image size").save(&output)
         .unwrap_or_else(|e| fail(&format!("{output}: {e}")));

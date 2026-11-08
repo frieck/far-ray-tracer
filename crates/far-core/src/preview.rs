@@ -203,6 +203,12 @@ mod tests {
 pub const MATERIAL_BALL_POSE: crate::camera::Pose =
     crate::camera::Pose { position: [0.9, 2.35, -4.6], target: [0.0, 1.25, 0.0], zoom: 2.1 };
 
+/// Most displacement detail on the material ball.
+const MAX_PREVIEW_DETAIL: u32 = 48;
+
+/// A material ball with this many primitives, a displaced one, needs a KD-Tree to render quickly.
+pub const BALL_TREE_FROM: usize = 64;
+
 /// Marks the parts of the material ball that take the chosen material.
 const CHOSEN: [f32; 3] = [1.0, 0.0, 1.0];
 
@@ -267,16 +273,24 @@ pub fn material_ball(
         edit.apply(&mut edited)?;
     }
     // The chosen material's texture indices point into the source's textures, appended here.
+    let offset = ball.textures.len();
     if let Some(texture) = edited.texture.as_mut() {
-        *texture += ball.textures.len();
+        *texture += offset;
     }
     if let Some(bump) = edited.bump.as_mut() {
-        bump.texture += ball.textures.len();
+        bump.texture += offset;
+    }
+    // A preview tessellates on every edit, so displacement keeps a modest detail here.
+    if let Some(d) = edited.displacement.as_mut() {
+        d.texture += offset;
+        d.detail = d.detail.min(MAX_PREVIEW_DETAIL);
     }
     ball.textures.extend(source.textures.iter().cloned());
     for m in ball.materials.iter_mut().filter(|m| m.color.array() == CHOSEN) {
         *m = edited.clone();
     }
+    ball.apply_displacement();
+    ball.fit_bounds();
     ball.environment = environment;
     Ok(ball)
 }

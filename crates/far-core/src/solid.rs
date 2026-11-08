@@ -229,6 +229,16 @@ impl Solid {
         Vec3::new(v.dot(self.axes[0]), v.dot(self.axes[1]), v.dot(self.axes[2]))
     }
 
+    /// World position of a point given in the solid's own frame.
+    pub fn to_world(&self, local: Vec3) -> Vec3 {
+        self.center + self.direction_to_world(local)
+    }
+
+    /// World direction of a direction given in the solid's own frame.
+    pub fn direction_to_world(&self, local: Vec3) -> Vec3 {
+        self.axes[0] * local.x + self.axes[1] * local.y + self.axes[2] * local.z
+    }
+
     fn local_point(&self, p: Vec3) -> Vec3 {
         self.local_direction(p - self.center)
     }

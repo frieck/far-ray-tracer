@@ -285,7 +285,10 @@ impl<'a> Context<'a> {
             Primitive::Sphere(e) => intersect_sphere(e, r, dist, self.corrected),
             Primitive::Solid(s) => s.intersect(r.o, r.d, dist),
             Primitive::Triangle(t) => intersect_triangle(t, &mut self.uv[i], r, dist),
-            Primitive::Ground(g) => g.intersect(r.o, r.d, dist),
+            Primitive::Ground(g) => match self.scene.materials[g.material].displacement {
+                Some(d) => crate::displace::intersect_ground(self.scene, i, g, &d, r, dist),
+                None => g.intersect(r.o, r.d, dist),
+            },
         }
     }
 
@@ -812,6 +815,33 @@ mod tests {
         };
         assert!(misses(&KdTree::build(&scene)) > 0, "the original tree loses the wall; Classic keeps that");
         assert_eq!(misses(&KdTree::build_corrected(&scene)), 0);
+    }
+
+    #[test]
+    fn a_large_displaced_scene_finds_the_same_hits_with_and_without_the_tree() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/scenes/displacement.far");
+        let scene = Scene::open(std::path::Path::new(path)).unwrap();
+        let kd = KdTree::build_corrected(&scene);
+        let mut ctx = Context::with_fixes(&scene, Some(&kd), 1);
+        let o = Vec3::new(0.0, 2.1, -6.4);
+        let mut wrong = Vec::new();
+        for target in [Vec3::new(-1.6, 0.65, 0.6), Vec3::new(0.9, 0.15, 1.0), Vec3::new(2.5, 0.05, -0.6)] {
+            let mut d = target - o;
+            d.normalize();
+            let r = Ray { o, d };
+            let (mut tree, mut brute) = (10000.0, 10000.0);
+            let (_, prim) = ctx.closest(&kd, &r, &mut tree);
+            let mut nearest = 0;
+            for k in 0..scene.prims.len() {
+                if ctx.intersect(k, &r, &mut brute) != 0 {
+                    nearest = k;
+                }
+            }
+            if (tree - brute).abs() > 1e-3 {
+                wrong.push((target.array(), tree, prim, brute, nearest, scene.grounds.clone()));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:?}");
     }
 
     #[test]
