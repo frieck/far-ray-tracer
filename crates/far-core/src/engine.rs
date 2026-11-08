@@ -29,11 +29,25 @@ pub enum Mode {
 
 #[derive(Clone, Debug)]
 pub struct Options {
+    /// Filters the finished image. Enhanced mode only.
+    pub denoise: bool,
+    /// Spreads very bright light into a soft halo. Enhanced mode only.
+    pub bloom: bool,
+    /// Camera overrides; None uses the scene settings. Enhanced mode only.
+    pub pose: Option<crate::camera::Pose>,
+    pub aperture: Option<f32>,
+    pub focus_distance: Option<f32>,
     pub mode: Mode,
     /// Samples per pixel in Enhanced mode, which is also the number of passes.
     pub samples: u32,
     /// Turns on indirect light in Enhanced mode.
     pub indirect: bool,
+    /// Indirect light settings in Enhanced mode; None picks a value from the scene's
+    /// lights (see `Bounces::for_scene`).
+    pub indirect_strength: Option<f32>,
+    pub max_bounces: Option<u32>,
+    /// Most light one rebound may bring back; infinity removes the limit.
+    pub indirect_clamp: Option<f32>,
     /// Brightness multiplier in Enhanced mode.
     pub exposure: f32,
     /// Traces photons so glass and mirrors focus light, in Enhanced mode.
@@ -59,9 +73,17 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
+            denoise: false,
+            bloom: false,
+            pose: None,
+            aperture: None,
+            focus_distance: None,
             mode: Mode::Classic,
             samples: 16,
             indirect: true,
+            indirect_strength: None,
+            max_bounces: None,
+            indirect_clamp: None,
             exposure: 1.0,
             caustics: false,
             photons: 1_000_000,
@@ -123,6 +145,9 @@ pub struct Progress {
     pub rays: AtomicU64,
     pub cancel: AtomicBool,
     pub photon_stats: Mutex<Option<PhotonStats>>,
+    /// Optional diagnostic point projection, consumed once by the desktop app.
+    pub capture_photon_preview: AtomicBool,
+    pub photon_preview: Mutex<Option<Image>>,
     /// Reads of the photon map during the render, and the photons they used.
     pub photon_lookups: AtomicU64,
     pub photons_gathered: AtomicU64,
@@ -260,6 +285,7 @@ impl<'a> Context<'a> {
             Primitive::Sphere(e) => intersect_sphere(e, r, dist, self.corrected),
             Primitive::Solid(s) => s.intersect(r.o, r.d, dist),
             Primitive::Triangle(t) => intersect_triangle(t, &mut self.uv[i], r, dist),
+            Primitive::Ground(g) => g.intersect(r.o, r.d, dist),
         }
     }
 
@@ -268,6 +294,7 @@ impl<'a> Context<'a> {
             Primitive::Sphere(e) => self.scene.sphere_color(e, pos),
             Primitive::Solid(s) => self.scene.solid_color(s, pos),
             Primitive::Triangle(t) => self.scene.triangle_color(t, self.uv[i]),
+            Primitive::Ground(g) => self.scene.ground_color(g, pos),
         }
     }
 
@@ -276,6 +303,7 @@ impl<'a> Context<'a> {
             Primitive::Sphere(e) => (pos - e.center) * e.inv_radius,
             Primitive::Solid(s) => s.normal(pos),
             Primitive::Triangle(t) => self.scene.triangle_normal(t, self.uv[i]),
+            Primitive::Ground(g) => g.normal,
         }
     }
 
@@ -324,38 +352,66 @@ impl<'a> Context<'a> {
 
     /// Closest hit through the KD-Tree: returns the result and the primitive index.
     pub(crate) fn closest(&mut self, kd: &KdTree, r: &Ray, max_dist: &mut f32) -> (i32, usize) {
+        // Infinite planes are outside the tree. Testing them first shortens the ray,
+        // so the walk below stops at whatever is in front of them.
+        let mut ground = (0, 0);
+        for &i in &self.scene.grounds {
+            let res = self.intersect(i, r, max_dist);
+            if res != 0 {
+                ground = (res, i);
+            }
+        }
         let (mut tnear, mut tfar) = (0.0f32, *max_dist);
         let p1 = self.scene.extends.pos.array();
         let p2 = (self.scene.extends.pos + self.scene.extends.size).array();
         let (d, o) = (r.d.array(), r.o.array());
-        for i in 0..3 {
-            if d[i] < 0.0 {
-                if o[i] < p1[i] {
-                    return (0, 0);
+        // The entry point below was only ever exercised from inside the scene, where it
+        // is never used. A moved camera can start outside, so it needs a real box test.
+        if self.corrected && (0..3).any(|i| o[i] < p1[i] || o[i] > p2[i]) {
+            for i in 0..3 {
+                if d[i] == 0.0 {
+                    if o[i] < p1[i] || o[i] > p2[i] {
+                        return ground;
+                    }
+                    continue;
                 }
-            } else if o[i] > p2[i] {
-                return (0, 0);
-            }
-        }
-        for i in 0..3 {
-            let pos = o[i] + tfar * d[i];
-            if d[i] < 0.0 {
-                if pos < p1[i] {
-                    tfar = tnear + (tfar - tnear) * ((o[i] - p1[i]) / (o[i] - pos));
-                }
-                if o[i] > p2[i] {
-                    tnear += (tfar - tnear) * ((o[i] - p2[i]) / (tfar * d[i]));
-                }
-            } else {
-                if pos > p2[i] {
-                    tfar = tnear + (tfar - tnear) * ((p2[i] - o[i]) / (pos - o[i]));
-                }
-                if o[i] < p1[i] {
-                    tnear += (tfar - tnear) * ((p1[i] - o[i]) / (tfar * d[i]));
-                }
+                let (a, b) = ((p1[i] - o[i]) / d[i], (p2[i] - o[i]) / d[i]);
+                tnear = tnear.max(a.min(b));
+                tfar = tfar.min(a.max(b));
             }
             if tnear > tfar {
-                return (0, 0);
+                return ground;
+            }
+        } else {
+            for i in 0..3 {
+                if d[i] < 0.0 {
+                    if o[i] < p1[i] {
+                        return ground;
+                    }
+                } else if o[i] > p2[i] {
+                    return ground;
+                }
+            }
+            for i in 0..3 {
+                let pos = o[i] + tfar * d[i];
+                if d[i] < 0.0 {
+                    if pos < p1[i] {
+                        tfar = tnear + (tfar - tnear) * ((o[i] - p1[i]) / (o[i] - pos));
+                    }
+                    if o[i] > p2[i] {
+                        tnear += (tfar - tnear) * ((o[i] - p2[i]) / (tfar * d[i]));
+                    }
+                } else {
+                    if pos > p2[i] {
+                        tfar = tnear + (tfar - tnear) * ((p2[i] - o[i]) / (pos - o[i]));
+                    }
+                    if o[i] < p1[i] {
+                        tnear += (tfar - tnear) * ((p1[i] - o[i]) / (tfar * d[i]));
+                    }
+                }
+                if tnear > tfar {
+                    return ground;
+                }
             }
         }
 
@@ -386,11 +442,17 @@ impl<'a> Context<'a> {
             node = self.stack[exit].node;
             exit = self.stack[entry].prev;
         }
-        (0, 0)
+        ground
     }
 
     /// Looks for anything blocking the way to a light.
     pub(crate) fn occluded(&mut self, kd: &KdTree, r: &Ray, max_dist: f32) -> bool {
+        for &i in &self.scene.grounds {
+            let mut dist = max_dist;
+            if self.intersect(i, r, &mut dist) != 0 {
+                return true;
+            }
+        }
         let (mut entry, mut exit) = (0usize, 1usize);
         self.stack[0].t = EPSILON;
         self.stack[0].pb = r.o;
@@ -437,7 +499,7 @@ impl<'a> Context<'a> {
         let color = self.color(prim, pi);
         let n = self.normal(prim, pi);
 
-        for light in &scene.lights {
+        for light in scene.lights.iter().chain(scene.rect_lights.iter().map(|r| &r.proxy)).chain(&scene.bulbs) {
             let mut l = Vec3::default();
             let shade = self.shadow(kd, light, pi, &mut l);
             if shade > 0.0 {
@@ -536,7 +598,7 @@ impl<'a> Context<'a> {
         let pi = r.o + r.d * *max_dist;
         let color = self.color(prim, pi);
 
-        for light in &scene.lights {
+        for light in scene.lights.iter().chain(scene.rect_lights.iter().map(|r| &r.proxy)).chain(&scene.bulbs) {
             let mut l = light.center - pi;
             let mut tdist = l.length();
             l *= 1.0 / tdist;
@@ -716,7 +778,70 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
 
 #[cfg(test)]
 mod tests {
-    use super::view_half_size;
+    use super::{view_half_size, Context, Ray};
+    use crate::vector::Vec3;
+    use crate::{KdTree, Scene};
+
+    #[test]
+    fn the_corrected_tree_keeps_a_wall_that_lies_on_a_split_plane() {
+        // The back wall of the Cornell box sits exactly on a split plane. Rounding the
+        // child boxes left it out of both of them, so rays went through it.
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/scenes/cornell-box.far");
+        let scene = Scene::open(std::path::Path::new(path)).unwrap();
+        let o = Vec3::new(0.0, 0.0, -9.6);
+        let misses = |kd: &KdTree| {
+            let mut ctx = Context::with_fixes(&scene, Some(kd), 1);
+            let mut misses = 0;
+            for i in 0..40 {
+                for j in 0..40 {
+                    let target = Vec3::new(-2.6 + 0.13 * i as f32, -2.6 + 0.13 * j as f32, 5.5);
+                    let mut d = target - o;
+                    d.normalize();
+                    let r = Ray { o, d };
+                    let (mut tree, mut brute) = (10000.0, 10000.0);
+                    let found = ctx.closest(kd, &r, &mut tree).0 != 0;
+                    for k in 0..scene.prims.len() {
+                        ctx.intersect(k, &r, &mut brute);
+                    }
+                    if !found || (tree - brute).abs() > 1e-3 {
+                        misses += 1;
+                    }
+                }
+            }
+            misses
+        };
+        assert!(misses(&KdTree::build(&scene)) > 0, "the original tree loses the wall; Classic keeps that");
+        assert_eq!(misses(&KdTree::build_corrected(&scene)), 0);
+    }
+
+    #[test]
+    fn the_ground_is_hit_outside_the_tree_and_hides_nothing_in_front_of_it() {
+        let text = br#"{"lights":[],"objects":[{"type":"ground","position":[0,-2,0]},{"type":"sphere","center":[0,0,5],"radius":1}]}"#;
+        let scene = Scene::from_far(text, std::path::Path::new("test.far")).unwrap();
+        assert_eq!(scene.grounds, [0]);
+        let kd = KdTree::build(&scene);
+        assert!(!kd.list.contains(&0));
+        let mut down = Vec3::new(0.0, -1.0, 1.0);
+        down.normalize();
+        for mut ctx in [Context::new(&scene, Some(&kd), 1), Context::with_fixes(&scene, Some(&kd), 1)] {
+            // Far outside the scene bounds, where the tree has nothing: only the ground.
+            let mut dist = 10000.0;
+            let far_away = Ray { o: Vec3::new(500.0, 8.0, 900.0), d: down };
+            assert_eq!(ctx.closest(&kd, &far_away, &mut dist), (1, 0));
+            assert!((dist - 10.0 * 2f32.sqrt()).abs() < 1e-3);
+            // The sphere is in front of the ground, so it wins.
+            let mut dist = 10000.0;
+            let at_sphere = Ray { o: Vec3::new(0.0, 0.0, 0.0), d: Vec3::new(0.0, 0.0, 1.0) };
+            assert_eq!(ctx.closest(&kd, &at_sphere, &mut dist), (1, 1));
+            assert!((dist - 4.0).abs() < 1e-4);
+            // From below, the ground is still solid.
+            let mut dist = 10000.0;
+            let up = Ray { o: Vec3::new(3.0, -5.0, 0.0), d: Vec3::new(0.0, 1.0, 0.0) };
+            assert_eq!(ctx.closest(&kd, &up, &mut dist), (-1, 0));
+            assert!(ctx.occluded(&kd, &up, 10.0));
+            assert!(!ctx.occluded(&kd, &up, 2.0));
+        }
+    }
 
     #[test]
     fn four_by_three_keeps_the_original_plane() {
@@ -734,3 +859,4 @@ mod tests {
         assert!((w / h - 600.0 / 800.0).abs() < 1e-5);
     }
 }
+

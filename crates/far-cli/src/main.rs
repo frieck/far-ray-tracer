@@ -8,7 +8,7 @@ use std::time::Instant;
 
 const HELP: &str = "\
 usage:
-  far render <scene.frt> -o <output.png|bmp> [options]
+  far render <scene.far> -o <output.png|bmp> [options]
       --width N       image width (default 800)
       --height N      image height (default 600)
       --depth N       recursion depth (default 3)
@@ -19,12 +19,27 @@ usage:
       --enhanced      also use distributed ray tracing and indirect light
       --samples N     samples per pixel in enhanced mode (default 16)
       --no-indirect   turn off indirect light in enhanced mode
+      --indirect-strength N  multiplier of each rebound; 1 is physically correct
+                      (default: 1, or 0.45 with a 2008 light)
+      --bounces N     diffuse rebounds per path, at most 64 (default: 64 with
+                      Russian roulette, or 2 with a 2008 light)
+      --indirect-clamp N     most light one rebound brings back; 0 for no limit
+                      (default: 10, or 1.5 with a 2008 light)
+      --denoise       filter the finished image in enhanced mode
+      --bloom         spread very bright light into a soft halo in enhanced mode
       --exposure N    brightness multiplier in enhanced mode (default 1)
+      --aperture N    lens diameter in scene units; 0 disables depth of field
+      --focus-distance N   focus-plane distance from camera in scene units
+      --camera X,Y,Z  camera position in enhanced mode
+      --target X,Y,Z  point the camera looks at in enhanced mode
+      --zoom N        lens magnification in enhanced mode (default 1)
       --caustics      trace photons so glass and mirrors focus light
       --photons N     photons for caustics (default 1000000)
       --caustic-radius N    photon lookup radius, smaller is sharper (default 0.12)
       --caustic-strength N  multiplier of the caustic light (default 1)
       --caustics-only show only the caustic light
+  far geometry <scene.far> -o <output.json>
+      write what the app's real-time camera view shows
   far compare <a> <b>
       compare two images, ignoring the first row and first column,
       which the original program never writes";
@@ -40,9 +55,16 @@ fn number<T: std::str::FromStr>(args: &mut impl Iterator<Item = String>, name: &
         .unwrap_or_else(|| fail(&format!("{name} needs a number")))
 }
 
+fn point(args: &mut impl Iterator<Item = String>, name: &str) -> [f32; 3] {
+    let text = args.next().unwrap_or_default();
+    let values: Vec<f32> = text.split(',').filter_map(|v| v.parse().ok()).collect();
+    values.try_into().unwrap_or_else(|_| fail(&format!("{name} needs X,Y,Z")))
+}
+
 fn render_command(mut args: impl Iterator<Item = String>) {
     let mut options = Options::default();
     let (mut scene, mut output) = (None, None);
+    let (mut position, mut target, mut zoom) = (None, None, None);
     while let Some(a) = args.next() {
         match a.as_str() {
             "-o" => output = args.next(),
@@ -55,6 +77,19 @@ fn render_command(mut args: impl Iterator<Item = String>) {
             "--enhanced" => options.mode = Mode::Enhanced,
             "--samples" => options.samples = number(&mut args, &a),
             "--no-indirect" => options.indirect = false,
+            "--indirect-strength" => options.indirect_strength = Some(number(&mut args, &a)),
+            "--bounces" => options.max_bounces = Some(number(&mut args, &a)),
+            "--indirect-clamp" => {
+                let limit: f32 = number(&mut args, &a);
+                options.indirect_clamp = Some(if limit > 0.0 { limit } else { f32::INFINITY });
+            }
+            "--denoise" => options.denoise = true,
+            "--bloom" => options.bloom = true,
+            "--aperture" => options.aperture = Some(number(&mut args, &a)),
+            "--focus-distance" => options.focus_distance = Some(number(&mut args, &a)),
+            "--camera" => position = Some(point(&mut args, &a)),
+            "--target" => target = Some(point(&mut args, &a)),
+            "--zoom" => zoom = Some(number(&mut args, &a)),
             "--exposure" => options.exposure = number(&mut args, &a),
             "--caustics" => options.caustics = true,
             "--photons" => options.photons = number(&mut args, &a),
@@ -76,11 +111,20 @@ fn render_command(mut args: impl Iterator<Item = String>) {
 
     let t0 = Instant::now();
     let scene = Scene::open(Path::new(&scene)).unwrap_or_else(|e| fail(&e));
+    let camera = far_core::Camera {
+        aperture: options.aperture.unwrap_or(scene.camera.aperture),
+        focus_distance: options.focus_distance.unwrap_or(scene.camera.focus_distance),
+        position: position.unwrap_or(scene.camera.position),
+        target: target.unwrap_or(scene.camera.target),
+        zoom: zoom.unwrap_or(scene.camera.zoom),
+    };
+    camera.validate().unwrap_or_else(|e| fail(&e));
+    options.pose = Some(camera.pose());
     for warning in &scene.warnings {
         eprintln!("warning: {warning}");
     }
     let t1 = Instant::now();
-    let kd = options.use_kd.then(|| KdTree::build(&scene));
+    let kd = options.use_kd.then(|| KdTree::for_mode(&scene, options.mode));
     let t2 = Instant::now();
     let image = Image::new(options.width, options.height);
     let progress = Progress::default();
@@ -90,7 +134,7 @@ fn render_command(mut args: impl Iterator<Item = String>) {
     println!(
         "primitives={} lights={} load={}ms kd={}ms render={}ms rays={}",
         scene.prims.len(),
-        scene.lights.len(),
+        scene.lights.len() + scene.rect_lights.len() + scene.bulbs.len(),
         (t1 - t0).as_millis(),
         (t2 - t1).as_millis(),
         (t3 - t2).as_millis(),
@@ -113,6 +157,15 @@ fn render_command(mut args: impl Iterator<Item = String>) {
         .expect("image size")
         .save(&output)
         .unwrap_or_else(|e| fail(&format!("{output}: {e}")));
+}
+
+fn geometry(mut args: impl Iterator<Item = String>) {
+    let (Some(scene), Some(_), Some(output)) = (args.next(), args.next(), args.next()) else {
+        fail("geometry needs <scene.far> -o <output.json>");
+    };
+    let scene = Scene::open(Path::new(&scene)).unwrap_or_else(|e| fail(&e));
+    let text = serde_json::to_string(&far_core::preview::describe(&scene)).expect("geometry is serializable");
+    std::fs::write(&output, text).unwrap_or_else(|e| fail(&format!("{output}: {e}")));
 }
 
 fn compare(a: &str, b: &str) {
@@ -144,6 +197,7 @@ fn main() {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("render") => render_command(args),
+        Some("geometry") => geometry(args),
         Some("compare") => match (args.next(), args.next()) {
             (Some(a), Some(b)) => compare(&a, &b),
             _ => fail("compare needs two images"),

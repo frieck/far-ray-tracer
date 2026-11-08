@@ -780,6 +780,7 @@ version = "3.0.0"
 dependencies = [
  "far-core",
  "image",
+ "serde_json",
 ]
 
 [[package]]

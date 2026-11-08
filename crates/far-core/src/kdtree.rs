@@ -56,10 +56,28 @@ enum BuildNode {
 }
 
 impl KdTree {
+    /// The tree of the original, bugs included. Classic mode needs it to match the
+    /// C++ program pixel for pixel.
     pub fn build(scene: &Scene) -> Self {
+        Self::build_with(scene, false)
+    }
+
+    /// The tree for Fixed and Enhanced modes. A triangle lying exactly on a split
+    /// plane, such as a wall, can drop out of both children in the original tree,
+    /// and rays then pass through it.
+    pub fn build_corrected(scene: &Scene) -> Self {
+        Self::build_with(scene, true)
+    }
+
+    pub fn for_mode(scene: &Scene, mode: crate::Mode) -> Self {
+        Self::build_with(scene, mode != crate::Mode::Classic)
+    }
+
+    fn build_with(scene: &Scene, corrected: bool) -> Self {
         // The original inserts at the head of a list, hence the reversed order.
-        let root: Vec<u32> = (0..scene.prims.len() as u32).rev().collect();
-        let tree = subdivide(scene, root, scene.extends, 0);
+        // Infinite planes have no bounds; the traversal tests them on its own.
+        let root: Vec<u32> = (0..scene.prims.len() as u32).rev().filter(|&i| !scene.grounds.contains(&(i as usize))).collect();
+        let tree = subdivide(scene, corrected, root, scene.extends, 0);
         let mut kd = KdTree { nodes: vec![Node { a: 0, b: LEAF_AXIS }], list: Vec::new() };
         kd.flatten(tree, 0);
         kd
@@ -87,6 +105,7 @@ impl KdTree {
 
 fn span(scene: &Scene, p: &Primitive, axis: usize) -> (f32, f32) {
     match p {
+        Primitive::Ground(_) => unreachable!("grounds stay out of the KD-Tree"),
         Primitive::Sphere(e) => (e.center.cell(axis) - e.radius, e.center.cell(axis) + e.radius),
         Primitive::Solid(s) => (s.low.cell(axis), s.high.cell(axis)),
         Primitive::Triangle(t) => {
@@ -102,8 +121,9 @@ fn span(scene: &Scene, p: &Primitive, axis: usize) -> (f32, f32) {
     }
 }
 
-fn intersects_box(scene: &Scene, p: &Primitive, bounds: &Aabb) -> bool {
+fn intersects_box(scene: &Scene, corrected: bool, p: &Primitive, bounds: &Aabb) -> bool {
     match p {
+        Primitive::Ground(_) => unreachable!("grounds stay out of the KD-Tree"),
         // Testing the solid's own box may keep it in a cell it does not touch. That only
         // costs an extra test, and it never loses a hit.
         Primitive::Solid(s) => (0..3).all(|i| {
@@ -124,7 +144,12 @@ fn intersects_box(scene: &Scene, p: &Primitive, bounds: &Aabb) -> bool {
         }
         Primitive::Triangle(t) => {
             let half = bounds.size * 0.5;
-            tri_box(scene, t, bounds.pos + half, half)
+            // Computing the center rounds it, so a triangle lying exactly on a face of the
+            // box, such as a wall on a split plane, can test as just outside and be left
+            // out of both children. A margin far below any scene detail keeps it in.
+            // The original has no margin, and Classic mode keeps it that way.
+            let margin = if corrected { half.x.max(half.y).max(half.z) * 1e-5 } else { 0.0 };
+            tri_box(scene, t, bounds.pos + half, half + Vec3::new(margin, margin, margin))
         }
     }
 }
@@ -223,6 +248,7 @@ impl SplitCounts {
 
 struct SplitPlan<'a> {
     scene: &'a Scene,
+    corrected: bool,
     bounds: Aabb,
     axis: usize,
     pos1: f32,
@@ -239,11 +265,11 @@ impl SplitPlan<'_> {
         for (s, &position) in self.candidates.iter().enumerate() {
             let (b3, b4) = split_bounds(&self.bounds, self.axis, position, self.pos1, self.pos2);
             let b3p2 = b3.pos.cell(self.axis) + b3.size.cell(self.axis);
-            if lo <= b3p2 && hi >= b3p1 && intersects_box(self.scene, p, &b3) {
+            if lo <= b3p2 && hi >= b3p1 && intersects_box(self.scene, self.corrected, p, &b3) {
                 c.n1[s] += 1;
             }
             if lo <= b4p2 && hi >= position {
-                if intersects_box(self.scene, p, &b4) {
+                if intersects_box(self.scene, self.corrected, p, &b4) {
                     c.n2[s] += 1;
                 } else {
                     // Left the right box: it counts on the left from here on.
@@ -256,7 +282,7 @@ impl SplitPlan<'_> {
     }
 }
 
-fn subdivide(scene: &Scene, list: Vec<u32>, bounds: Aabb, depth: i32) -> BuildNode {
+fn subdivide(scene: &Scene, corrected: bool, list: Vec<u32>, bounds: Aabb, depth: i32) -> BuildNode {
     let n = list.len();
     let s = bounds.size;
     let axis = if s.x >= s.y && s.x >= s.z {
@@ -293,12 +319,13 @@ fn subdivide(scene: &Scene, list: Vec<u32>, bounds: Aabb, depth: i32) -> BuildNo
                     add(scene.vertices[v as usize].pos.cell(axis));
                 }
             }
+            Primitive::Ground(_) => unreachable!("grounds stay out of the KD-Tree"),
         }
     }
     candidates.sort_by(|a, b| a.partial_cmp(b).expect("candidates are never NaN"));
     candidates.dedup();
 
-    let plan = SplitPlan { scene, bounds, axis, pos1, pos2, candidates: &candidates };
+    let plan = SplitPlan { scene, corrected, bounds, axis, pos1, pos2, candidates: &candidates };
     let m = candidates.len();
     let counts = if n >= MIN_PARALLEL {
         (0..n)
@@ -351,10 +378,10 @@ fn subdivide(scene: &Scene, list: Vec<u32>, bounds: Aabb, depth: i32) -> BuildNo
     for (k, &i) in list.iter().enumerate() {
         let p = &scene.prims[i as usize];
         let (lo, hi) = spans[k];
-        if lo <= b1p2 && hi >= b1p1 && intersects_box(scene, p, &b1) {
+        if lo <= b1p2 && hi >= b1p1 && intersects_box(scene, corrected, p, &b1) {
             left.push(i);
         }
-        if lo <= b2p2 && hi >= b2p1 && intersects_box(scene, p, &b2) {
+        if lo <= b2p2 && hi >= b2p1 && intersects_box(scene, corrected, p, &b2) {
             right.push(i);
         }
     }
@@ -366,7 +393,7 @@ fn subdivide(scene: &Scene, list: Vec<u32>, bounds: Aabb, depth: i32) -> BuildNo
     let may_split = depth < MAX_DEPTH;
     let branch = |l: Vec<u32>, c: Aabb| {
         if may_split && l.len() > 2 {
-            subdivide(scene, l, c, depth + 1)
+            subdivide(scene, corrected, l, c, depth + 1)
         } else {
             BuildNode::Leaf(l)
         }

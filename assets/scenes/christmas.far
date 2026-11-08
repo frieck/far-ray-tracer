@@ -1,0 +1,2405 @@
+{
+ "camera": {
+  "position": [
+   -0.4,
+   0.4,
+   -0.6
+  ],
+  "target": [
+   0.6,
+   -1.0,
+   8.0
+  ],
+  "zoom": 1.15,
+  "aperture": 0.1,
+  "focus_distance": 5.9
+ },
+ "environment": {
+  "path": "../environments/studio.hdr",
+  "intensity": 0.5,
+  "rotation": 120,
+  "visible": false
+ },
+ "lights": [
+  {
+   "type": "sphere",
+   "position": [
+    0.6461566851197882,
+    -0.8,
+    10.589115064614443
+   ],
+   "radius": 0.05,
+   "color": [
+    1.0,
+    0.72,
+    0.4
+   ],
+   "intensity": 22
+  },
+  {
+   "type": "sphere",
+   "position": [
+    1.3051079438841537,
+    -0.8,
+    9.967426615590945
+   ],
+   "radius": 0.05,
+   "color": [
+    1.0,
+    0.72,
+    0.4
+   ],
+   "intensity": 22
+  },
+  {
+   "type": "sphere",
+   "position": [
+    2.147033861895732,
+    -0.8,
+    9.632950850165779
+   ],
+   "radius": 0.05,
+   "color": [
+    1.0,
+    0.72,
+    0.4
+   ],
+   "intensity": 22
+  },
+  {
+   "type": "sphere",
+   "position": [
+    3.0529661381042694,
+    -0.8,
+    9.63295085016578
+   ],
+   "radius": 0.05,
+   "color": [
+    1.0,
+    0.72,
+    0.4
+   ],
+   "intensity": 22
+  },
+  {
+   "type": "sphere",
+   "position": [
+    3.8948920561158458,
+    -0.8,
+    9.967426615590945
+   ],
+   "radius": 0.05,
+   "color": [
+    1.0,
+    0.72,
+    0.4
+   ],
+   "intensity": 22
+  },
+  {
+   "type": "sphere",
+   "position": [
+    4.553843314880212,
+    -0.8,
+    10.589115064614443
+   ],
+   "radius": 0.05,
+   "color": [
+    1.0,
+    0.72,
+    0.4
+   ],
+   "intensity": 22
+  },
+  {
+   "type": "sphere",
+   "position": [
+    1.2632832142775028,
+    0.5599999999999998,
+    10.566546744826425
+   ],
+   "radius": 0.05,
+   "color": [
+    1.0,
+    0.72,
+    0.4
+   ],
+   "intensity": 22
+  },
+  {
+   "type": "sphere",
+   "position": [
+    2.026951458743435,
+    0.5599999999999998,
+    10.12564267831245
+   ],
+   "radius": 0.05,
+   "color": [
+    1.0,
+    0.72,
+    0.4
+   ],
+   "intensity": 22
+  },
+  {
+   "type": "sphere",
+   "position": [
+    2.906611551478852,
+    0.5599999999999998,
+    10.06413085243353
+   ],
+   "radius": 0.05,
+   "color": [
+    1.0,
+    0.72,
+    0.4
+   ],
+   "intensity": 22
+  },
+  {
+   "type": "sphere",
+   "position": [
+    3.7242098152480505,
+    0.5599999999999998,
+    10.394461993193577
+   ],
+   "radius": 0.05,
+   "color": [
+    1.0,
+    0.72,
+    0.4
+   ],
+   "intensity": 22
+  },
+  {
+   "type": "sphere",
+   "position": [
+    4.314254625993216,
+    0.5599999999999998,
+    11.049773144317179
+   ],
+   "radius": 0.05,
+   "color": [
+    1.0,
+    0.72,
+    0.4
+   ],
+   "intensity": 22
+  },
+  {
+   "type": "sphere",
+   "position": [
+    1.8279474400236517,
+    1.82,
+    10.702296318632806
+   ],
+   "radius": 0.05,
+   "color": [
+    1.0,
+    0.72,
+    0.4
+   ],
+   "intensity": 22
+  },
+  {
+   "type": "sphere",
+   "position": [
+    2.646113154946832,
+    1.82,
+    10.490704277836564
+   ],
+   "radius": 0.05,
+   "color": [
+    1.0,
+    0.72,
+    0.4
+   ],
+   "intensity": 22
+  },
+  {
+   "type": "sphere",
+   "position": [
+    3.4498354408195535,
+    1.82,
+    10.751849478817945
+   ],
+   "radius": 0.05,
+   "color": [
+    1.0,
+    0.72,
+    0.4
+   ],
+   "intensity": 22
+  },
+  {
+   "type": "sphere",
+   "position": [
+    3.9873747273248368,
+    1.82,
+    11.403936776859757
+   ],
+   "radius": 0.05,
+   "color": [
+    1.0,
+    0.72,
+    0.4
+   ],
+   "intensity": 22
+  },
+  {
+   "type": "sphere",
+   "position": [
+    2.301901443315831,
+    2.8800000000000003,
+    10.98277964506071
+   ],
+   "radius": 0.05,
+   "color": [
+    1.0,
+    0.72,
+    0.4
+   ],
+   "intensity": 22
+  },
+  {
+   "type": "sphere",
+   "position": [
+    3.0812299297239196,
+    2.8800000000000003,
+    11.05553308436033
+   ],
+   "radius": 0.05,
+   "color": [
+    1.0,
+    0.72,
+    0.4
+   ],
+   "intensity": 22
+  },
+  {
+   "type": "sphere",
+   "position": [
+    3.5981664895186274,
+    2.8800000000000003,
+    11.643259675391105
+   ],
+   "radius": 0.05,
+   "color": [
+    1.0,
+    0.72,
+    0.4
+   ],
+   "intensity": 22
+  },
+  {
+   "type": "sphere",
+   "position": [
+    -9.0,
+    3.6999999999999997,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    -8.28,
+    3.8219641176603645,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    -7.5600000000000005,
+    4.121744266211809,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    -6.84,
+    4.43684079538691,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    -6.12,
+    4.596451615591515,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    -5.4,
+    4.514057647468726,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    -4.68,
+    4.2343215915635755,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    -3.96,
+    3.9088779422594513,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    -3.24,
+    3.7141375774921155,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    -2.5199999999999996,
+    3.755661993980261,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    -1.7999999999999998,
+    4.0109423525312735,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    -1.08,
+    4.341600681204283,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    -0.35999999999999943,
+    4.5683994186497126,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    0.35999999999999943,
+    4.5683994186497126,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    1.08,
+    4.341600681204283,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    1.8000000000000007,
+    4.0109423525312735,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    2.5199999999999996,
+    3.7556619939802607,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    3.24,
+    3.7141375774921155,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    3.960000000000001,
+    3.9088779422594513,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    4.68,
+    4.2343215915635755,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    5.4,
+    4.514057647468726,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    6.119999999999999,
+    4.596451615591515,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    6.84,
+    4.436840795386909,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    7.559999999999999,
+    4.12174426621181,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    8.280000000000001,
+    3.8219641176603645,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "sphere",
+   "position": [
+    9.0,
+    3.6999999999999997,
+    17.85
+   ],
+   "radius": 0.06,
+   "color": [
+    1.0,
+    0.68,
+    0.32
+   ],
+   "intensity": 14
+  },
+  {
+   "type": "rectangle",
+   "position": [
+    -7,
+    4.5,
+    6
+   ],
+   "edge_u": [
+    0,
+    4,
+    0
+   ],
+   "edge_v": [
+    0,
+    0,
+    6
+   ],
+   "color": [
+    1.0,
+    0.82,
+    0.6
+   ],
+   "intensity": 4
+  },
+  {
+   "type": "rectangle",
+   "position": [
+    8,
+    3,
+    2
+   ],
+   "edge_u": [
+    0,
+    0,
+    3
+   ],
+   "edge_v": [
+    0,
+    3,
+    0
+   ],
+   "color": [
+    0.55,
+    0.68,
+    1.0
+   ],
+   "intensity": 1.2
+  }
+ ],
+ "objects": [
+  {
+   "type": "plane",
+   "points": [
+    [
+     -30,
+     -2.0,
+     -10
+    ],
+    [
+     30,
+     -2.0,
+     -10
+    ],
+    [
+     30,
+     -2.0,
+     40
+    ],
+    [
+     -30,
+     -2.0,
+     40
+    ]
+   ],
+   "material": {
+    "color": [
+     0.62,
+     0.42,
+     0.26
+    ],
+    "texture": "wood.tga",
+    "scale_u": 1.2,
+    "scale_v": 1.2,
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.35
+    }
+   }
+  },
+  {
+   "type": "plane",
+   "points": [
+    [
+     -30,
+     -2.0,
+     18
+    ],
+    [
+     30,
+     -2.0,
+     18
+    ],
+    [
+     30,
+     20,
+     18
+    ],
+    [
+     -30,
+     20,
+     18
+    ]
+   ],
+   "material": {
+    "color": [
+     0.42,
+     0.32,
+     0.24
+    ],
+    "surface": {
+     "preset": "ceramic",
+     "roughness": 0.85
+    }
+   }
+  },
+  {
+   "type": "cylinder",
+   "center": [
+    2.6,
+    -1.55,
+    12.0
+   ],
+   "radius": 0.35,
+   "height": 0.9,
+   "material": {
+    "color": [
+     0.3,
+     0.17,
+     0.08
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.8
+    }
+   }
+  },
+  {
+   "type": "cone",
+   "center": [
+    2.6,
+    0.3999999999999999,
+    12.0
+   ],
+   "radius": 2.6,
+   "height": 3.0,
+   "material": {
+    "color": [
+     0.05,
+     0.22,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.7
+    }
+   }
+  },
+  {
+   "type": "cone",
+   "center": [
+    2.6,
+    1.5999999999999999,
+    12.0
+   ],
+   "radius": 2.1,
+   "height": 2.6,
+   "material": {
+    "color": [
+     0.05,
+     0.22,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.7
+    }
+   }
+  },
+  {
+   "type": "cone",
+   "center": [
+    2.6,
+    2.7,
+    12.0
+   ],
+   "radius": 1.6,
+   "height": 2.2,
+   "material": {
+    "color": [
+     0.05,
+     0.22,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.7
+    }
+   }
+  },
+  {
+   "type": "cone",
+   "center": [
+    2.6,
+    3.6,
+    12.0
+   ],
+   "radius": 1.1,
+   "height": 1.8,
+   "material": {
+    "color": [
+     0.05,
+     0.22,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.7
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    2.6,
+    4.65,
+    12.0
+   ],
+   "radius": 0.22,
+   "material": {
+    "color": [
+     1.0,
+     0.8,
+     0.35
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.05
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.7769963156753379,
+    -0.2800000000000002,
+    11.336480921948203
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     0.75,
+     0.04,
+     0.05
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    2.0815037333902584,
+    0.07999999999999992,
+    10.456774280439909
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     1.0,
+     0.76,
+     0.33
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    3.6525397518995737,
+    -0.2800000000000002,
+    10.370349709087504
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     0.85,
+     0.87,
+     0.9
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    4.2199101022948735,
+    0.07999999999999992,
+    11.837903545742009
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     0.55,
+     0.05,
+     0.12
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    3.9545794270869807,
+    -0.2800000000000002,
+    13.388781687563855
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     0.75,
+     0.04,
+     0.05
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    2.3975684488338938,
+    0.07999999999999992,
+    13.615365428345081
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     1.0,
+     0.76,
+     0.33
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.9446156896336189,
+    -0.2800000000000002,
+    13.011584294556227
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     0.85,
+     0.87,
+     0.9
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.437147614425519,
+    0.9999999999999999,
+    10.915622607500628
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     1.0,
+     0.76,
+     0.33
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    2.9009845107120915,
+    1.3119999999999998,
+    10.696292853317356
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     0.85,
+     0.87,
+     0.9
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    4.120524561981226,
+    0.9999999999999999,
+    11.535128989490849
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     0.55,
+     0.05,
+     0.12
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    3.57855125276645,
+    1.3119999999999998,
+    12.912513805763624
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     0.75,
+     0.04,
+     0.05
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    2.2423278235932553,
+    0.9999999999999999,
+    13.549248403008523
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     1.0,
+     0.76,
+     0.33
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.3204642365214585,
+    1.3119999999999998,
+    12.39119334091902
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     0.85,
+     0.87,
+     0.9
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    2.095646562586008,
+    2.18,
+    10.867203632523175
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     0.85,
+     0.87,
+     0.9
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    3.3788157771003093,
+    2.444,
+    11.298751124535917
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     0.55,
+     0.05,
+     0.12
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    3.673871500692704,
+    2.18,
+    12.62
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     0.75,
+     0.04,
+     0.05
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    2.3821085480229893,
+    2.444,
+    13.025098685569029
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     1.0,
+     0.76,
+     0.33
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.3667928497433415,
+    2.18,
+    12.129615294451892
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     0.85,
+     0.87,
+     0.9
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    2.584467358270818,
+    3.16,
+    11.110135551310812
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     0.55,
+     0.05,
+     0.12
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    3.357884552928545,
+    3.3760000000000003,
+    11.986771075920538
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     0.75,
+     0.04,
+     0.05
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    2.6155326417291827,
+    3.16,
+    12.889864448689188
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     1.0,
+     0.76,
+     0.33
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.8421154470714554,
+    3.3760000000000003,
+    12.01322892407946
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     0.85,
+     0.87,
+     0.9
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -2.4,
+    -1.35,
+    8.0
+   ],
+   "size": [
+    1.9,
+    1.3,
+    1.6
+   ],
+   "rotation": [
+    0,
+    18,
+    0
+   ],
+   "material": {
+    "color": [
+     0.6,
+     0.03,
+     0.04
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.45
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -2.4,
+    -1.35,
+    8.0
+   ],
+   "size": [
+    1.92,
+    1.32,
+    0.16
+   ],
+   "rotation": [
+    0,
+    18,
+    0
+   ],
+   "material": {
+    "color": [
+     1.0,
+     0.78,
+     0.38
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.3
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -2.4,
+    -1.35,
+    8.0
+   ],
+   "size": [
+    0.16,
+    1.32,
+    1.62
+   ],
+   "rotation": [
+    0,
+    18,
+    0
+   ],
+   "material": {
+    "color": [
+     1.0,
+     0.78,
+     0.38
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.3
+    }
+   }
+  },
+  {
+   "type": "torus",
+   "center": [
+    -2.4,
+    -0.5499999999999999,
+    8.0
+   ],
+   "major_radius": 0.16,
+   "minor_radius": 0.045,
+   "rotation": [
+    90,
+    53,
+    0
+   ],
+   "material": {
+    "color": [
+     1.0,
+     0.78,
+     0.38
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.3
+    }
+   }
+  },
+  {
+   "type": "torus",
+   "center": [
+    -2.4,
+    -0.5499999999999999,
+    8.0
+   ],
+   "major_radius": 0.16,
+   "minor_radius": 0.045,
+   "rotation": [
+    90,
+    -17,
+    0
+   ],
+   "material": {
+    "color": [
+     1.0,
+     0.78,
+     0.38
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.3
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -2.3,
+    -0.29999999999999993,
+    8.0
+   ],
+   "size": [
+    1.1,
+    0.8,
+    1.0
+   ],
+   "rotation": [
+    0,
+    -12,
+    0
+   ],
+   "material": {
+    "color": [
+     0.9,
+     0.9,
+     0.86
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.45
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -2.3,
+    -0.29999999999999993,
+    8.0
+   ],
+   "size": [
+    1.12,
+    0.8200000000000001,
+    0.16
+   ],
+   "rotation": [
+    0,
+    -12,
+    0
+   ],
+   "material": {
+    "color": [
+     0.7,
+     0.04,
+     0.05
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.3
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -2.3,
+    -0.29999999999999993,
+    8.0
+   ],
+   "size": [
+    0.16,
+    0.8200000000000001,
+    1.02
+   ],
+   "rotation": [
+    0,
+    -12,
+    0
+   ],
+   "material": {
+    "color": [
+     0.7,
+     0.04,
+     0.05
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.3
+    }
+   }
+  },
+  {
+   "type": "torus",
+   "center": [
+    -2.3,
+    0.2500000000000001,
+    8.0
+   ],
+   "major_radius": 0.16,
+   "minor_radius": 0.045,
+   "rotation": [
+    90,
+    23,
+    0
+   ],
+   "material": {
+    "color": [
+     0.7,
+     0.04,
+     0.05
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.3
+    }
+   }
+  },
+  {
+   "type": "torus",
+   "center": [
+    -2.3,
+    0.2500000000000001,
+    8.0
+   ],
+   "major_radius": 0.16,
+   "minor_radius": 0.045,
+   "rotation": [
+    90,
+    -47,
+    0
+   ],
+   "material": {
+    "color": [
+     0.7,
+     0.04,
+     0.05
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.3
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -0.2,
+    -1.5,
+    10.4
+   ],
+   "size": [
+    1.4,
+    1.0,
+    1.4
+   ],
+   "rotation": [
+    0,
+    40,
+    0
+   ],
+   "material": {
+    "color": [
+     0.05,
+     0.25,
+     0.13
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.45
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -0.2,
+    -1.5,
+    10.4
+   ],
+   "size": [
+    1.42,
+    1.02,
+    0.16
+   ],
+   "rotation": [
+    0,
+    40,
+    0
+   ],
+   "material": {
+    "color": [
+     0.9,
+     0.9,
+     0.92
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.3
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -0.2,
+    -1.5,
+    10.4
+   ],
+   "size": [
+    0.16,
+    1.02,
+    1.42
+   ],
+   "rotation": [
+    0,
+    40,
+    0
+   ],
+   "material": {
+    "color": [
+     0.9,
+     0.9,
+     0.92
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.3
+    }
+   }
+  },
+  {
+   "type": "torus",
+   "center": [
+    -0.2,
+    -0.85,
+    10.4
+   ],
+   "major_radius": 0.16,
+   "minor_radius": 0.045,
+   "rotation": [
+    90,
+    75,
+    0
+   ],
+   "material": {
+    "color": [
+     0.9,
+     0.9,
+     0.92
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.3
+    }
+   }
+  },
+  {
+   "type": "torus",
+   "center": [
+    -0.2,
+    -0.85,
+    10.4
+   ],
+   "major_radius": 0.16,
+   "minor_radius": 0.045,
+   "rotation": [
+    90,
+    5,
+    0
+   ],
+   "material": {
+    "color": [
+     0.9,
+     0.9,
+     0.92
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.3
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    4.9,
+    -1.55,
+    10.2
+   ],
+   "size": [
+    1.2,
+    0.9,
+    1.2
+   ],
+   "rotation": [
+    0,
+    -25,
+    0
+   ],
+   "material": {
+    "color": [
+     0.8,
+     0.62,
+     0.3
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.45
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    4.9,
+    -1.55,
+    10.2
+   ],
+   "size": [
+    1.22,
+    0.92,
+    0.16
+   ],
+   "rotation": [
+    0,
+    -25,
+    0
+   ],
+   "material": {
+    "color": [
+     0.6,
+     0.03,
+     0.04
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.3
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    4.9,
+    -1.55,
+    10.2
+   ],
+   "size": [
+    0.16,
+    0.92,
+    1.22
+   ],
+   "rotation": [
+    0,
+    -25,
+    0
+   ],
+   "material": {
+    "color": [
+     0.6,
+     0.03,
+     0.04
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.3
+    }
+   }
+  },
+  {
+   "type": "torus",
+   "center": [
+    4.9,
+    -0.9500000000000001,
+    10.2
+   ],
+   "major_radius": 0.16,
+   "minor_radius": 0.045,
+   "rotation": [
+    90,
+    10,
+    0
+   ],
+   "material": {
+    "color": [
+     0.6,
+     0.03,
+     0.04
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.3
+    }
+   }
+  },
+  {
+   "type": "torus",
+   "center": [
+    4.9,
+    -0.9500000000000001,
+    10.2
+   ],
+   "major_radius": 0.16,
+   "minor_radius": 0.045,
+   "rotation": [
+    90,
+    -60,
+    0
+   ],
+   "material": {
+    "color": [
+     0.6,
+     0.03,
+     0.04
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.3
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    0.7,
+    -1.65,
+    12.8
+   ],
+   "size": [
+    1.6,
+    0.7,
+    1.0
+   ],
+   "rotation": [
+    0,
+    10,
+    0
+   ],
+   "material": {
+    "color": [
+     0.12,
+     0.14,
+     0.4
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.45
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    0.7,
+    -1.65,
+    12.8
+   ],
+   "size": [
+    1.62,
+    0.72,
+    0.16
+   ],
+   "rotation": [
+    0,
+    10,
+    0
+   ],
+   "material": {
+    "color": [
+     1.0,
+     0.78,
+     0.38
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.3
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    0.7,
+    -1.65,
+    12.8
+   ],
+   "size": [
+    0.16,
+    0.72,
+    1.02
+   ],
+   "rotation": [
+    0,
+    10,
+    0
+   ],
+   "material": {
+    "color": [
+     1.0,
+     0.78,
+     0.38
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.3
+    }
+   }
+  },
+  {
+   "type": "torus",
+   "center": [
+    0.7,
+    -1.15,
+    12.8
+   ],
+   "major_radius": 0.16,
+   "minor_radius": 0.045,
+   "rotation": [
+    90,
+    45,
+    0
+   ],
+   "material": {
+    "color": [
+     1.0,
+     0.78,
+     0.38
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.3
+    }
+   }
+  },
+  {
+   "type": "torus",
+   "center": [
+    0.7,
+    -1.15,
+    12.8
+   ],
+   "major_radius": 0.16,
+   "minor_radius": 0.045,
+   "rotation": [
+    90,
+    -25,
+    0
+   ],
+   "material": {
+    "color": [
+     1.0,
+     0.78,
+     0.38
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.3
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.2,
+    -1.4,
+    5.0
+   ],
+   "radius": 0.6,
+   "material": {
+    "color": [
+     0.72,
+     0.03,
+     0.04
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.1
+    }
+   }
+  },
+  {
+   "type": "cylinder",
+   "center": [
+    0.2,
+    -0.7599999999999999,
+    5.0
+   ],
+   "radius": 0.132,
+   "height": 0.12,
+   "material": {
+    "color": [
+     1.0,
+     0.76,
+     0.33
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.18
+    }
+   }
+  },
+  {
+   "type": "torus",
+   "center": [
+    0.2,
+    -0.6299999999999999,
+    5.0
+   ],
+   "major_radius": 0.072,
+   "minor_radius": 0.018,
+   "rotation": [
+    90,
+    20,
+    0
+   ],
+   "material": {
+    "color": [
+     1.0,
+     0.76,
+     0.33
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.18
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    -0.95,
+    -1.58,
+    5.6
+   ],
+   "radius": 0.42,
+   "material": {
+    "color": [
+     1.0,
+     0.76,
+     0.33
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.18
+    }
+   }
+  },
+  {
+   "type": "cylinder",
+   "center": [
+    -0.95,
+    -1.12,
+    5.6
+   ],
+   "radius": 0.0924,
+   "height": 0.084,
+   "material": {
+    "color": [
+     1.0,
+     0.76,
+     0.33
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.18
+    }
+   }
+  },
+  {
+   "type": "torus",
+   "center": [
+    -0.95,
+    -0.9900000000000001,
+    5.6
+   ],
+   "major_radius": 0.05039999999999999,
+   "minor_radius": 0.012599999999999998,
+   "rotation": [
+    90,
+    -30,
+    0
+   ],
+   "material": {
+    "color": [
+     1.0,
+     0.76,
+     0.33
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.18
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.3,
+    -1.55,
+    5.9
+   ],
+   "radius": 0.45,
+   "material": {
+    "color": [
+     0.97,
+     0.99,
+     1.0
+    ],
+    "diffuse": 0,
+    "specular": 0,
+    "refraction": 1,
+    "ior": 1.5
+   }
+  },
+  {
+   "type": "cylinder",
+   "center": [
+    1.3,
+    -1.06,
+    5.9
+   ],
+   "radius": 0.099,
+   "height": 0.09000000000000001,
+   "material": {
+    "color": [
+     1.0,
+     0.76,
+     0.33
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.18
+    }
+   }
+  },
+  {
+   "type": "torus",
+   "center": [
+    1.3,
+    -0.93,
+    5.9
+   ],
+   "major_radius": 0.054,
+   "minor_radius": 0.0135,
+   "rotation": [
+    90,
+    60,
+    0
+   ],
+   "material": {
+    "color": [
+     1.0,
+     0.76,
+     0.33
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.18
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    2.1,
+    -1.62,
+    6.9
+   ],
+   "radius": 0.38,
+   "material": {
+    "color": [
+     0.92,
+     0.93,
+     0.95
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.08
+    }
+   }
+  },
+  {
+   "type": "cylinder",
+   "center": [
+    2.1,
+    -1.2000000000000002,
+    6.9
+   ],
+   "radius": 0.08360000000000001,
+   "height": 0.07600000000000001,
+   "material": {
+    "color": [
+     1.0,
+     0.76,
+     0.33
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.18
+    }
+   }
+  },
+  {
+   "type": "torus",
+   "center": [
+    2.1,
+    -1.0700000000000003,
+    6.9
+   ],
+   "major_radius": 0.0456,
+   "minor_radius": 0.0114,
+   "rotation": [
+    90,
+    10,
+    0
+   ],
+   "material": {
+    "color": [
+     1.0,
+     0.76,
+     0.33
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.18
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    -1.2,
+    -1.75,
+    4.5
+   ],
+   "radius": 0.25,
+   "material": {
+    "color": [
+     0.05,
+     0.3,
+     0.14
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.15
+    }
+   }
+  },
+  {
+   "type": "cylinder",
+   "center": [
+    -1.2,
+    -1.46,
+    4.5
+   ],
+   "radius": 0.055,
+   "height": 0.05,
+   "material": {
+    "color": [
+     1.0,
+     0.76,
+     0.33
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.18
+    }
+   }
+  },
+  {
+   "type": "torus",
+   "center": [
+    -1.2,
+    -1.33,
+    4.5
+   ],
+   "major_radius": 0.03,
+   "minor_radius": 0.0075,
+   "rotation": [
+    90,
+    0,
+    0
+   ],
+   "material": {
+    "color": [
+     1.0,
+     0.76,
+     0.33
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.18
+    }
+   }
+  }
+ ]
+}

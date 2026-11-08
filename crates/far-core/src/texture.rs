@@ -3,6 +3,7 @@
 use crate::vector::Color;
 use std::path::Path;
 
+#[derive(Clone)]
 pub struct Texture {
     pub width: i32,
     pub height: i32,

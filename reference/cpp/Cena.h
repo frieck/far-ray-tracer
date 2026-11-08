@@ -440,7 +440,6 @@ public:
 	int ContaPrim();
 	int ContaLuz();
 	int NumeroPrimitivas(){return m_NPrimi + m_NLuzes;};
-	void SalvaCena(wxString a);
 	void AbreCena(wxString a);
 
 	int GetTamanhoTextura(){return m_TamTextura;};
@@ -473,52 +472,6 @@ private:
 	int m_NLuzes;
 	aabb m_Extends;
 	KdTree* m_KdTree;
-	typedef struct
-	{
-		int n_Esferas;
-		int n_Planos;
-		int n_Malhas;
-	}dCabecalho;
-	typedef struct
-	{
-		float raio;
-		vetor3 centro;
-		bool luz;
-		char nome[200];
-	}dEsfera;
-	typedef struct
-	{
-		vetor3 p1;
-		vetor3 p2;
-		vetor3 p3;
-		vetor3 p4;
-		bool luz;
-		char nome[200];
-	}dPlano;
-	typedef struct
-	{
-		char m_Arquivo[1000];
-		char nome[200];
-		vetor3 m_Pos;
-		float m_Size;
-		bool luz;
-	}dMalha;
-
-	typedef struct
-	{
-		Cor m_Cor;
-		float m_Refl;
-		float m_Diff;
-		float m_Spec;
-		float m_Refr;
-		float m_RIndex;
-		float m_DRefl;
-		float m_UScale;
-		float m_VScale;
-		float m_RUScale;
-		float m_RVScale;
-		char m_Textura[1000];
-	}dMaterial;
 };
 
 };

@@ -52,7 +52,8 @@ impl Twister {
         self.mti = 0;
     }
 
-    /// Real number in [0, 1).
+    /// Legacy float conversion: rounding can produce exactly 1.0.
+    /// Keep this sequence for 2008 compatibility; callers must handle that endpoint.
     #[inline]
     pub fn rand(&mut self) -> f32 {
         if self.mti >= N {

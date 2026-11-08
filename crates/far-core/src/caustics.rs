@@ -34,6 +34,30 @@ fn bucket_of(x: i32, y: i32, z: i32, buckets: usize) -> usize {
 }
 
 impl PhotonMap {
+    /// Projects raw photon deposits through the render camera, without irradiance
+    /// filtering or surface shading. This diagnostic cloud includes hidden surfaces.
+    /// Brightness is normalized for inspection, not a radiometric render.
+    pub fn preview(&self, pose: &crate::camera::Pose, width: u32, height: u32) -> crate::engine::Image {
+        use std::sync::atomic::Ordering::Relaxed;
+        let image = crate::engine::Image::new(width, height);
+        let view = crate::camera::View::new(pose, width, height);
+        let mut energy = vec![Color::default(); (width * height) as usize];
+        for p in &self.photons {
+            let Some((x, y)) = view.project(p.pos) else { continue };
+            if !(0.0..1.0).contains(&x) || !(0.0..1.0).contains(&y) { continue; }
+            let index = (y * height as f32) as usize * width as usize + (x * width as f32) as usize;
+            energy[index] += p.power;
+        }
+        let peak = energy.iter().fold(0.0_f32, |a, c| a.max(c.x).max(c.y).max(c.z));
+        if peak > 0.0 {
+            let encode = |v: f32| ((1.0 + 1000.0 * v.max(0.0) / peak).ln() / 1001.0_f32.ln() * 255.0) as u32;
+            for (pixel, c) in image.pixels.iter().zip(energy) {
+                pixel.store(encode(c.x) | encode(c.y) << 8 | encode(c.z) << 16 | 0xff00_0000, Relaxed);
+            }
+        }
+        image
+    }
+
     pub fn new(mut photons: Vec<Photon>, radius: f32) -> Self {
         // With cells twice the radius, a lookup touches at most two cells per axis.
         let cell = 2.0 * radius;
@@ -142,6 +166,23 @@ mod tests {
         let (above, _) = map.irradiance(Vec3::new(2.0, 0.25, 2.0), Vec3::new(0.0, 1.0, 0.0));
         assert_eq!(facing_away, Color::default());
         assert_eq!(above, Color::default());
+    }
+
+    #[test]
+    fn preview_projects_deposits_and_rejects_points_outside_the_camera() {
+        let photon = |pos, power| Photon { pos, power, normal: Vec3::new(0.0, 1.0, 0.0) };
+        let map = PhotonMap::new(vec![
+            photon(Vec3::new(0.0, 0.0, 5.0), Color::new(1.0, 0.0, 0.0)),
+            photon(Vec3::new(0.0, 0.0, -6.0), Color::new(0.0, 100.0, 0.0)),
+            photon(Vec3::new(100.0, 0.0, 5.0), Color::new(0.0, 0.0, 100.0)),
+        ], 0.1);
+        for (w, h) in [(80, 60), (120, 60), (60, 120)] {
+            let rgba = map.preview(&Default::default(), w, h).rgba();
+            let center = ((h / 2 * w + w / 2) * 4) as usize;
+            assert_eq!(&rgba[center..center + 4], &[255, 0, 0, 255]);
+            assert_eq!(rgba.chunks_exact(4).filter(|p| p[..3] != [0, 0, 0]).count(), 1);
+        }
+        assert!(PhotonMap::new(vec![], 0.1).preview(&Default::default(), 8, 6).rgba().chunks_exact(4).all(|p| p == [0, 0, 0, 255]));
     }
 
     #[test]

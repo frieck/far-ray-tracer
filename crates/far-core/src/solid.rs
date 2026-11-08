@@ -17,6 +17,7 @@ pub enum Shape {
     Torus { major_radius: f32, minor_radius: f32 },
 }
 
+#[derive(Clone)]
 pub struct Solid {
     pub shape: Shape,
     pub center: Vec3,
@@ -197,6 +198,10 @@ fn torus_hit(o: Vec3, d: Vec3, major: f32, minor: f32, best: &mut f32) {
 }
 
 impl Solid {
+    pub fn axes(&self) -> [Vec3; 3] {
+        self.axes
+    }
+
     pub fn new(shape: Shape, center: Vec3, rotation: [f32; 3], material: usize) -> Self {
         let axes = [
             rotate(Vec3::new(1.0, 0.0, 0.0), rotation),

@@ -1,3 +1,4 @@
+#include <stdexcept>
 #include <vector>
 #include "Cena.h"
 #include "RayTracer.h"
@@ -5,10 +6,11 @@
 #include <chrono>
 using namespace Raytracer;
 std::string g_exe_s; const char* g_exe;
-int main(int c,char**v){ // usage: farrt <assets> <scene.frt> <output.bmp> <kd> <width> <height>
+int main(int c,char**v) try { // usage: farrt <assets> <scene.far> <output.bmp> <kd> <width> <height>
+ if(c != 7) throw std::runtime_error("usage: farrt <assets> <scene.far> <output.bmp> <kd> <width> <height>");
  g_exe_s=std::string(v[1])+"\\x.exe"; g_exe=g_exe_s.c_str(); int kd=atoi(v[4]),W=atoi(v[5]),H=atoi(v[6]);
  Cena* cena=new Cena(); PixelData px(W,H); Engine* rt=new Engine(cena);
- cena->AbreCena(v[2]); cena->PreparaCena();
+ cena->AbreCena(v[2]);
  auto t0=std::chrono::steady_clock::now();
  if(kd) cena->ConstroiKdTree();
  auto t1=std::chrono::steady_clock::now();
@@ -21,3 +23,4 @@ int main(int c,char**v){ // usage: farrt <assets> <scene.frt> <output.bmp> <kd> 
  float* d=px.RetornaPixelData(); std::vector<unsigned char> row(st);
  for(int y=0;y<H;y++){ for(int x=0;x<W;x++){ float*p=d+(y*W+x)*3; for(int k=0;k<3;k++){float q=p[2-k]*255.f+.5f; row[x*3+k]=q>255?255:q<0?0:(unsigned char)q;} } fwrite(row.data(),1,st,f);} fclose(f);
 }
+catch(const std::exception& e) { fprintf(stderr, "%s\n", e.what()); return 1; }

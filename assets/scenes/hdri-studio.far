@@ -1,0 +1,105 @@
+{
+  "lights": [],
+  "objects": [
+    {
+      "type": "plane",
+      "points": [
+        [
+          -20,
+          -2,
+          -6
+        ],
+        [
+          20,
+          -2,
+          -6
+        ],
+        [
+          20,
+          -2,
+          30
+        ],
+        [
+          -20,
+          -2,
+          30
+        ]
+      ],
+      "material": {
+        "color": [
+          0.46,
+          0.48,
+          0.52
+        ],
+        "specular": 0,
+        "reflection": 0.08
+      }
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -3.6,
+        -0.4,
+        8
+      ],
+      "radius": 1.6,
+      "material": {
+        "color": [
+          0.85,
+          0.52,
+          0.22
+        ],
+        "surface": {
+          "preset": "metal",
+          "roughness": 0.12
+        }
+      }
+    },
+    {
+      "type": "sphere",
+      "center": [
+        0,
+        -0.4,
+        8
+      ],
+      "radius": 1.6,
+      "material": {
+        "color": [
+          0.85,
+          0.52,
+          0.22
+        ],
+        "surface": {
+          "preset": "metal",
+          "roughness": 0.35
+        }
+      }
+    },
+    {
+      "type": "sphere",
+      "center": [
+        3.6,
+        -0.4,
+        8
+      ],
+      "radius": 1.6,
+      "material": {
+        "color": [
+          0.85,
+          0.52,
+          0.22
+        ],
+        "surface": {
+          "preset": "metal",
+          "roughness": 0.7
+        }
+      }
+    }
+  ],
+  "environment": {
+    "path": "../environments/studio.hdr",
+    "intensity": 1,
+    "rotation": 200,
+    "visible": false
+  }
+}

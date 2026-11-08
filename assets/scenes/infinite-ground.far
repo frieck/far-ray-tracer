@@ -1,0 +1,188 @@
+{
+ "camera": {
+  "position": [
+   0,
+   0.2,
+   -2
+  ],
+  "target": [
+   0,
+   -1.2,
+   10
+  ],
+  "zoom": 1.0,
+  "aperture": 0.06,
+  "focus_distance": 10.5
+ },
+ "environment": {
+  "path": "../environments/studio.hdr",
+  "intensity": 1.0,
+  "rotation": 60,
+  "visible": true
+ },
+ "lights": [
+  {
+   "type": "rectangle",
+   "position": [
+    -6,
+    7,
+    4
+   ],
+   "edge_u": [
+    4,
+    0,
+    0
+   ],
+   "edge_v": [
+    0,
+    0,
+    4
+   ],
+   "color": [
+    1,
+    0.92,
+    0.8
+   ],
+   "intensity": 3
+  }
+ ],
+ "objects": [
+  {
+   "type": "ground",
+   "position": [
+    0,
+    -2,
+    0
+   ],
+   "material": {
+    "color": [
+     0.55,
+     0.55,
+     0.58
+    ],
+    "texture": "marble.tga",
+    "scale_u": 0.25,
+    "scale_v": 0.25,
+    "surface": {
+     "preset": "ceramic",
+     "roughness": 0.25
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    -2.6,
+    -0.8,
+    10
+   ],
+   "radius": 1.2,
+   "material": {
+    "color": [
+     1.0,
+     0.76,
+     0.33
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.12
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.4,
+    -1.0,
+    12.5
+   ],
+   "radius": 1.0,
+   "material": {
+    "color": [
+     0.75,
+     0.05,
+     0.06
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    2.9,
+    -1.2,
+    9.5
+   ],
+   "radius": 0.8,
+   "material": {
+    "color": [
+     0.97,
+     0.99,
+     1.0
+    ],
+    "diffuse": 0,
+    "specular": 0,
+    "refraction": 1,
+    "ior": 1.5
+   }
+  },
+  {
+   "type": "torus",
+   "center": [
+    0.2,
+    -1.75,
+    8.3
+   ],
+   "major_radius": 0.7,
+   "minor_radius": 0.25,
+   "rotation": [
+    0,
+    30,
+    0
+   ],
+   "material": {
+    "color": [
+     0.92,
+     0.93,
+     0.95
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.06
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    5.5,
+    -1.1,
+    16
+   ],
+   "size": [
+    1.8,
+    1.8,
+    1.8
+   ],
+   "rotation": [
+    0,
+    35,
+    0
+   ],
+   "material": {
+    "color": [
+     0.1,
+     0.3,
+     0.6
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.4
+    }
+   }
+  }
+ ]
+}

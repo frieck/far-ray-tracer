@@ -1,9 +1,9 @@
 //! Loads `.far` scenes, the JSON format that can hold every primitive.
 //!
-//! Meshes go first and planes second, as in `.frt` scenes, because corner normals are
+//! Meshes go first and planes second, as in the original engine, because corner normals are
 //! stored in the same order as the primitives.
 
-use crate::scene::{find_data_folder, MaterialData, Primitive, Scene, Sphere, Triangle, Vertex};
+use crate::scene::{find_data_folder, Ground, MaterialData, Primitive, RectLight, Scene, Sphere, Triangle, Vertex};
 use crate::solid::{Shape, Solid};
 use crate::vector::{Aabb, Vec3};
 use serde::Deserialize;
@@ -27,13 +27,21 @@ fn default_light_radius() -> f32 {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SceneFile {
+    #[serde(default)]
+    environment: Option<crate::environment::EnvironmentConfig>,
+    #[serde(default)]
+    camera: crate::camera::Camera,
+    #[serde(default)]
+    bounds: Option<[Point; 2]>,
     lights: Vec<LightFile>,
     objects: Vec<ObjectFile>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct LightFile {
+struct SphereLightFile {
+    #[serde(default)]
+    material: Option<MaterialFile>,
     position: Point,
     #[serde(default = "default_light_radius")]
     radius: f32,
@@ -42,8 +50,40 @@ struct LightFile {
 }
 
 #[derive(Deserialize)]
+#[serde(untagged)]
+enum LightFile {
+    Sphere(SphereLightFile),
+    Area(AreaLightFile),
+}
+
+fn default_intensity() -> f32 { 1.0 }
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum AreaLightFile {
+    Rectangle {
+        position: Point,
+        edge_u: Point,
+        edge_v: Point,
+        #[serde(default = "white")]
+        color: Point,
+        #[serde(default = "default_intensity")]
+        intensity: f32,
+    },
+    Sphere {
+        position: Point,
+        radius: f32,
+        #[serde(default = "white")]
+        color: Point,
+        #[serde(default = "default_intensity")]
+        intensity: f32,
+    },
+}
+
+#[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct MaterialFile {
+    surface: Option<crate::surface::Surface>,
     color: Point,
     diffuse: f32,
     specular: f32,
@@ -59,6 +99,7 @@ struct MaterialFile {
 impl Default for MaterialFile {
     fn default() -> Self {
         Self {
+            surface: None,
             color: white(),
             diffuse: 1.0,
             specular: 1.0,
@@ -76,6 +117,7 @@ impl Default for MaterialFile {
 impl From<MaterialFile> for MaterialData {
     fn from(m: MaterialFile) -> Self {
         Self {
+            surface: m.surface,
             color: vector(m.color),
             refl: m.reflection,
             diff: m.diffuse,
@@ -144,6 +186,15 @@ enum ObjectFile {
         #[serde(default)]
         material: MaterialFile,
     },
+    /// An infinite plane through `position`, facing `normal`.
+    Ground {
+        #[serde(default)]
+        position: Point,
+        #[serde(default = "up")]
+        normal: Point,
+        #[serde(default)]
+        material: MaterialFile,
+    },
     Plane {
         points: [Point; 4],
         #[serde(default)]
@@ -156,6 +207,10 @@ enum ObjectFile {
         #[serde(default)]
         material: MaterialFile,
     },
+}
+
+fn up() -> Point {
+    [0.0, 1.0, 0.0]
 }
 
 fn require_positive(values: &[f32], what: &str) -> Result<(), String> {
@@ -171,7 +226,14 @@ impl Scene {
         let file: SceneFile =
             serde_json::from_slice(data).map_err(|e| format!("{}: {e}", path.display()))?;
         let dir = find_data_folder(path);
+        file.camera.validate()?;
         let mut scene = Scene::empty();
+        scene.camera = file.camera;
+        if let Some(mut config) = file.environment {
+            let map_path = path.parent().unwrap_or(Path::new(".")).join(&config.path);
+            config.path = map_path.to_string_lossy().into_owned();
+            scene.environment = Some(crate::environment::Environment::load(config)?);
+        }
         let mut cache = HashMap::new();
 
         let (mut meshes, mut planes, mut others) = (Vec::new(), Vec::new(), Vec::new());
@@ -203,11 +265,50 @@ impl Scene {
             scene.add_analytic(object, dir.as_deref(), &mut cache)?;
         }
         for light in file.lights {
-            let material = MaterialFile { color: light.color, ..MaterialFile::default() };
-            let material = scene.add_material(material.into(), dir.as_deref(), &mut cache);
-            scene.lights.push(Sphere::new(vector(light.position), light.radius, material));
+            match light {
+                LightFile::Sphere(light) => {
+                    if light.radius < 0.0 { return Err("A light radius must be nonnegative".into()); }
+                    let material = light.material.unwrap_or(MaterialFile { color: light.color, ..MaterialFile::default() });
+                    let material = scene.add_material(material.into(), dir.as_deref(), &mut cache);
+                    scene.lights.push(Sphere::new(vector(light.position), light.radius, material));
+                }
+                LightFile::Area(AreaLightFile::Rectangle { position, edge_u, edge_v, color, intensity }) => {
+                    let (u, v) = (vector(edge_u), vector(edge_v));
+                    let (width, height) = (u.length(), v.length());
+                    require_positive(&[width, height], "A rectangular light")?;
+                    if !width.is_finite() || !height.is_finite() || u.dot(v).abs() > 1e-5 * width * height {
+                        return Err("A rectangular light needs finite, perpendicular edge_u and edge_v vectors".into());
+                    }
+                    if !intensity.is_finite() || intensity < 0.0 || color.iter().any(|c| *c < 0.0) {
+                        return Err("Light intensity and color must be nonnegative".into());
+                    }
+                    let material = MaterialFile { color: (vector(color) * intensity).array(), ..MaterialFile::default() };
+                    let material = scene.add_material(material.into(), dir.as_deref(), &mut cache);
+                    let mut normal = u.cross(v);
+                    normal.normalize();
+                    scene.rect_lights.push(RectLight {
+                        proxy: Sphere::new(vector(position), 0.5 * (u + v).length(), material),
+                        edge_u: u, edge_v: v, normal, area: width * height,
+                    });
+                }
+                LightFile::Area(AreaLightFile::Sphere { position, radius, color, intensity }) => {
+                    require_positive(&[radius], "A spherical light")?;
+                    if !radius.is_finite() || !intensity.is_finite() || intensity < 0.0 || color.iter().any(|c| *c < 0.0) {
+                        return Err("Light intensity and color must be nonnegative".into());
+                    }
+                    let material = MaterialFile { color: (vector(color) * intensity).array(), ..MaterialFile::default() };
+                    let material = scene.add_material(material.into(), dir.as_deref(), &mut cache);
+                    scene.bulbs.push(Sphere::new(vector(position), radius, material));
+                }
+            }
         }
-        scene.fit_bounds();
+        if let Some([low, high]) = file.bounds {
+            let (low, high) = (vector(low), vector(high));
+            require_positive(&(high - low).array(), "Scene bounds")?;
+            scene.extends = Aabb::new(low, high - low);
+        } else {
+            scene.fit_bounds();
+        }
         Ok(scene)
     }
 
@@ -249,6 +350,18 @@ impl Scene {
                 require_positive(&[major_radius, minor_radius], "A torus")?;
                 (center, rotation, Shape::Torus { major_radius, minor_radius }, material)
             }
+            ObjectFile::Ground { position, normal, material } => {
+                let normal = vector(normal);
+                let length = normal.length();
+                if !(length.is_finite() && length > 0.0) || position.iter().any(|v| !v.is_finite()) {
+                    return Err("A ground needs a finite position and a nonzero normal".into());
+                }
+                let material = self.add_material(material.into(), dir, cache);
+                self.corner_normals.push([Vec3::default(); 3]);
+                self.grounds.push(self.prims.len());
+                self.prims.push(Primitive::Ground(Ground::new(vector(position), normal, material)));
+                return Ok(());
+            }
             ObjectFile::Plane { .. } | ObjectFile::Mesh { .. } => return Ok(()),
         };
         let material = self.add_material(material.into(), dir, cache);
@@ -257,8 +370,8 @@ impl Scene {
         Ok(())
     }
 
-    /// Grows the KD-Tree bounds to hold the whole scene. `.frt` scenes keep the fixed
-    /// bounds of the original, where geometry outside them disappears.
+    /// Grows the KD-Tree bounds to hold the whole scene. Explicit bounds preserve the
+    /// historical volume when requested by a reference scene.
     fn fit_bounds(&mut self) {
         let (mut low, mut high) = (self.extends.pos, self.extends.pos + self.extends.size);
         let mut grow = |a: Vec3, b: Vec3| {
@@ -278,9 +391,75 @@ impl Scene {
                         grow(p, p);
                     }
                 }
+                // Tested apart from the KD-Tree, so it does not need to fit in it.
+                Primitive::Ground(_) => {}
             }
         }
         let margin = Vec3::new(0.01, 0.01, 0.01);
         self.extends = Aabb::new(low - margin, high - low + margin * 2.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn historical_bounds_and_point_light_material_survive_json_loading() {
+        let text = br#"{"bounds":[[-14,-6,-6],[14,8,30]],"lights":[{"position":[0,6,2],"radius":0,"material":{"color":[0.25,0.5,1],"scale_u":2,"scale_v":3}}],"objects":[]}"#;
+        let scene = Scene::from_far(text, Path::new("test.far")).unwrap();
+        assert_eq!(scene.extends.pos, Vec3::new(-14.0, -6.0, -6.0));
+        assert_eq!(scene.extends.size, Vec3::new(28.0, 14.0, 36.0));
+        assert_eq!(scene.lights[0].radius, 0.0);
+        assert_eq!(scene.materials[scene.lights[0].material].color, Vec3::new(0.25, 0.5, 1.0));
+        let invalid = br#"{"bounds":[[1,0,0],[0,1,1]],"lights":[],"objects":[]}"#;
+        assert!(Scene::from_far(invalid, Path::new("test.far")).is_err());
+    }
+
+    #[test]
+    fn scene_files_can_place_the_camera() {
+        let text = br#"{"camera":{"position":[1,2,3],"target":[0,0,9],"zoom":2},"lights":[],"objects":[]}"#;
+        let scene = Scene::from_far(text, Path::new("test.far")).unwrap();
+        assert_eq!(scene.camera.pose(), crate::Pose { position: [1., 2., 3.], target: [0., 0., 9.], zoom: 2. });
+        let same = br#"{"camera":{"position":[1,2,3],"target":[1,2,3]},"lights":[],"objects":[]}"#;
+        assert!(Scene::from_far(same, Path::new("test.far")).is_err());
+    }
+
+    #[test]
+    fn reads_spherical_lights_and_rejects_invalid_ones() {
+        let text = br#"{"lights":[{"type":"sphere","position":[0,2,3],"radius":0.1,"color":[1,0.5,0.25],"intensity":4}],"objects":[]}"#;
+        let scene = Scene::from_far(text, Path::new("test.far")).unwrap();
+        assert_eq!(scene.bulbs.len(), 1);
+        assert!(scene.lights.is_empty());
+        assert_eq!(scene.materials[scene.bulbs[0].material].color, Vec3::new(4.0, 2.0, 1.0));
+        for (radius, intensity) in [(0.0, 1.0), (-1.0, 1.0), (0.1, -1.0)] {
+            let text = serde_json::json!({"lights":[{"type":"sphere","position":[0,2,3],"radius":radius,"intensity":intensity}],"objects":[]});
+            assert!(Scene::from_far(text.to_string().as_bytes(), Path::new("test.far")).is_err());
+        }
+    }
+
+    #[test]
+    fn reads_the_ground_and_rejects_a_zero_normal() {
+        let text = br#"{"lights":[],"objects":[{"type":"ground","position":[0,-2,0],"normal":[0,0,-3]}]}"#;
+        let scene = Scene::from_far(text, Path::new("test.far")).unwrap();
+        let Primitive::Ground(g) = &scene.prims[0] else { panic!("expected a ground") };
+        assert_eq!(g.normal, Vec3::new(0.0, 0.0, -1.0));
+        assert!(g.u_axis.dot(g.normal).abs() < 1e-6 && g.v_axis.dot(g.normal).abs() < 1e-6);
+        assert!((g.u_axis.cross(g.v_axis) + g.normal).length() < 1e-6);
+        let text = br#"{"lights":[],"objects":[{"type":"ground"}]}"#;
+        let scene = Scene::from_far(text, Path::new("test.far")).unwrap();
+        let Primitive::Ground(g) = &scene.prims[0] else { panic!("expected a ground") };
+        assert_eq!(g.normal, Vec3::new(0.0, 1.0, 0.0));
+        assert_eq!(scene.center(), None);
+        let text = br#"{"lights":[],"objects":[{"type":"ground","normal":[0,0,0]}]}"#;
+        assert!(Scene::from_far(text, Path::new("test.far")).is_err());
+    }
+
+    #[test]
+    fn rejects_degenerate_or_skewed_rectangular_lights() {
+        for (u, v, intensity) in [([0.,0.,0.], [0.,1.,0.], 1.), ([1.,0.,0.], [1.,1.,0.], 1.), ([1.,0.,0.], [0.,1.,0.], -1.)] {
+            let text = serde_json::json!({"lights":[{"type":"rectangle","position":[0,2,3],"edge_u":u,"edge_v":v,"intensity":intensity}],"objects":[]});
+            assert!(Scene::from_far(text.to_string().as_bytes(), Path::new("test.far")).is_err());
+        }
     }
 }

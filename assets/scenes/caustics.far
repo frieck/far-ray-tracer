@@ -1,0 +1,133 @@
+{
+  "bounds": [
+    [
+      -14,
+      -6,
+      -6
+    ],
+    [
+      14,
+      8,
+      30
+    ]
+  ],
+  "lights": [
+    {
+      "position": [
+        -2.5,
+        7.5,
+        10.5
+      ],
+      "radius": 0.20000000298023224,
+      "material": {
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "reflection": 0.0,
+        "diffuse": 1.0,
+        "specular": 1.0,
+        "refraction": 0.0,
+        "ior": 1.5,
+        "glossy": 0.0,
+        "scale_u": 1.0,
+        "scale_v": 1.0,
+        "texture": ""
+      }
+    }
+  ],
+  "objects": [
+    {
+      "type": "sphere",
+      "center": [
+        0.4000000059604645,
+        -0.10000000149011612,
+        4.5
+      ],
+      "radius": 1.899999976158142,
+      "material": {
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "reflection": 0.0,
+        "diffuse": 0.0,
+        "specular": 0.6000000238418579,
+        "refraction": 1.0,
+        "ior": 1.5,
+        "glossy": 0.0,
+        "scale_u": 1.0,
+        "scale_v": 1.0,
+        "texture": ""
+      }
+    },
+    {
+      "type": "sphere",
+      "center": [
+        -3.799999952316284,
+        -1.2000000476837158,
+        6.5
+      ],
+      "radius": 0.800000011920929,
+      "material": {
+        "color": [
+          0.15000000596046448,
+          0.30000001192092896,
+          0.699999988079071
+        ],
+        "reflection": 0.10000000149011612,
+        "diffuse": 1.0,
+        "specular": 1.0,
+        "refraction": 0.0,
+        "ior": 1.5,
+        "glossy": 0.0,
+        "scale_u": 1.0,
+        "scale_v": 1.0,
+        "texture": ""
+      }
+    },
+    {
+      "type": "plane",
+      "points": [
+        [
+          -12.0,
+          -2.0,
+          -5.0
+        ],
+        [
+          12.0,
+          -2.0,
+          -5.0
+        ],
+        [
+          12.0,
+          -2.0,
+          20.0
+        ],
+        [
+          -12.0,
+          -2.0,
+          20.0
+        ]
+      ],
+      "material": {
+        "color": [
+          0.5,
+          0.4699999988079071,
+          0.4399999976158142
+        ],
+        "reflection": 0.0,
+        "diffuse": 1.0,
+        "specular": 1.0,
+        "refraction": 0.0,
+        "ior": 1.5,
+        "glossy": 0.0,
+        "scale_u": 1.0,
+        "scale_v": 1.0,
+        "texture": ""
+      }
+    }
+  ]
+}

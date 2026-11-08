@@ -99,6 +99,18 @@ button { font: inherit; color: inherit; cursor: default; }
 .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .stage[data-comparing] { cursor: ew-resize; }
 
+.render-views {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 12px;
+  cursor: default;
+}
+.render-views .icon[aria-pressed="true"] { background: var(--glass-strong); color: var(--accent); }
+
 .divider {
   position: absolute;
   top: 0;
@@ -144,6 +156,19 @@ button { font: inherit; color: inherit; cursor: default; }
 /* Controls */
 .panel { display: flex; flex-direction: column; gap: 14px; min-height: 0; padding: 14px; overflow-y: auto; scrollbar-width: none; }
 .panel::-webkit-scrollbar { display: none; }
+.panel-top { display: flex; flex-direction: column; gap: 14px; }
+
+.tabs { display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px; padding: 3px; border-radius: 12px; background: rgba(0, 0, 0, 0.18); box-shadow: inset 0 0 0 1px var(--edge); }
+.tabs button { display: grid; place-items: center; height: 30px; padding: 0; border: 0; border-radius: 9px; background: none; color: var(--muted); transition: background 120ms ease, color 120ms ease; }
+.tabs button:hover:not(:disabled) { color: var(--text); background: var(--glass-hover); }
+.tabs button[aria-selected="true"] { color: var(--text); background: var(--glass-strong); box-shadow: inset 0 0 0 1px var(--edge-bright); }
+.tabs button:disabled { color: var(--faint); opacity: 0.5; }
+.tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* The padding keeps focus rings inside the scrolling area, which clips at its edges. */
+.tab-body { display: flex; flex-direction: column; gap: 14px; flex: 1 1 0; min-height: 220px; margin: -4px; padding: 4px; overflow-y: auto; scrollbar-width: none; }
+.tab-body::-webkit-scrollbar { display: none; }
+.tab-title { margin: 0; font-size: 15px; font-weight: 650; }
 
 .actions { display: flex; gap: 8px; }
 
@@ -224,6 +249,7 @@ button { font: inherit; color: inherit; cursor: default; }
 .segmented button:disabled { color: var(--faint); }
 
 .select { position: relative; display: block; }
+.select[data-disabled] { opacity: 0.45; }
 .select svg { position: absolute; top: 50%; right: 10px; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
 
 .select select {
@@ -339,9 +365,35 @@ input[type="range"]::-webkit-slider-thumb {
 .stats dd { margin: 0; font-variant-numeric: tabular-nums; }
 .stats .note { color: var(--warning); }
 
-.evolution { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--edge); }
+.evolution { flex-shrink: 0; padding-top: 14px; border-top: 1px solid var(--edge); }
 .note { color: var(--muted); font-size: 12px; }
 
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+.stage[data-picking-focus] { cursor: crosshair; }
+.stage[data-navigable] { cursor: grab; touch-action: none; }
+.stage[data-navigable]:active { cursor: grabbing; }
+.focus-hint {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 24px);
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(15, 16, 22, 0.85);
+  color: var(--text);
+  pointer-events: none;
+  text-align: center;
+}
+
+.view-gizmo { position: absolute; top: 10px; right: 10px; overflow: visible; }
+.view-gizmo-back { fill: rgba(15, 16, 22, 0.28); transition: fill 120ms ease; }
+.view-gizmo[data-interactive]:hover .view-gizmo-back { fill: rgba(15, 16, 22, 0.5); }
+.view-gizmo[data-interactive] [role="button"] { cursor: pointer; }
+.view-gizmo[data-interactive] [role="button"]:hover circle { filter: brightness(1.25); }
+.view-gizmo [role="button"]:focus-visible { outline: none; }
+.view-gizmo [role="button"]:focus-visible circle { stroke: #fff; stroke-width: 2; }
+.view-gizmo-label { fill: #0b0c10; font-size: 10px; font-weight: 700; pointer-events: none; }

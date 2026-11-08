@@ -7,6 +7,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use far_core::environment::{Environment, EnvironmentConfig, EnvironmentMap};
 use far_core::{render, Image, KdTree, Mode, Options, Progress, Scene};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -24,6 +25,7 @@ const PIXELS_PER_FRAME_INTERVAL: u32 = 1_000_000;
 const MAX_IMAGE_SIDE: u32 = 8192;
 const MESSAGE_BUILDING_KD: u32 = 0;
 const MESSAGE_FRAME: u32 = 1;
+const MESSAGE_PHOTON_MAP: u32 = 2;
 const HEADER_SIZE: usize = 24;
 const MENU_OPEN: &str = "open";
 const MENU_SAVE: &str = "save";
@@ -32,6 +34,8 @@ const MENU_EXAMPLE: &str = "example:";
 
 struct OpenScene {
     scene: Scene,
+    /// Built on first use: Classic mode needs the original tree, the others the corrected one.
+    kd_classic: OnceLock<KdTree>,
     kd: OnceLock<KdTree>,
 }
 
@@ -43,6 +47,7 @@ struct FinishedImage {
 
 #[derive(Default)]
 struct AppState {
+    environment_cache: Mutex<Option<(String, Arc<EnvironmentMap>)>>,
     scene: Mutex<Option<Arc<OpenScene>>>,
     progress: Arc<Progress>,
     rendering: AtomicBool,
@@ -50,12 +55,40 @@ struct AppState {
 }
 
 #[derive(Serialize)]
+struct SceneMaterial {
+    id: usize,
+    label: String,
+    color: [f32; 3],
+    ior: f32,
+    surface: Option<far_core::surface::Surface>,
+}
+
+#[derive(Deserialize)]
+struct MaterialOverride {
+    id: usize,
+    surface: far_core::surface::Surface,
+}
+
+#[derive(Serialize)]
 struct SceneInfo {
+    environment: Option<EnvironmentConfig>,
+    materials: Vec<SceneMaterial>,
+    camera: far_core::Camera,
+    center: Option<[f32; 3]>,
     name: String,
     path: String,
     primitives: usize,
     lights: usize,
     warnings: Vec<String>,
+    /// The automatic indirect light settings for this scene's lights.
+    bounces: BounceInfo,
+}
+
+#[derive(Serialize)]
+struct BounceInfo {
+    strength: f32,
+    max: u32,
+    clamp: f32,
 }
 
 struct SceneEntry {
@@ -79,6 +112,13 @@ struct MenuAction {
 
 #[derive(Deserialize)]
 struct RenderRequest {
+    #[serde(default)]
+    environment: Option<EnvironmentConfig>,
+    #[serde(default)]
+    material_overrides: Vec<MaterialOverride>,
+    pose: far_core::Pose,
+    aperture: f32,
+    focus_distance: f32,
     mode: String,
     width: u32,
     height: u32,
@@ -87,6 +127,16 @@ struct RenderRequest {
     use_kd: bool,
     samples: u32,
     indirect: bool,
+    /// Indirect light overrides; absent means automatic. A clamp of 0 means no limit.
+    #[serde(default)]
+    indirect_strength: Option<f32>,
+    #[serde(default)]
+    max_bounces: Option<u32>,
+    #[serde(default)]
+    indirect_clamp: Option<f32>,
+    denoise: bool,
+    #[serde(default)]
+    bloom: bool,
     exposure: f32,
     caustics: bool,
     photons: u32,
@@ -118,14 +168,35 @@ struct RenderResult {
 
 fn open_scene(path: &Path, state: &AppState) -> Result<SceneInfo, String> {
     let scene = Scene::open(path)?;
+    let mut seen = std::collections::HashSet::new();
+    let materials = scene.prims.iter().filter_map(|primitive| {
+        let id = primitive.material();
+        if !seen.insert(id) { return None; }
+        let kind = match primitive {
+            far_core::scene::Primitive::Sphere(_) => "sphere",
+            far_core::scene::Primitive::Triangle(_) => "surface / mesh",
+            far_core::scene::Primitive::Solid(_) => "solid",
+            far_core::scene::Primitive::Ground(_) => "ground",
+        };
+        let m = &scene.materials[id];
+        Some(SceneMaterial { id, label: format!("Material {} ({kind})", seen.len()), color: m.color.array(), ior: m.ior, surface: m.surface.clone() })
+    }).collect();
     let info = SceneInfo {
+        environment: scene.environment.as_ref().map(|e| e.config.clone()),
+        materials,
+        camera: scene.camera,
+        center: scene.center(),
         name: path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
         path: path.to_string_lossy().into_owned(),
         primitives: scene.prims.len(),
-        lights: scene.lights.len(),
+        lights: scene.lights.len() + scene.rect_lights.len() + scene.bulbs.len(),
         warnings: scene.warnings.clone(),
+        bounces: {
+            let auto = far_core::Bounces::for_scene(&scene);
+            BounceInfo { strength: auto.strength, max: auto.max, clamp: auto.clamp }
+        },
     };
-    *state.scene.lock().unwrap() = Some(Arc::new(OpenScene { scene, kd: OnceLock::new() }));
+    *state.scene.lock().unwrap() = Some(Arc::new(OpenScene { scene, kd_classic: OnceLock::new(), kd: OnceLock::new() }));
     Ok(info)
 }
 
@@ -144,7 +215,7 @@ fn collect_scenes(folder: &Path, group: &str, scenes: &mut Vec<SceneEntry>) {
             if name != "debug" {
                 collect_scenes(&path, &name, scenes);
             }
-        } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("frt") || e.eq_ignore_ascii_case("far")) {
+        } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("far")) {
             let path = path.to_string_lossy().into_owned();
             scenes.push(SceneEntry { name, path, group: group.to_string() });
         }
@@ -252,7 +323,7 @@ fn startup(app: AppHandle) -> Startup {
 
 #[tauri::command(async)]
 fn choose_scene(app: AppHandle, state: State<'_, AppState>) -> Result<Option<SceneInfo>, String> {
-    let mut dialog = app.dialog().file().add_filter("Far Ray Tracer scenes", &["far", "frt"]);
+    let mut dialog = app.dialog().file().add_filter("Far Ray Tracer scenes", &["far"]);
     if let Some(folder) = scenes_folder(&app) {
         dialog = dialog.set_directory(folder);
     }
@@ -262,8 +333,51 @@ fn choose_scene(app: AppHandle, state: State<'_, AppState>) -> Result<Option<Sce
 }
 
 #[tauri::command(async)]
+fn choose_environment(app: AppHandle, state: State<'_, AppState>) -> Result<Option<EnvironmentConfig>, String> {
+    let Some(file) = app.dialog().file().add_filter("HDR environment", &["hdr"]).blocking_pick_file() else {
+        return Ok(None);
+    };
+    let path = file.into_path().map_err(|e| e.to_string())?;
+    let config = EnvironmentConfig { path: path.to_string_lossy().into_owned(), ..EnvironmentConfig::default() };
+    // Decode and build the sampling table once; slider edits reuse the shared map.
+    let environment = Environment::load(config.clone())?;
+    *state.environment_cache.lock().unwrap() = Some((config.path.clone(), environment.map));
+    Ok(Some(config))
+}
+
+fn render_environment(config: &EnvironmentConfig, scene: &Scene, state: &AppState) -> Result<Environment, String> {
+    config.validate()?;
+    if let Some(environment) = &scene.environment {
+        if environment.config.path == config.path {
+            return Ok(Environment { config: config.clone(), map: environment.map.clone() });
+        }
+    }
+    if let Some((path, map)) = state.environment_cache.lock().unwrap().as_ref() {
+        if path == &config.path {
+            return Ok(Environment { config: config.clone(), map: map.clone() });
+        }
+    }
+    let environment = Environment::load(config.clone())?;
+    *state.environment_cache.lock().unwrap() = Some((config.path.clone(), environment.map.clone()));
+    Ok(environment)
+}
+
+#[tauri::command(async)]
 fn load_scene(path: String, state: State<'_, AppState>) -> Result<SceneInfo, String> {
     open_scene(Path::new(&path), &state)
+}
+
+#[tauri::command(async)]
+fn pick_focus(pose: far_core::Pose, width: u32, height: u32, x: f32, y: f32, use_kd: bool, state: State<'_, AppState>) -> Result<Option<f32>, String> {
+    pose.validate()?;
+    let open = state.scene.lock().unwrap().clone().ok_or("No scene is open")?;
+    Ok(far_core::camera::pick_focus(&open.scene, if use_kd { open.kd.get() } else { None }, &pose, width, height, x, y))
+}
+
+#[tauri::command(async)]
+fn scene_geometry(state: State<'_, AppState>) -> Result<far_core::preview::PreviewScene, String> {
+    let open = state.scene.lock().unwrap().clone().ok_or("No scene is open")?;
+    Ok(far_core::preview::describe(&open.scene))
 }
 
 #[tauri::command]
@@ -305,6 +419,31 @@ impl Drop for RenderGuard<'_> {
     }
 }
 
+/// Poll the thread itself: a success-only flag would never be set after a panic.
+fn render_with_frames(
+    work: impl FnOnce() + Send,
+    frame_interval: Duration,
+    mut send_frame: impl FnMut(),
+) -> Result<u64, String> {
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(|| {
+            let begin = Instant::now();
+            work();
+            begin.elapsed().as_millis() as u64
+        });
+        while !worker.is_finished() {
+            std::thread::sleep(frame_interval);
+            send_frame();
+        }
+        worker.join().map_err(|panic| {
+            let message = panic.downcast_ref::<String>().map(String::as_str)
+                .or_else(|| panic.downcast_ref::<&str>().copied())
+                .unwrap_or("unknown worker failure");
+            format!("Render failed: {message}")
+        })
+    })
+}
+
 #[tauri::command(async)]
 fn render_scene(
     request: RenderRequest,
@@ -322,17 +461,8 @@ fn render_scene(
     let open = state.scene.lock().unwrap().clone().ok_or("No scene is open")?;
     let progress = &state.progress;
     progress.cancel.store(false, Relaxed);
-
-    let mut kd_ms = None;
-    let kd = request.use_kd.then(|| {
-        open.kd.get_or_init(|| {
-            let _ = channel.send(message([MESSAGE_BUILDING_KD, 0, 0, 0, 0, 0], None));
-            let start = Instant::now();
-            let tree = KdTree::build(&open.scene);
-            kd_ms = Some(start.elapsed().as_millis() as u64);
-            tree
-        })
-    });
+    *progress.photon_preview.lock().unwrap() = None;
+    progress.capture_photon_preview.store(request.keep, Relaxed);
 
     let mode = match request.mode.as_str() {
         "classic" => Mode::Classic,
@@ -340,10 +470,49 @@ fn render_scene(
         "enhanced" => Mode::Enhanced,
         other => return Err(format!("Unknown mode: {other}")),
     };
+
+    let mut kd_ms = None;
+    let kd = request.use_kd.then(|| {
+        let cache = if mode == Mode::Classic { &open.kd_classic } else { &open.kd };
+        cache.get_or_init(|| {
+            let _ = channel.send(message([MESSAGE_BUILDING_KD, 0, 0, 0, 0, 0], None));
+            let start = Instant::now();
+            let tree = KdTree::for_mode(&open.scene, mode);
+            kd_ms = Some(start.elapsed().as_millis() as u64);
+            tree
+        })
+    });
+    // A private snapshot keeps UI edits isolated from the original/comparison scenes.
+    // Geometry is unchanged, so the already-built KD-Tree remains valid.
+    let mut edited = None;
+    if mode == Mode::Enhanced && (!request.material_overrides.is_empty()
+        || request.environment.is_some() || open.scene.environment.is_some()) {
+        let mut copy = open.scene.clone();
+        copy.environment = request.environment.as_ref()
+            .map(|config| render_environment(config, &open.scene, &state)).transpose()?;
+        for edit in &request.material_overrides {
+            if !copy.prims.iter().any(|p| p.material() == edit.id) {
+                return Err("Unknown object material".into());
+            }
+            edit.surface.apply(&mut copy.materials[edit.id]);
+        }
+        edited = Some(copy);
+    }
+    let scene = edited.as_ref().unwrap_or(&open.scene);
+    far_core::Camera { aperture: request.aperture, focus_distance: request.focus_distance, ..far_core::Camera::default() }.validate()?;
+    request.pose.validate()?;
     let options = Options {
+        pose: Some(request.pose),
+        aperture: Some(request.aperture),
+        focus_distance: Some(request.focus_distance),
         mode,
         samples: request.samples,
         indirect: request.indirect,
+        indirect_strength: request.indirect_strength,
+        max_bounces: request.max_bounces,
+        indirect_clamp: request.indirect_clamp.map(|limit| if limit > 0.0 { limit } else { f32::INFINITY }),
+        denoise: request.denoise,
+        bloom: request.bloom,
         exposure: request.exposure,
         caustics: request.caustics,
         photons: request.photons,
@@ -359,9 +528,12 @@ fn render_scene(
     };
     let passes = if mode == Mode::Enhanced { request.samples } else { 1 };
     let image = Image::new(options.width, options.height);
-    let finished = AtomicBool::new(false);
     let start = Instant::now();
     let send_frame = || {
+        if let Some(preview) = progress.photon_preview.lock().unwrap().take() {
+            // Diagnostic messages carry dimensions instead of render progress.
+            channel.send(message([MESSAGE_PHOTON_MAP, preview.width, preview.height, 0, 0, 0], Some(&preview)))?;
+        }
         let done = progress.tiles_done.load(Relaxed) as u32;
         let total = progress.tiles_total.load(Relaxed) as u32;
         let pass = progress.pass_index.load(Relaxed) as u32;
@@ -370,19 +542,11 @@ fn render_scene(
     };
 
     let frame_interval = FRAME_INTERVAL * (image.width * image.height / PIXELS_PER_FRAME_INTERVAL).max(1);
-    let mut render_ms = 0;
-    std::thread::scope(|s| {
-        s.spawn(|| {
-            let begin = Instant::now();
-            render(&open.scene, kd, &options, &image, progress);
-            render_ms = begin.elapsed().as_millis() as u64;
-            finished.store(true, Relaxed);
-        });
-        while !finished.load(Relaxed) {
-            std::thread::sleep(frame_interval);
-            let _ = send_frame();
-        }
-    });
+    let render_ms = render_with_frames(
+        || render(scene, kd, &options, &image, progress),
+        frame_interval,
+        || { let _ = send_frame(); },
+    )?;
     send_frame().map_err(|e| e.to_string())?;
 
     if request.keep {
@@ -424,11 +588,27 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             startup,
             choose_scene,
+            choose_environment,
             load_scene,
             cancel,
             save_image,
-            render_scene
+            render_scene,
+            pick_focus,
+            scene_geometry
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Far Ray Tracer");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worker_panic_returns_an_error_instead_of_waiting_forever() {
+        let result = render_with_frames(|| panic!("photon regression"), Duration::from_millis(1), || {});
+        assert_eq!(result.unwrap_err(), "Render failed: photon regression");
+        // A later job can still complete normally.
+        assert!(render_with_frames(|| {}, Duration::from_millis(1), || {}).is_ok());
+    }
 }

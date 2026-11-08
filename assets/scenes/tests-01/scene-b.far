@@ -1,0 +1,133 @@
+{
+  "bounds": [
+    [
+      -14,
+      -6,
+      -6
+    ],
+    [
+      14,
+      8,
+      30
+    ]
+  ],
+  "lights": [
+    {
+      "position": [
+        0.0,
+        3.0,
+        -9.0
+      ],
+      "radius": 1.0,
+      "material": {
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "reflection": 0.0,
+        "diffuse": 1.0,
+        "specular": 1.0,
+        "refraction": 0.0,
+        "ior": 1.5,
+        "glossy": 0.0,
+        "scale_u": 1.0,
+        "scale_v": 1.0,
+        "texture": ""
+      }
+    },
+    {
+      "position": [
+        0.0,
+        10.0,
+        0.0
+      ],
+      "radius": 1.0,
+      "material": {
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "reflection": 0.0,
+        "diffuse": 1.0,
+        "specular": 1.0,
+        "refraction": 0.0,
+        "ior": 1.5,
+        "glossy": 0.0,
+        "scale_u": 1.0,
+        "scale_v": 1.0,
+        "texture": ""
+      }
+    }
+  ],
+  "objects": [
+    {
+      "type": "plane",
+      "points": [
+        [
+          -10.0,
+          -2.0,
+          10.0
+        ],
+        [
+          10.0,
+          -2.0,
+          10.0
+        ],
+        [
+          10.0,
+          0.0,
+          -10.0
+        ],
+        [
+          -10.0,
+          0.0,
+          -10.0
+        ]
+      ],
+      "material": {
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "reflection": 1.0,
+        "diffuse": 1.0,
+        "specular": 1.0,
+        "refraction": 0.0,
+        "ior": 1.5,
+        "glossy": 0.0,
+        "scale_u": 1.0,
+        "scale_v": 1.0,
+        "texture": ""
+      }
+    },
+    {
+      "type": "mesh",
+      "file": "knot-copy.3ds",
+      "position": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "size": 4.0,
+      "material": {
+        "color": [
+          0.1882352977991104,
+          0.6235294342041016,
+          0.772549033164978
+        ],
+        "reflection": 1.0,
+        "diffuse": 1.0,
+        "specular": 1.0,
+        "refraction": 0.0,
+        "ior": 1.5,
+        "glossy": 0.0,
+        "scale_u": 1.0,
+        "scale_v": 1.0,
+        "texture": ""
+      }
+    }
+  ]
+}

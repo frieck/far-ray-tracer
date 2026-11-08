@@ -1,4 +1,4 @@
-//! Scene: primitives, materials and `.frt` file loading.
+//! Scene: primitives, materials and `.far` file loading.
 
 use crate::mesh3ds;
 use crate::solid::Solid;
@@ -14,13 +14,10 @@ const DATA_FOLDERS: [&str; 2] = ["scene-data", "DadosCena"];
 const IMAGE_FOLDERS: [&str; 2] = ["images", "Imagens"];
 const MESH_FOLDERS: [&str; 2] = ["meshes", "Malhas"];
 
-const HEADER_SIZE: usize = 12;
-const SPHERE_SIZE: usize = 220;
-const PLANE_SIZE: usize = 252;
-const MESH_SIZE: usize = 1220;
-const MATERIAL_SIZE: usize = 1052;
-
+#[derive(Clone)]
 pub struct Material {
+    pub ggx: Option<crate::ggx::Ggx>,
+    pub surface: Option<crate::surface::Surface>,
     pub color: Color,
     pub refl: f32,
     pub diff: f32,
@@ -47,6 +44,7 @@ impl Vertex {
     }
 }
 
+#[derive(Clone)]
 pub struct Sphere {
     pub center: Vec3,
     pub sq_radius: f32,
@@ -73,8 +71,19 @@ impl Sphere {
             vc: vn.cross(ve),
         }
     }
+
+    /// Distance to the first crossing of the surface, if it lies in (EPSILON, limit).
+    pub fn intersect(&self, origin: Vec3, direction: Vec3, limit: f32) -> Option<f32> {
+        let to_center = self.center - origin;
+        let b = to_center.dot(direction);
+        let disc = b * b - to_center.dot(to_center) + self.sq_radius;
+        if disc < 0.0 { return None; }
+        let root = disc.sqrt();
+        [b - root, b + root].into_iter().find(|&t| t > crate::vector::EPSILON && t < limit)
+    }
 }
 
+#[derive(Clone)]
 pub struct Triangle {
     pub a: Vec3,
     pub n: Vec3,
@@ -88,6 +97,86 @@ pub struct Triangle {
     pub cnv: f32,
     pub vertices: [u32; 3],
     pub material: usize,
+}
+
+/// A one-sided rectangular emitter. The full edge vectors must be perpendicular.
+#[derive(Clone)]
+pub struct RectLight {
+    pub proxy: Sphere,
+    pub edge_u: Vec3,
+    pub edge_v: Vec3,
+    pub normal: Vec3,
+    pub area: f32,
+}
+
+impl RectLight {
+    pub fn point(&self, u: f32, v: f32) -> Vec3 {
+        self.proxy.center + self.edge_u * (u - 0.5) + self.edge_v * (v - 0.5)
+    }
+
+    /// Both sides occlude; only the front side emits.
+    pub fn intersect(&self, origin: Vec3, direction: Vec3, limit: f32) -> Option<f32> {
+        let denom = direction.dot(self.normal);
+        if denom.abs() < 1e-7 { return None; }
+        let distance = (self.proxy.center - origin).dot(self.normal) / denom;
+        if distance <= crate::vector::EPSILON || distance >= limit { return None; }
+        let offset = origin + direction * distance - self.proxy.center;
+        let u = offset.dot(self.edge_u) / self.edge_u.dot(self.edge_u);
+        let v = offset.dot(self.edge_v) / self.edge_v.dot(self.edge_v);
+        (u.abs() <= 0.5 && v.abs() <= 0.5).then_some(distance)
+    }
+}
+
+/// Size of one texture repeat on the ground, in scene units, before `scale_u` and
+/// `scale_v`. It matches the planes, whose texture coordinates are the position over 18.
+pub const GROUND_TILE: f32 = 18.0;
+
+/// An infinite plane. It has no bounds, so it stays out of the KD-Tree and every
+/// ray tests it on its own: one dot product and one division.
+#[derive(Clone)]
+pub struct Ground {
+    pub point: Vec3,
+    /// Unit normal, the side that faces up.
+    pub normal: Vec3,
+    /// Unit directions along the plane, for the texture.
+    pub u_axis: Vec3,
+    pub v_axis: Vec3,
+    pub material: usize,
+}
+
+impl Ground {
+    /// `normal` must be nonzero; it does not need unit length.
+    pub(crate) fn new(point: Vec3, mut normal: Vec3, material: usize) -> Self {
+        normal.normalize();
+        // Any direction not parallel to the normal gives a tangent. For the usual
+        // upward ground this makes u follow X and v follow Z.
+        let helper = if normal.z.abs() < 0.9 { Vec3::new(0.0, 0.0, 1.0) } else { Vec3::new(1.0, 0.0, 0.0) };
+        let mut u_axis = normal.cross(helper);
+        u_axis.normalize();
+        let v_axis = u_axis.cross(normal);
+        Self { point, normal, u_axis, v_axis, material }
+    }
+
+    /// Both sides are solid: 1 from above, -1 from below, 0 for a miss.
+    #[inline(always)]
+    pub fn intersect(&self, origin: Vec3, direction: Vec3, dist: &mut f32) -> i32 {
+        let denom = direction.dot(self.normal);
+        if denom == 0.0 {
+            return 0;
+        }
+        let t = (self.point - origin).dot(self.normal) / denom;
+        if t <= crate::vector::EPSILON || t >= *dist {
+            return 0;
+        }
+        *dist = t;
+        if denom < 0.0 { 1 } else { -1 }
+    }
+
+    /// Texture coordinates before the material scale, one unit per texture repeat.
+    pub fn uv(&self, pos: Vec3) -> (f32, f32) {
+        let offset = pos - self.point;
+        (offset.dot(self.u_axis) / GROUND_TILE, offset.dot(self.v_axis) / GROUND_TILE)
+    }
 }
 
 impl Triangle {
@@ -136,10 +225,12 @@ impl Triangle {
     }
 }
 
+#[derive(Clone)]
 pub enum Primitive {
     Sphere(Sphere),
     Triangle(Triangle),
     Solid(Solid),
+    Ground(Ground),
 }
 
 impl Primitive {
@@ -149,14 +240,24 @@ impl Primitive {
             Primitive::Sphere(e) => e.material,
             Primitive::Triangle(t) => t.material,
             Primitive::Solid(s) => s.material,
+            Primitive::Ground(g) => g.material,
         }
     }
 }
 
+#[derive(Clone)]
 pub struct Scene {
+    pub environment: Option<crate::environment::Environment>,
+    pub camera: crate::camera::Camera,
     /// Meshes, then planes, then spheres, the order the original uses.
     pub prims: Vec<Primitive>,
     pub lights: Vec<Sphere>,
+    pub rect_lights: Vec<RectLight>,
+    /// Physical spherical emitters: visible, with inverse-square falloff.
+    /// Classic mode treats them as legacy point lights.
+    pub bulbs: Vec<Sphere>,
+    /// Indices in `prims` of the infinite planes, which the KD-Tree leaves out.
+    pub grounds: Vec<usize>,
     pub vertices: Vec<Vertex>,
     /// Corrected normals of each triangle corner, indexed like `prims`.
     /// Only Enhanced mode uses them; Classic mode keeps `Vertex::normal`.
@@ -169,42 +270,8 @@ pub struct Scene {
     pub warnings: Vec<String>,
 }
 
-struct Reader<'a> {
-    data: &'a [u8],
-    pos: usize,
-}
-
-impl Reader<'_> {
-    fn f32(&mut self) -> f32 {
-        let b = &self.data[self.pos..self.pos + 4];
-        self.pos += 4;
-        f32::from_le_bytes([b[0], b[1], b[2], b[3]])
-    }
-
-    fn vector(&mut self) -> Vec3 {
-        let (x, y, z) = (self.f32(), self.f32(), self.f32());
-        Vec3::new(x, y, z)
-    }
-
-    fn bool(&mut self) -> bool {
-        self.pos += 1;
-        self.data[self.pos - 1] != 0
-    }
-
-    /// Zero-terminated Latin-1 text. The rest of the field often holds stale memory
-    /// from the 2008 program and is ignored.
-    fn text(&mut self, field_len: usize) -> String {
-        let field = &self.data[self.pos..self.pos + field_len];
-        self.pos += field_len;
-        field.iter().take_while(|&&b| b != 0).map(|&b| b as char).collect()
-    }
-
-    fn skip(&mut self, n: usize) {
-        self.pos += n;
-    }
-}
-
 pub(crate) struct MaterialData {
+    pub(crate) surface: Option<crate::surface::Surface>,
     pub(crate) color: Color,
     pub(crate) refl: f32,
     pub(crate) diff: f32,
@@ -215,15 +282,6 @@ pub(crate) struct MaterialData {
     pub(crate) u_scale: f32,
     pub(crate) v_scale: f32,
     pub(crate) texture: String,
-}
-
-fn read_material(l: &mut Reader) -> MaterialData {
-    let color = l.vector();
-    let (refl, diff, spec, refr) = (l.f32(), l.f32(), l.f32(), l.f32());
-    let (ior, drefl, u_scale, v_scale) = (l.f32(), l.f32(), l.f32(), l.f32());
-    l.skip(8);
-    let texture = l.text(1000);
-    MaterialData { color, refl, diff, spec, refr, ior, drefl, u_scale, v_scale, texture }
 }
 
 /// Stored paths may come from Windows (`C:\...`); only the file name matters.
@@ -257,17 +315,41 @@ fn locate_in(dir: &Path, folders: [&str; 2], name: &str) -> Option<PathBuf> {
 
 impl Scene {
     pub fn open(path: &Path) -> Result<Self, String> {
-        let data = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("far")) {
-            return Self::from_far(&data, path);
+        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("frt")) {
+            return Err(format!("{}: the binary .frt format is no longer supported. Open the .far version of this scene.", path.display()));
         }
-        Self::parse(&data, path)
+        let data = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        Self::from_far(&data, path)
+    }
+
+    /// Average position of the objects, a natural point to orbit around.
+    pub fn center(&self) -> Option<[f32; 3]> {
+        let (mut sum, mut count) = (Vec3::default(), 0);
+        for prim in &self.prims {
+            sum += match prim {
+                Primitive::Sphere(s) => s.center,
+                Primitive::Solid(s) => s.center,
+                Primitive::Triangle(t) => {
+                    let [a, b, c] = t.vertices.map(|v| self.vertices[v as usize].pos);
+                    (a + b + c) * (1.0 / 3.0)
+                }
+                // An infinite plane has no center.
+                Primitive::Ground(_) => continue,
+            };
+            count += 1;
+        }
+        (count > 0).then(|| (sum * (1.0 / count as f32)).array())
     }
 
     pub(crate) fn empty() -> Self {
         Scene {
+            environment: None,
+            camera: crate::camera::Camera::default(),
             prims: Vec::new(),
             lights: Vec::new(),
+            rect_lights: Vec::new(),
+            bulbs: Vec::new(),
+            grounds: Vec::new(),
             vertices: Vec::new(),
             corner_normals: Vec::new(),
             materials: Vec::new(),
@@ -275,83 +357,6 @@ impl Scene {
             extends: Aabb::new(Vec3::new(-14.0, -6.0, -6.0), Vec3::new(28.0, 14.0, 36.0)),
             warnings: Vec::new(),
         }
-    }
-
-    fn parse(data: &[u8], path: &Path) -> Result<Self, String> {
-        let invalid = || format!("{} is not a valid .frt file", path.display());
-        if data.len() < HEADER_SIZE {
-            return Err(invalid());
-        }
-        let int_at = |i: usize| {
-            i32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]])
-        };
-        let counts = |i: usize| usize::try_from(int_at(i)).map_err(|_| invalid());
-        let (n_spheres, n_planes, n_meshes) = (counts(0)?, counts(4)?, counts(8)?);
-        let expected = n_spheres
-            .checked_mul(SPHERE_SIZE + MATERIAL_SIZE)
-            .zip(n_planes.checked_mul(PLANE_SIZE + MATERIAL_SIZE))
-            .zip(n_meshes.checked_mul(MESH_SIZE + MATERIAL_SIZE))
-            .and_then(|((a, b), c)| a.checked_add(b)?.checked_add(c)?.checked_add(HEADER_SIZE))
-            .ok_or_else(invalid)?;
-        if data.len() < expected {
-            return Err(invalid());
-        }
-
-        let dir = find_data_folder(path);
-        let mut scene = Scene::empty();
-        let mut cache = HashMap::new();
-        let mut l = Reader { data, pos: HEADER_SIZE };
-
-        let mut spheres = Vec::with_capacity(n_spheres);
-        for _ in 0..n_spheres {
-            let radius = l.f32();
-            let center = l.vector();
-            let light = l.bool();
-            l.skip(SPHERE_SIZE - 17);
-            let m = read_material(&mut l);
-            let material = scene.add_material(m, dir.as_deref(), &mut cache);
-            spheres.push((Sphere::new(center, radius, material), light));
-        }
-
-        let mut planes = Vec::with_capacity(n_planes);
-        for _ in 0..n_planes {
-            let p = [l.vector(), l.vector(), l.vector(), l.vector()];
-            l.skip(PLANE_SIZE - 48);
-            let m = read_material(&mut l);
-            let material = scene.add_material(m, dir.as_deref(), &mut cache);
-            planes.push((p, material));
-        }
-
-        for _ in 0..n_meshes {
-            let file = l.text(1000);
-            l.skip(200);
-            let pos = l.vector();
-            let target_size = l.f32();
-            l.skip(4);
-            let m = read_material(&mut l);
-            let material = scene.add_material(m, dir.as_deref(), &mut cache);
-            scene.add_mesh(&file, dir.as_deref(), material, pos, target_size);
-        }
-
-        for (p, material) in planes {
-            let base = scene.vertices.len() as u32;
-            scene.vertices.extend(p.map(Vertex::new));
-            for ids in [[base, base + 1, base + 3], [base + 1, base + 2, base + 3]] {
-                let t = Triangle::new(&mut scene.vertices, ids, material);
-                scene.corner_normals.push([t.n; 3]);
-                scene.prims.push(Primitive::Triangle(t));
-            }
-        }
-
-        for (e, light) in spheres {
-            if light {
-                scene.lights.push(e);
-            } else {
-                scene.corner_normals.push([Vec3::default(); 3]);
-                scene.prims.push(Primitive::Sphere(e));
-            }
-        }
-        Ok(scene)
     }
 
     pub(crate) fn add_material(
@@ -373,7 +378,10 @@ impl Scene {
                 }
             }
         };
-        self.materials.push(Material {
+        let surface = m.surface;
+        let mut material = Material {
+            ggx: None,
+            surface: None,
             color: m.color,
             refl: m.refl,
             diff: m.diff,
@@ -384,7 +392,9 @@ impl Scene {
             texture,
             ru_scale: 1.0 / m.u_scale,
             rv_scale: 1.0 / m.v_scale,
-        });
+        };
+        if let Some(surface) = surface { surface.apply(&mut material); }
+        self.materials.push(material);
         self.materials.len() - 1
     }
 
@@ -558,6 +568,16 @@ impl Scene {
             return m.color;
         };
         let (u, v) = s.uv(pos);
+        self.textures[texture].texel_fixed(u * m.ru_scale, v * m.rv_scale) * m.color
+    }
+
+    /// Color of the ground at a point.
+    pub fn ground_color(&self, g: &Ground, pos: Vec3) -> Color {
+        let m = &self.materials[g.material];
+        let Some(texture) = m.texture else {
+            return m.color;
+        };
+        let (u, v) = g.uv(pos);
         self.textures[texture].texel_fixed(u * m.ru_scale, v * m.rv_scale) * m.color
     }
 

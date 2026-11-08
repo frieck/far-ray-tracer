@@ -18,3 +18,10 @@ license has not been confirmed. They are not covered by `LICENSE`.
 ## Dependencies
 
 Rust and npm dependencies keep their own licenses. See `Cargo.lock` and `package-lock.json`.
+
+## nlohmann/json
+
+The C++ reference uses nlohmann/json 3.12.0, vendored in
+`reference/cpp/vendor/json.hpp`. Copyright (c) 2013-2025 Niels Lohmann.
+Distributed under the MIT license in `reference/cpp/vendor/LICENSE.json`.
+Source: https://github.com/nlohmann/json/tree/v3.12.0

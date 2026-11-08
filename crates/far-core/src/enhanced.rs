@@ -12,7 +12,9 @@
 //!
 //! Classic mode lives in `engine.rs` and uses nothing from this file.
 
+use crate::camera::{Pose, View};
 use crate::caustics::{Photon, PhotonMap};
+use crate::denoise::{self, Guide, Primary};
 use crate::scene::{Scene, Sphere, Material, Primitive};
 use crate::kdtree::KdTree;
 use crate::engine::{self, Context, Image, Mode, Options, PhotonStats, Progress, Ray};
@@ -30,13 +32,60 @@ const SURFACE_OFFSET: f32 = 1e-3;
 const ABSORPTION: f32 = 0.15;
 /// Limits very bright samples, which would become isolated dots in the image.
 const MAX_SAMPLE_RADIANCE: f32 = 6.0;
-/// How many diffuse surfaces indirect light goes through.
+/// How many diffuse surfaces indirect light goes through when the scene has a 2008
+/// light. Scenes lit only by physical emitters follow paths until Russian roulette ends
+/// them, with `MAX_PATH_BOUNCES` only as a guard for the recursion.
 const MAX_INDIRECT_BOUNCES: u32 = 2;
-/// Scene lights do not fall off with distance; without this scale bounced light blows out.
+const MAX_PATH_BOUNCES: u32 = 64;
+/// Bounces before Russian roulette starts. The first ones carry most of the light,
+/// so ending them at random would only add noise.
+const ROULETTE_AFTER: u32 = 3;
+/// The 2008 sphere lights do not fall off with distance; without this scale bounced
+/// light blows out. Scenes lit only by physical emitters (rectangles, bulbs and the
+/// environment) use the full bounce, as the light then falls off correctly.
 const INDIRECT_STRENGTH: f32 = 0.45;
+
+/// How indirect light travels. The defaults depend on the lights of the scene; each
+/// value can be overridden in `Options`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bounces {
+    /// Multiplier of each rebound. 1 is physically correct.
+    pub strength: f32,
+    /// Diffuse rebounds a path may take. From the third on, Russian roulette also
+    /// ends paths at random, so a high limit costs little.
+    pub max: u32,
+    /// Most light one rebound may bring back, against isolated white dots.
+    pub clamp: f32,
+}
+
+impl Bounces {
+    /// Full path tracing when every light falls off with distance, and the cautious
+    /// 2008-light settings otherwise.
+    pub fn for_scene(scene: &Scene) -> Self {
+        if scene.lights.is_empty() {
+            Self { strength: 1.0, max: MAX_PATH_BOUNCES, clamp: MAX_PATH_RADIANCE }
+        } else {
+            Self { strength: INDIRECT_STRENGTH, max: MAX_INDIRECT_BOUNCES, clamp: MAX_INDIRECT_RADIANCE }
+        }
+    }
+
+    pub fn resolve(scene: &Scene, op: &Options) -> Self {
+        let auto = Self::for_scene(scene);
+        Self {
+            strength: op.indirect_strength.unwrap_or(auto.strength).max(0.0),
+            max: op.max_bounces.unwrap_or(auto.max).min(MAX_PATH_BOUNCES),
+            clamp: op.indirect_clamp.unwrap_or(auto.clamp).max(0.0),
+        }
+    }
+}
 const MAX_GLASS_CROSSINGS: u32 = 6;
-/// Limits what one bounce brings back: strong reflections turn into grain without this.
+/// Limits what one bounce brings back in scenes with a 2008 light: strong reflections
+/// turn into grain without this.
 const MAX_INDIRECT_RADIANCE: f32 = 1.5;
+/// The same limit for full path tracing, far higher, as production renderers do. Only
+/// rare paths reach it, such as floor, then a mirror ball, then a small bright bulb;
+/// a single one of those would stay a white dot after hundreds of samples.
+const MAX_PATH_RADIANCE: f32 = 10.0;
 /// Photons per unit of work. Each batch has its own seed, so the result does not
 /// depend on how batches are spread over threads.
 const PHOTON_BATCH: u32 = 8192;
@@ -111,6 +160,7 @@ struct Tracer<'a> {
     fixed: bool,
     has_glass: bool,
     indirect: bool,
+    bounces: Bounces,
     caustics: Option<&'a PhotonMap>,
     caustic_strength: f32,
     caustics_only: bool,
@@ -122,6 +172,8 @@ struct Tracer<'a> {
     stratum: (f32, f32),
     grid: f32,
     first_hit: bool,
+    /// What the camera ray of the current sample hit, for the denoiser.
+    primary: Primary,
 }
 
 impl<'a> Tracer<'a> {
@@ -189,13 +241,14 @@ impl<'a> Tracer<'a> {
                 let n = if n.x.is_finite() { n } else { t.n };
                 (scene.triangle_color_fixed(t, uv), t.n, n)
             }
+            Primitive::Ground(g) => (scene.ground_color(g, pos), g.normal, g.normal),
         };
         let original = smooth;
         let geo = if r.d.dot(geo) > 0.0 { -geo } else { geo };
         let smooth = if r.d.dot(smooth) > 0.0 { -smooth } else { smooth };
         // The smooth normal can point backward at grazing angles; the geometric one cannot.
         let smooth = if smooth.dot(geo) <= 0.0 { geo } else { smooth };
-        let k = if self.fixed { 1.0 } else { 1.0 / (m.diff + m.refl + m.refr).max(1.0).sqrt() };
+        let k = if self.fixed || m.ggx.is_some() { 1.0 } else { 1.0 / (m.diff + m.refl + m.refr).max(1.0).sqrt() };
         Hit {
             pos,
             dist,
@@ -204,7 +257,10 @@ impl<'a> Tracer<'a> {
             smooth,
             original,
             entering: result > 0,
-            diff: m.diff * k,
+            diff: if !self.fixed { m.ggx.map_or(m.diff * k, |g| {
+                let f = g.fresnel(color, m.ior, -r.d.dot(smooth));
+                (1.0 - g.metallic) * (1.0 - f.x.max(f.y).max(f.z))
+            }) } else { m.diff },
             refl: m.refl * k,
             refr: m.refr * k,
             m,
@@ -216,11 +272,15 @@ impl<'a> Tracer<'a> {
     fn visibility(&mut self, start: Vec3, dir: Vec3, distance: f32) -> Color {
         let white = Color::new(1.0, 1.0, 1.0);
         let limit = distance * (1.0 - 4.0 * EPSILON);
+        let scene = self.ctx.scene;
+        if scene.rect_lights.iter().any(|light| light.intersect(start, dir, limit).is_some())
+            || scene.bulbs.iter().any(|light| light.intersect(start, dir, limit).is_some()) {
+            return Color::default();
+        }
         if !self.has_glass {
             let r = Ray { o: start, d: dir };
             return if self.blocked(&r, limit) { Color::default() } else { white };
         }
-        let scene = self.ctx.scene;
         let (mut o, mut remaining, mut transmitted) = (start, limit, white);
         for _ in 0..MAX_GLASS_CROSSINGS {
             let r = Ray { o, d: dir };
@@ -256,8 +316,15 @@ impl<'a> Tracer<'a> {
         light.center + w * light.radius
     }
 
-    fn direct_light(&mut self, a: &Hit, d: Vec3) -> Color {
+    /// After a diffuse bounce, light that reached that surface through a mirror, glass
+    /// or GGX lobe is already in the photon map, so tracing it again would add it twice.
+    fn photons_carry(&self, bounces: u32) -> bool {
+        self.caustics.is_some() && bounces > 0
+    }
+
+    fn direct_light(&mut self, a: &Hit, d: Vec3, depth: i32, bounces: u32) -> Color {
         let scene = self.ctx.scene;
+        let photons_carry = self.photons_carry(bounces);
         let mut acc = Color::default();
         for light in &scene.lights {
             let target = self.point_on_light(light, a.pos);
@@ -276,6 +343,18 @@ impl<'a> Tracer<'a> {
                 continue;
             }
             let light_color = scene.materials[light.material].color * transmitted;
+            if !self.fixed {
+                if let Some(ggx) = a.m.ggx {
+                    if l.dot(a.geo) > 0.0 {
+                        acc += if photons_carry {
+                            ggx.evaluate_diffuse(a.smooth, -d, l, a.color, a.m.ior)
+                        } else {
+                            ggx.evaluate(a.smooth, -d, l, a.color, a.m.ior, None)
+                        } * light_color * PI;
+                    }
+                    continue;
+                }
+            }
             if a.diff > 0.0 && dot > 0.0 {
                 acc += (dot * a.diff) * a.color * light_color;
             }
@@ -285,7 +364,95 @@ impl<'a> Tracer<'a> {
                 acc += (highlight * a.m.spec / (50.0 - 50.0 * highlight + highlight)) * light_color;
             }
         }
+        for light in &scene.rect_lights {
+            let (u, v) = if self.fixed { (0.5, 0.5) } else { self.pair() };
+            let target = light.point(u, v);
+            let delta = target - a.pos;
+            let distance = delta.length();
+            if distance <= SURFACE_OFFSET { continue; }
+            let l = delta * (1.0 / distance);
+            let emission_cos = -light.normal.dot(l);
+            let dot = l.dot(a.original);
+            if emission_cos <= 0.0 || dot <= 0.0 { continue; }
+            // Uniform area sampling: geometry term divided by the area PDF.
+            let weight = light.area * emission_cos / (PI * distance * distance);
+            let start = a.pos + a.geo * SURFACE_OFFSET;
+            let shadow = target - start;
+            let shadow_distance = shadow.length();
+            let transmitted = self.visibility(start, shadow * (1.0 / shadow_distance), shadow_distance);
+            let radiance = scene.materials[light.proxy.material].color * transmitted * weight;
+            let light_pdf = distance * distance / (light.area * emission_cos);
+            self.shade_area_light(&mut acc, a, d, depth, l, dot, radiance, Some(light_pdf), photons_carry);
+        }
+        for light in &scene.bulbs {
+            let target = self.point_on_light(light, a.pos);
+            let delta = target - a.pos;
+            let distance = delta.length();
+            if distance <= light.radius { continue; }
+            let l = delta * (1.0 / distance);
+            let dot = l.dot(a.original);
+            if dot <= 0.0 { continue; }
+            // Fixed lights from the center, as a disc of the bulb's radius seen head-on.
+            let (weight, light_pdf) = if self.fixed {
+                (light.sq_radius / (distance * distance), None)
+            } else {
+                let emission_cos = -((target - light.center) * light.inv_radius).dot(l);
+                if emission_cos <= 0.0 { continue; }
+                // Uniform samples on the half of the sphere that faces the point.
+                let area = 2.0 * PI * light.sq_radius;
+                (area * emission_cos / (PI * distance * distance), Some(distance * distance / (area * emission_cos)))
+            };
+            // Measured from the offset start, so the shadow ray stops short of the bulb itself.
+            let start = a.pos + a.geo * SURFACE_OFFSET;
+            let shadow = target - start;
+            let shadow_length = shadow.length();
+            let reach = if self.fixed { shadow_length - light.radius } else { shadow_length };
+            let transmitted = self.visibility(start, shadow * (1.0 / shadow_length), reach);
+            let radiance = scene.materials[light.material].color * transmitted * weight;
+            self.shade_area_light(&mut acc, a, d, depth, l, dot, radiance, light_pdf, photons_carry);
+        }
+        if !self.fixed {
+            if let Some(environment) = scene.environment.as_ref().filter(|e| e.active()) {
+                let (u, v) = self.pair();
+                let (l, radiance, pdf) = environment.sample(u, v);
+                let cosine = l.dot(a.original);
+                if cosine > 0. && l.dot(a.geo) > 0. && pdf > 0. {
+                    let transmitted = self.visibility(a.pos + a.geo * SURFACE_OFFSET, l, MAX_DISTANCE);
+                    let response = if let Some(ggx) = a.m.ggx {
+                        ggx.evaluate(a.smooth, -d, l, a.color, a.m.ior,
+                            (depth < self.ctx.max_depth).then_some(pdf))
+                    } else {
+                        a.color * (a.diff * cosine / PI)
+                    };
+                    acc += response * radiance * transmitted * (1. / pdf);
+                }
+            }
+        }
         acc
+    }
+
+    /// Adds the response of the surface to light arriving from an emitter sample.
+    /// `light_pdf` is the solid-angle density of that sample, for MIS with GGX.
+    #[allow(clippy::too_many_arguments)]
+    fn shade_area_light(&self, acc: &mut Color, a: &Hit, d: Vec3, depth: i32, l: Vec3, dot: f32,
+        radiance: Color, light_pdf: Option<f32>, photons_carry: bool) {
+        if !self.fixed {
+            if let Some(ggx) = a.m.ggx {
+                if l.dot(a.geo) > 0.0 {
+                    *acc += if photons_carry {
+                        ggx.evaluate_diffuse(a.smooth, -d, l, a.color, a.m.ior)
+                    } else {
+                        ggx.evaluate(a.smooth, -d, l, a.color, a.m.ior, light_pdf.filter(|_| depth < self.ctx.max_depth))
+                    } * radiance * PI;
+                }
+                return;
+            }
+        }
+        *acc += radiance * a.color * (dot * a.diff);
+        let highlight = d.dot(reflect(l, a.original));
+        if highlight > 0.0 && a.m.spec > 0.0 {
+            *acc += radiance * (highlight * a.m.spec / (50.0 - 49.0 * highlight));
+        }
     }
 
     fn indirect_light(&mut self, a: &Hit, depth: i32, bounces: u32) -> Color {
@@ -298,14 +465,57 @@ impl<'a> Tracer<'a> {
         if dir.dot(a.geo) <= 0.0 {
             return Color::default();
         }
+        let weight = a.diff * a.color;
+        // Russian roulette: a dark surface passes on little light, so its path usually
+        // ends here. A path that survives is divided by its chance to survive, so the
+        // average stays exact while paths stay short.
+        let mut survival = 1.0;
+        if bounces >= ROULETTE_AFTER {
+            survival = weight.x.max(weight.y).max(weight.z).clamp(0.05, 0.95);
+            if self.random() >= survival {
+                return Color::default();
+            }
+        }
         let r = Ray { o: a.pos + a.geo * SURFACE_OFFSET, d: dir };
-        let (c, _) = self.trace(&r, depth, bounces + 1);
-        let c = Color::new(c.x.min(MAX_INDIRECT_RADIANCE), c.y.min(MAX_INDIRECT_RADIANCE), c.z.min(MAX_INDIRECT_RADIANCE));
-        (INDIRECT_STRENGTH * a.diff) * a.color * c
+        let (c, _) = self.trace(&r, depth, bounces + 1, false);
+        let limit = self.bounces.clamp;
+        let c = Color::new(c.x.min(limit), c.y.min(limit), c.z.min(limit));
+        weight * c * (self.bounces.strength / survival)
     }
 
     fn reflection(&mut self, a: &Hit, d: Vec3, depth: i32, bounces: u32) -> Color {
         if !self.fixed {
+            if let Some(ggx) = a.m.ggx {
+                let (u, v) = self.pair();
+                let Some((dir, weight)) = ggx.sample(a.smooth, -d, u, v, a.color, a.m.ior) else { return Color::default(); };
+                if dir.dot(a.geo) <= 0.0 { return Color::default(); }
+                let ray = Ray { o: a.pos + a.geo * SURFACE_OFFSET, d: dir };
+                let (color, distance) = self.trace(&ray, depth + 1, bounces, true);
+                let mut mis = 1.0;
+                if distance == MAX_DISTANCE {
+                    if let Some(environment) = self.ctx.scene.environment.as_ref().filter(|e| e.active()) {
+                        mis = crate::ggx::power_weight(ggx.pdf(a.smooth, -d, dir), environment.pdf(dir));
+                    }
+                }
+                for light in &self.ctx.scene.rect_lights {
+                    if let Some(hit) = light.intersect(ray.o, dir, distance + SURFACE_OFFSET) {
+                        if (hit - distance).abs() < SURFACE_OFFSET && -dir.dot(light.normal) > 0.0 {
+                            let light_pdf = hit * hit / (light.area * -dir.dot(light.normal));
+                            mis = crate::ggx::power_weight(ggx.pdf(a.smooth, -d, dir), light_pdf);
+                        }
+                    }
+                }
+                for light in &self.ctx.scene.bulbs {
+                    if let Some(hit) = light.intersect(ray.o, dir, distance + SURFACE_OFFSET) {
+                        let cosine = -dir.dot((ray.o + dir * hit - light.center) * light.inv_radius);
+                        if (hit - distance).abs() < SURFACE_OFFSET && cosine > 0.0 {
+                            let light_pdf = hit * hit / (2.0 * PI * light.sq_radius * cosine);
+                            mis = crate::ggx::power_weight(ggx.pdf(a.smooth, -d, dir), light_pdf);
+                        }
+                    }
+                }
+                return color * weight * mis;
+            }
             return self.reflected_ray(a, d, depth, bounces, a.m.drefl > 0.0);
         }
         if a.m.drefl <= 0.0 || depth >= FIXED_GLOSSY_DEPTH {
@@ -333,7 +543,7 @@ impl<'a> Tracer<'a> {
             dir = reflect(dir, a.geo);
         }
         let r = Ray { o: a.pos + a.geo * SURFACE_OFFSET, d: dir };
-        let (c, _) = self.trace(&r, depth + 1, bounces);
+        let (c, _) = self.trace(&r, depth + 1, bounces, true);
         a.refl * c * a.color
     }
 
@@ -347,7 +557,7 @@ impl<'a> Tracer<'a> {
         let cos_t2 = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
         let reflected = |s: &mut Self| {
             let r = Ray { o: a.pos + a.geo * SURFACE_OFFSET, d: reflect(d, a.smooth) };
-            s.trace(&r, depth + 1, bounces).0
+            s.trace(&r, depth + 1, bounces, true).0
         };
         if cos_t2 <= 0.0 {
             return a.refr * reflected(self);
@@ -361,7 +571,9 @@ impl<'a> Tracer<'a> {
             let mut dir = eta * d + (eta * cos_i - cos_t) * a.smooth;
             dir.normalize();
             let r = Ray { o: a.pos - a.geo * SURFACE_OFFSET, d: dir };
-            let (c, dist) = s.trace(&r, depth + 1, bounces);
+            // After a diffuse bounce, shadow rays have already brought this light through
+            // the glass, so the transmitted ray must not see the emitter as well.
+            let (c, dist) = s.trace(&r, depth + 1, bounces, !(s.has_glass && bounces > 0));
             if !a.entering {
                 return c;
             }
@@ -391,6 +603,11 @@ impl<'a> Tracer<'a> {
             let Some((prim, dist, result)) = self.nearest(&ray, MAX_DISTANCE) else {
                 return;
             };
+            let scene = self.ctx.scene;
+            if scene.rect_lights.iter().any(|light| light.intersect(ray.o, ray.d, dist).is_some())
+                || scene.bulbs.iter().any(|light| light.intersect(ray.o, ray.d, dist).is_some()) {
+                return;
+            }
             if let Some(color) = inside {
                 let absorbed = (Color::new(1.0, 1.0, 1.0) - color) * (ABSORPTION * -dist);
                 power = power * Color::new(absorbed.x.exp(), absorbed.y.exp(), absorbed.z.exp());
@@ -398,6 +615,14 @@ impl<'a> Tracer<'a> {
             let a = self.hit_at(&ray, prim, dist, result);
             if bounce > 0 && a.diff > 0.0 && ray.d.dot(a.original) < 0.0 {
                 photons.push(Photon { pos: a.pos, normal: a.original, power });
+            }
+            if let Some(ggx) = a.m.ggx {
+                let (u, v) = (self.random(), self.random());
+                let Some((dir, weight)) = ggx.sample(a.smooth, -ray.d, u, v, a.color, a.m.ior) else { return; };
+                if dir.dot(a.geo) <= 0.0 { return; }
+                power = power * weight;
+                ray = Ray { o: a.pos + a.geo * SURFACE_OFFSET, d: dir };
+                continue;
             }
             let specular = a.refl + a.refr;
             if specular <= 0.0 {
@@ -432,13 +657,56 @@ impl<'a> Tracer<'a> {
     }
 
     /// Returns the color seen by the ray and the distance to the hit point.
-    fn trace(&mut self, r: &Ray, depth: i32, bounces: u32) -> (Color, f32) {
-        let Some((prim, dist, result)) = self.nearest(r, MAX_DISTANCE) else {
-            return (Color::default(), MAX_DISTANCE);
+    fn trace(&mut self, r: &Ray, depth: i32, bounces: u32, allow_emission: bool) -> (Color, f32) {
+        let hit = self.nearest(r, MAX_DISTANCE);
+        let mut closest = hit.map_or(MAX_DISTANCE, |(_, dist, _)| dist);
+        let mut emitter = None;
+        for light in &self.ctx.scene.rect_lights {
+            if let Some(dist) = light.intersect(r.o, r.d, closest) {
+                closest = dist;
+                emitter = Some(light);
+            }
+        }
+        let mut bulb = None;
+        for light in &self.ctx.scene.bulbs {
+            if let Some(dist) = light.intersect(r.o, r.d, closest) {
+                closest = dist;
+                bulb = Some(light);
+                emitter = None;
+            }
+        }
+        if let Some(light) = bulb {
+            // Like panels, but a sphere emits from every side.
+            let emits = allow_emission && !self.caustics_only && !self.photons_carry(bounces);
+            let color = if emits { self.ctx.scene.materials[light.material].color } else { Color::default() };
+            return (color, closest);
+        }
+        if let Some(light) = emitter {
+            // Direct diffuse hits are already estimated by area-light sampling.
+            let emits = allow_emission && !self.caustics_only && !self.photons_carry(bounces)
+                && r.d.dot(light.normal) < 0.0;
+            let color = if emits { self.ctx.scene.materials[light.proxy.material].color } else { Color::default() };
+            return (color, closest);
+        }
+        let Some((prim, dist, result)) = hit else {
+            let mut color = Color::default();
+            if !self.fixed && !self.caustics_only && allow_emission {
+                if let Some(environment) = &self.ctx.scene.environment {
+                    // Only camera misses obey background visibility. Reflection/refraction
+                    // still see the environment; diffuse misses are estimated by NEE.
+                    if environment.config.visible || depth > 1 || bounces > 0 {
+                        color = environment.radiance(r.d);
+                    }
+                }
+            }
+            return (color, MAX_DISTANCE);
         };
         let a = self.hit_at(r, prim, dist, result);
         self.first_hit = depth == 1 && bounces == 0;
-        let mut acc = if self.caustics_only { Color::default() } else { self.direct_light(&a, r.d) };
+        if self.first_hit {
+            self.primary = Primary { albedo: a.color.array(), normal: a.smooth.array(), depth: dist };
+        }
+        let mut acc = if self.caustics_only { Color::default() } else { self.direct_light(&a, r.d, depth, bounces) };
         if let Some(map) = self.caustics {
             if bounces == 0 && a.diff > 0.0 && r.d.dot(a.original) < 0.0 {
                 let (light, found) = map.irradiance(a.pos, a.original);
@@ -448,7 +716,7 @@ impl<'a> Tracer<'a> {
             }
         }
         // The side that receives no direct light does not bounce light either.
-        if self.indirect && bounces < MAX_INDIRECT_BOUNCES && a.diff > 0.0 && r.d.dot(a.original) < 0.0 {
+        if self.indirect && bounces < self.bounces.max && a.diff > 0.0 && r.d.dot(a.original) < 0.0 {
             acc += self.indirect_light(&a, depth, bounces);
         }
         if depth < self.ctx.max_depth {
@@ -499,6 +767,8 @@ fn photon_targets(scene: &Scene) -> Vec<PhotonTarget<'_>> {
                     grow(t.material, p, p);
                 }
             }
+            // Photons aim at bounded glass and mirrors; an infinite mirror has no target.
+            Primitive::Ground(_) => {}
         }
     }
     let mut materials: Vec<_> = bounds.into_iter().collect();
@@ -516,14 +786,16 @@ fn photon_targets(scene: &Scene) -> Vec<PhotonTarget<'_>> {
     targets
 }
 
-/// Traces the caustic photons. Lights here have no falloff: they deliver the same light
-/// per area at any distance. So a disk facing the light receives its own area in power,
-/// and that is shared among the photons aimed at it.
+/// Legacy spheres aim photons at specular objects with their historical no-falloff
+/// weighting. Rectangular panels emit from uniform positions and cosine-weighted
+/// directions over their front hemisphere, with power proportional to their area.
 fn build_photon_map(scene: &Scene, kd: Option<&KdTree>, op: &Options, progress: &Progress) -> PhotonMap {
     let targets = photon_targets(scene);
-    let total_area: f32 = targets.iter().map(|t| PI * t.radius * t.radius).sum();
+    let sphere_area: f32 = targets.iter().map(|t| PI * t.radius * t.radius).sum();
+    let rectangle_area: f32 = scene.rect_lights.iter().map(|light| PI * light.area).sum();
+    let total_area = sphere_area + rectangle_area;
     let radius = op.caustic_radius.max(1e-3);
-    if targets.is_empty() || op.photons == 0 {
+    if total_area <= 0.0 || op.photons == 0 {
         return PhotonMap::new(Vec::new(), radius);
     }
     let power_per_photon = total_area / op.photons as f32;
@@ -537,6 +809,7 @@ fn build_photon_map(scene: &Scene, kd: Option<&KdTree>, op: &Options, progress: 
             fixed: false,
             has_glass: false,
             indirect: false,
+            bounces: Bounces::for_scene(scene),
             caustics: None,
             caustic_strength: 0.0,
             caustics_only: false,
@@ -545,6 +818,7 @@ fn build_photon_map(scene: &Scene, kd: Option<&KdTree>, op: &Options, progress: 
             stratum: (0.0, 0.0),
             grid: 1.0,
             first_hit: false,
+            primary: Primary::default(),
         };
         loop {
             let batch = next_batch.fetch_add(1, Relaxed) as u32;
@@ -554,8 +828,32 @@ fn build_photon_map(scene: &Scene, kd: Option<&KdTree>, op: &Options, progress: 
             t.ctx.rng = Twister::new(DEFAULT_SEED ^ (batch + 1).wrapping_mul(0x85eb_ca6b));
             let count = PHOTON_BATCH.min(op.photons - batch * PHOTON_BATCH);
             let mut photons = Vec::new();
-            for _ in 0..count {
+            for photon_index in 0..count {
+                if photon_index % 64 == 0 && progress.cancel.load(Relaxed) { break; }
                 let mut pick = t.random() * total_area;
+                // The legacy RNG can round to 1.0. At the upper endpoint a
+                // sphere-only scene must still select its last spherical target.
+                if !scene.rect_lights.is_empty() && pick >= sphere_area {
+                    pick -= sphere_area;
+                    let mut light = &scene.rect_lights[scene.rect_lights.len() - 1];
+                    for candidate in &scene.rect_lights {
+                        pick -= PI * candidate.area;
+                        if pick <= 0.0 { light = candidate; break; }
+                    }
+                    let start = light.point(t.random(), t.random());
+                    let (u, v) = (t.random(), t.random());
+                    let (side, up) = base(light.normal);
+                    let radius = u.sqrt();
+                    let angle = 2.0 * PI * v;
+                    let dir = side * (radius * angle.cos()) + up * (radius * angle.sin())
+                        + light.normal * (1.0 - u).sqrt();
+                    // Cosine-weighted emission gives flux Le * area * PI.
+                    // The legacy gather omits Lambert's 1/PI, so include it here.
+                    let color = scene.materials[light.proxy.material].color;
+                    t.trace_photon(Ray { o: start + light.normal * SURFACE_OFFSET, d: dir },
+                        color * (power_per_photon / PI), &mut photons);
+                    continue;
+                }
                 let mut target = &targets[targets.len() - 1];
                 for candidate in &targets {
                     pick -= PI * candidate.radius * candidate.radius;
@@ -588,6 +886,7 @@ fn build_photon_map(scene: &Scene, kd: Option<&KdTree>, op: &Options, progress: 
         worker();
     });
 
+    if progress.cancel.load(Relaxed) { return PhotonMap::new(Vec::new(), radius); }
     let mut batches = finished.into_inner().unwrap();
     batches.sort_by_key(|(batch, _)| *batch);
     PhotonMap::new(batches.into_iter().flat_map(|(_, photons)| photons).collect(), radius)
@@ -608,6 +907,111 @@ fn channel(v: f32) -> u32 {
     (v * 255.0 + 0.5).min(255.0) as u32
 }
 
+fn pass_sample(radiance: f32, exposure: f32, linear_hdr: bool) -> f32 {
+    if linear_hdr { (radiance * exposure).max(0.) }
+    else { shoulder((radiance * exposure).min(MAX_SAMPLE_RADIANCE)) }
+}
+
+/// Filters the accumulated image and writes it over the progressive one.
+fn apply_denoiser(sum: &[AtomicU32], guide: &Guide, count: u32, linear_hdr: bool, image: &Image, progress: &Progress) {
+    let pixels = image.pixels.len();
+    let mut color = Vec::with_capacity(pixels);
+    let mut variance = Vec::with_capacity(pixels);
+    for p in 0..pixels {
+        let mean = [0, 1, 2].map(|k| f32::from_bits(sum[p * 3 + k].load(Relaxed)) / count as f32);
+        let brightness = denoise::luma(mean);
+        let spread = (guide.mean_luminance2(p, count) - brightness * brightness).max(0.) / (count - 1) as f32;
+        // The filter works on displayed values, where the shoulder compresses the noise.
+        let slope = if linear_hdr {
+            (shoulder(brightness + 0.01) - shoulder(brightness)) / 0.01
+        } else {
+            1.
+        };
+        color.push(if linear_hdr { mean.map(shoulder) } else { mean });
+        variance.push(spread * slope * slope);
+    }
+    let Some(result) = denoise::denoise(color, variance, guide, count, image.width as usize,
+        image.height as usize, &progress.cancel) else { return };
+    for (pixel, c) in image.pixels.iter().zip(result) {
+        pixel.store(0xff00_0000 | channel(c[0]) | channel(c[1]) << 8 | channel(c[2]) << 16, Relaxed);
+    }
+}
+
+/// Exposed radiance above this spills into the halo; the rest of the image stays put.
+const BLOOM_THRESHOLD: f32 = 1.0;
+/// Caps one sample, so a stray bright path does not paint a disc.
+const BLOOM_MAX: f32 = 64.0;
+const BLOOM_STRENGTH: f32 = 0.6;
+/// Halo sizes as a fraction of the longer image side, and their share of the light:
+/// a tight core, a soft glow and a faint wide haze, as in a real lens.
+const BLOOM_SCALES: [(f32, f32); 3] = [(0.003, 0.5), (0.012, 0.3), (0.04, 0.2)];
+
+/// Box blur of one axis of an RGB buffer, with the edge pixels repeated.
+fn box_blur(buffer: &mut [f32], width: usize, height: usize, radius: usize, horizontal: bool) {
+    let (lines, length, step, line_step) =
+        if horizontal { (height, width, 3, width * 3) } else { (width, height, width * 3, 3) };
+    let mut line = vec![0f32; length];
+    for index in 0..lines {
+        for channel in 0..3 {
+            let at = |i: usize| index * line_step + i * step + channel;
+            for (i, value) in line.iter_mut().enumerate() {
+                *value = buffer[at(i)];
+            }
+            let sample = |i: isize| line[i.clamp(0, length as isize - 1) as usize];
+            let r = radius as isize;
+            let mut sum: f32 = (-r..=r).map(sample).sum();
+            let scale = 1.0 / (2 * radius + 1) as f32;
+            for i in 0..length as isize {
+                buffer[at(i as usize)] = sum * scale;
+                sum += sample(i + r + 1) - sample(i - r);
+            }
+        }
+    }
+}
+
+/// Spreads the light above the threshold into a halo and screens it over the image.
+fn apply_bloom(glow: &[AtomicU32], count: u32, image: &Image) {
+    let (width, height) = (image.width as usize, image.height as usize);
+    let source: Vec<f32> = glow.iter()
+        .map(|v| f32::from_bits(v.load(Relaxed)) / count as f32)
+        .map(|v| if v.is_finite() { v } else { 0.0 })
+        .collect();
+    if source.iter().all(|v| *v <= 0.0) {
+        return;
+    }
+    let mut halo = vec![0f32; source.len()];
+    for (size, share) in BLOOM_SCALES {
+        let radius = ((size * width.max(height) as f32).round() as usize).max(1);
+        let mut layer = source.clone();
+        // Three box blurs are close to a Gaussian.
+        for _ in 0..3 {
+            box_blur(&mut layer, width, height, radius, true);
+            box_blur(&mut layer, width, height, radius, false);
+        }
+        for (h, l) in halo.iter_mut().zip(layer) {
+            *h += share * l;
+        }
+    }
+    for (p, pixel) in image.pixels.iter().enumerate() {
+        let rgba = pixel.load(Relaxed);
+        let mut out = 0xff00_0000u32;
+        for k in 0..3 {
+            let shown = ((rgba >> (8 * k)) & 0xff) as f32 / 255.0;
+            let light = 1.0 - (-BLOOM_STRENGTH * halo[p * 3 + k]).exp();
+            out |= channel(shown + light - shown * light) << (8 * k);
+        }
+        pixel.store(out, Relaxed);
+    }
+}
+
+fn accumulate_channel(sum: &AtomicU32, radiance: f32, exposure: f32, count: u32, linear_hdr: bool) -> u32 {
+    let sample = pass_sample(radiance, exposure, linear_hdr);
+    let total = f32::from_bits(sum.load(Relaxed)) + sample;
+    sum.store(total.to_bits(), Relaxed);
+    let mean = total / count as f32;
+    channel(if linear_hdr { shoulder(mean) } else { mean })
+}
+
 pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, progress: &Progress) {
     let (w, h) = (op.width, op.height);
     let (tiles_x, tiles_y) = (w.div_ceil(TILE), h.div_ceil(TILE));
@@ -622,13 +1026,15 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
     progress.tiles_total.store(total_tiles * samples as usize, Relaxed);
     progress.rays.store(0, Relaxed);
 
-    let (half_width, half_height) = engine::view_half_size(w, h);
-    let p1 = Vec3::new(-half_width, half_height, 0.0);
-    let dx = Vec3::new(2.0 * half_width / w as f32, 0.0, 0.0);
-    let dy = Vec3::new(0.0, -2.0 * half_height / h as f32, 0.0);
-    let origin = Vec3::new(0.0, 0.0, -5.0);
+    let pose = if fixed { Pose::default() } else { op.pose.unwrap_or(scene.camera.pose()) };
+    let view = View::new(&pose, w, h);
+    let p1 = view.plane_point(-1.0, 1.0);
+    let dx = view.right * (2.0 * view.half_width / w as f32);
+    let dy = view.up * (-2.0 * view.half_height / h as f32);
+    let origin = view.origin;
     progress.pass_index.store(0, Relaxed);
     *progress.photon_stats.lock().unwrap() = None;
+    *progress.photon_preview.lock().unwrap() = None;
     progress.photon_lookups.store(0, Relaxed);
     progress.photons_gathered.store(0, Relaxed);
     let photon_map = (op.caustics && !fixed).then(|| {
@@ -640,8 +1046,20 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
             trace_ms: start.elapsed().as_millis() as u64,
             memory_bytes: map.memory_bytes(),
         });
+        if progress.capture_photon_preview.load(Relaxed) && !map.is_empty() && !progress.cancel.load(Relaxed) {
+            let scale = 1024.0 / op.width.max(op.height) as f32;
+            let scale = scale.min(1.0);
+            let width = (op.width as f32 * scale).round().max(1.0) as u32;
+            let height = (op.height as f32 * scale).round().max(1.0) as u32;
+            *progress.photon_preview.lock().unwrap() = Some(map.preview(&pose, width, height));
+        }
         map
     });
+    let camera = crate::camera::Camera {
+        aperture: if fixed { 0.0 } else { op.aperture.unwrap_or(scene.camera.aperture) },
+        focus_distance: op.focus_distance.unwrap_or(scene.camera.focus_distance),
+        ..crate::camera::Camera::default()
+    };
     let caustics_only = op.caustics_only && photon_map.is_some();
     // With caustics, photons carry the light that goes through glass, so shadow rays
     // must not let it through as well.
@@ -654,6 +1072,11 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
     // Each light adds full brightness with no falloff. Compensating part of that
     // keeps scenes with several lights from turning white.
     let exposure = op.exposure / (scene.lights.len().max(1) as f32).powf(0.35);
+    let linear_hdr = !fixed && scene.environment.as_ref().is_some_and(|e| e.active());
+    let guide = (op.denoise && !fixed && samples >= denoise::MIN_PASSES)
+        .then(|| Guide::new(w as usize * h as usize));
+    let glow: Option<Vec<AtomicU32>> = (op.bloom && !fixed)
+        .then(|| (0..w as usize * h as usize * 3).map(|_| AtomicU32::new(0)).collect());
 
     for pass_index in 0..samples {
         if progress.cancel.load(Relaxed) {
@@ -674,6 +1097,7 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
                 fixed,
                 has_glass,
                 indirect: op.indirect && !fixed && !caustics_only,
+                bounces: Bounces::resolve(scene, op),
                 caustics: photon_map.as_ref(),
                 caustic_strength: op.caustic_strength,
                 caustics_only,
@@ -682,6 +1106,7 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
                 stratum: light_stratum,
                 grid: grid as f32,
                 first_hit: false,
+                primary: Primary::default(),
             };
             loop {
                 if progress.cancel.load(Relaxed) {
@@ -706,8 +1131,19 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
                         let target = p1 + (x as f32 + pixel_center + ox) * dx + (y as f32 + pixel_center + oy) * dy;
                         let mut d = target - origin;
                         d.normalize();
-                        let (c, _) = t.trace(&Ray { o: origin, d }, 1, 0);
+                        let ray = if camera.aperture > 0.0 {
+                            let (u, v) = crate::camera::lens_sample(pass_index, y * w + x);
+                            camera.ray(&view, d, u, v)
+                        } else {
+                            Ray { o: origin, d }
+                        };
+                        t.primary = Primary::default();
+                        let (c, _) = t.trace(&ray, 1, 0, true);
                         let p = (y * w + x) as usize;
+                        if let Some(guide) = &guide {
+                            let sample = [c.x, c.y, c.z].map(|v| pass_sample(v, exposure, linear_hdr));
+                            guide.record(p, denoise::luma(sample), &t.primary);
+                        }
                         if fixed {
                             let rgba = engine::channel(c.x)
                                 | engine::channel(c.y) << 8
@@ -716,15 +1152,21 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
                             image.pixels[p].store(rgba, Relaxed);
                             continue;
                         }
-                        // Compression comes before the average, so an edge next to a very bright area
-                        // still has no jaggies.
-                        let sample = [c.x, c.y, c.z].map(|v| shoulder((v * exposure).min(MAX_SAMPLE_RADIANCE)));
+                        // HDR needs a linear mean: compressing individual samples loses
+                        // energy from small bright sources and dulls rough reflections.
+                        // Keep the historical display pipeline for scenes without HDR.
+                        if let Some(glow) = &glow {
+                            for (k, radiance) in [c.x, c.y, c.z].into_iter().enumerate() {
+                                // `max` and `min` drop a NaN sample, which would spread over the whole halo.
+                                let excess = (radiance * exposure - BLOOM_THRESHOLD).max(0.0).min(BLOOM_MAX);
+                                let total = &glow[p * 3 + k];
+                                total.store((f32::from_bits(total.load(Relaxed)) + excess).to_bits(), Relaxed);
+                            }
+                        }
                         let mut rgba = 0xff00_0000u32;
-                        for (k, v) in sample.into_iter().enumerate() {
-                            let cell_sum = &sum[p * 3 + k];
-                            let total = f32::from_bits(cell_sum.load(Relaxed)) + v;
-                            cell_sum.store(total.to_bits(), Relaxed);
-                            rgba |= channel(total / (pass_index + 1) as f32) << (8 * k);
+                        for (k, radiance) in [c.x, c.y, c.z].into_iter().enumerate() {
+                            rgba |= accumulate_channel(&sum[p * 3 + k], radiance, exposure,
+                                pass_index + 1, linear_hdr) << (8 * k);
                         }
                         image.pixels[p].store(rgba, Relaxed);
                     }
@@ -744,11 +1186,283 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
             worker();
         });
     }
+    if let Some(guide) = &guide {
+        if !progress.cancel.load(Relaxed) {
+            apply_denoiser(&sum, guide, samples, linear_hdr, image, progress);
+        }
+    }
+    if let Some(glow) = &glow {
+        if !progress.cancel.load(Relaxed) {
+            apply_bloom(glow, samples, image);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounce_settings_follow_the_lights_unless_overridden() {
+        let physical = test_scene(r#"{"lights":[{"type":"sphere","position":[0,2,0],"radius":0.1}],"objects":[]}"#);
+        let legacy = test_scene(r#"{"lights":[{"position":[0,2,0],"radius":0.1}],"objects":[]}"#);
+        assert_eq!(Bounces::for_scene(&physical), Bounces { strength: 1.0, max: MAX_PATH_BOUNCES, clamp: MAX_PATH_RADIANCE });
+        assert_eq!(Bounces::for_scene(&legacy), Bounces { strength: INDIRECT_STRENGTH, max: MAX_INDIRECT_BOUNCES, clamp: MAX_INDIRECT_RADIANCE });
+        let op = Options { indirect_strength: Some(0.8), max_bounces: Some(500), indirect_clamp: Some(f32::INFINITY), ..Options::default() };
+        assert_eq!(Bounces::resolve(&legacy, &op), Bounces { strength: 0.8, max: MAX_PATH_BOUNCES, clamp: f32::INFINITY });
+        let op = Options { max_bounces: Some(0), ..Options::default() };
+        assert_eq!(Bounces::resolve(&physical, &op).max, 0);
+        assert_eq!(Bounces::resolve(&physical, &op).strength, 1.0);
+    }
+
+    #[test]
+    fn full_paths_keep_the_energy_of_endless_bounces() {
+        // A bulb halfway between two infinite white planes that face each other. Light
+        // bounces between them without end, and in the end all of it is absorbed:
+        // flux = (1 - albedo) / albedo * (radiosity summed over both planes). With
+        // albedo 0.5 and the planes alike, each plane sums to half the flux.
+        let (radius, emitted) = (0.05f32, 40.0f32);
+        let mut scene = test_scene(&format!(r#"{{"lights":[{{"type":"sphere","position":[0,0,0],"radius":{radius},"intensity":{emitted}}}],"objects":[
+            {{"type":"ground","position":[0,-1,0],"normal":[0,1,0],"material":{{"color":[0.5,0.5,0.5],"specular":0}}}},
+            {{"type":"ground","position":[0,1,0],"normal":[0,-1,0],"material":{{"color":[0.5,0.5,0.5],"specular":0}}}}]}}"#));
+        scene.environment = None;
+        let flux = 4.0 * PI * PI * radius * radius * emitted;
+        let summed = |full: bool| {
+            let mut tracer = environment_tracer(&scene, 5);
+            tracer.indirect = true;
+            tracer.bounces = if full { Bounces::for_scene(&scene) } else {
+                Bounces { strength: INDIRECT_STRENGTH, max: MAX_INDIRECT_BOUNCES, clamp: MAX_INDIRECT_RADIANCE }
+            };
+            let mut rng = Twister::new(7);
+            let n = 200_000;
+            let mut sum = 0.0f64;
+            for _ in 0..n {
+                // Points where uniform directions from the bulb meet the floor, so the
+                // density is 1 / (2 pi) * h / d^3 with h = 1.
+                let (z, phi) = (rng.rand(), 2.0 * PI * rng.rand());
+                let s = (1.0 - z * z).max(0.0).sqrt();
+                let x = Vec3::new(s * phi.cos() / z.max(1e-6), -1.0, s * phi.sin() / z.max(1e-6));
+                let d = (x.x * x.x + x.z * x.z + 1.0).sqrt();
+                let ray = Ray { o: Vec3::new(x.x, -0.99, x.z), d: Vec3::new(0.0, -1.0, 0.0) };
+                let radiance = tracer.trace(&ray, 1, 0, true).0.x;
+                sum += (PI * radiance * 2.0 * PI * d * d * d) as f64;
+            }
+            (sum / n as f64) as f32
+        };
+        let full = summed(true);
+        assert!((full / (0.5 * flux) - 1.0).abs() < 0.04, "summed radiosity {full}, expected {}", 0.5 * flux);
+        let limited = summed(false);
+        assert!(limited < 0.8 * full, "two bounces at 45% should lose much of it: {limited} vs {full}");
+    }
+
+    fn test_scene(text: &str) -> Scene {
+        Scene::from_far(text.as_bytes(), std::path::Path::new("test.far")).unwrap()
+    }
+
+    fn center_radiance(scene: &Scene, allow_emission: bool) -> Color {
+        let mut tracer = Tracer {
+            ctx: Context::with_fixes(scene, None, 5), fixed: true,
+            has_glass: false, indirect: false, bounces: Bounces::for_scene(scene), caustics: None, caustic_strength: 1.0,
+            caustics_only: false, photon_lookups: 0, photons_gathered: 0,
+            stratum: (0.0, 0.0), grid: 1.0, first_hit: false, primary: Primary::default(),
+        };
+        tracer.trace(&Ray { o: Vec3::new(0.0, 0.0, -5.0), d: Vec3::new(0.0, 0.0, 1.0) }, 1, 0, allow_emission).0
+    }
+
+    fn environment_tracer(scene: &Scene, depth: i32) -> Tracer<'_> {
+        Tracer {
+            ctx: Context::with_fixes(scene, None, depth), fixed: false,
+            has_glass: false, indirect: false, bounces: Bounces::for_scene(scene), caustics: None, caustic_strength: 1.,
+            caustics_only: false, photon_lookups: 0, photons_gathered: 0,
+            stratum: (0., 0.), grid: 1., first_hit: false, primary: Primary::default(),
+        }
+    }
+
+    fn set_constant_environment(scene: &mut Scene, visible: bool) {
+        scene.environment = Some(crate::environment::Environment {
+            config: crate::environment::EnvironmentConfig { visible, ..Default::default() },
+            map: std::sync::Arc::new(crate::environment::EnvironmentMap::new(
+                8, 4, vec![Color::new(0.25, 0.25, 0.25); 32]).unwrap()),
+        });
+    }
+
+    #[test]
+    fn hidden_environment_still_appears_in_secondary_rays() {
+        let mut scene = test_scene(r#"{"lights":[],"objects":[]}"#);
+        set_constant_environment(&mut scene, false);
+        let mut tracer = environment_tracer(&scene, 5);
+        let ray = Ray { o: Vec3::default(), d: Vec3::new(0., 0., 1.) };
+        assert_eq!(tracer.trace(&ray, 1, 0, true).0, Color::default());
+        assert_eq!(tracer.trace(&ray, 2, 0, true).0, Color::new(0.25, 0.25, 0.25));
+        assert_eq!(tracer.trace(&ray, 2, 1, false).0, Color::default());
+        tracer.fixed = true;
+        assert_eq!(tracer.trace(&ray, 2, 0, true).0, Color::default());
+        tracer.fixed = false;
+        tracer.caustics_only = true;
+        assert_eq!(tracer.trace(&ray, 2, 0, true).0, Color::default());
+        scene.environment.as_mut().unwrap().config.visible = true;
+        assert_eq!(environment_tracer(&scene, 5).trace(&ray, 1, 0, true).0, Color::new(0.25, 0.25, 0.25));
+    }
+
+    #[test]
+    fn environment_diffuse_is_not_counted_twice_with_indirect_light() {
+        let mut scene = test_scene(r#"{"lights":[],"objects":[{"type":"plane","points":[[-100,-100,5],[100,-100,5],[100,100,5],[-100,100,5]],"material":{"color":[1,1,1],"diffuse":1,"specular":0}}]}"#);
+        set_constant_environment(&mut scene, true);
+        let ray = Ray { o: Vec3::new(0., 0., -5.), d: Vec3::new(0., 0., 1.) };
+        for indirect in [false, true] {
+            let mut tracer = environment_tracer(&scene, 5);
+            tracer.indirect = indirect;
+            let mut total = 0.;
+            for _ in 0..20000 { total += tracer.trace(&ray, 1, 0, true).0.x; }
+            assert!((total / 20000. - 0.25).abs() < 0.006);
+        }
+    }
+
+    #[test]
+    fn environment_ggx_mis_matches_single_brdf_estimator_including_depth_limit() {
+        let mut scene = test_scene(r#"{"lights":[],"objects":[{"type":"plane","points":[[-100,-100,5],[100,-100,5],[100,100,5],[-100,100,5]],"material":{"color":[0.8,0.8,0.8],"surface":{"preset":"metal","roughness":0.6}}}]}"#);
+        set_constant_environment(&mut scene, true);
+        let ray = Ray { o: Vec3::new(0., 0., -5.), d: Vec3::new(0., 0., 1.) };
+        let ggx = crate::ggx::Ggx { roughness: 0.6, metallic: 1. };
+        let n = Vec3::new(0., 0., -1.);
+        let mut expected = 0.;
+        let count = 30000;
+        for i in 0..count {
+            if let Some((_, weight)) = ggx.sample(n, n, (i as f32 + 0.5) / count as f32,
+                0.37, Color::new(0.8, 0.8, 0.8), 1.5) {
+                expected += weight.x * 0.25 / count as f32;
+            }
+        }
+        for depth in [1, 5] {
+            let mut tracer = environment_tracer(&scene, depth);
+            let mut total = 0.;
+            for _ in 0..count { total += tracer.trace(&ray, 1, 0, true).0.x; }
+            let measured = total / count as f32;
+            assert!((measured - expected).abs() < 0.005, "depth={depth}: {measured} vs {expected}");
+        }
+    }
+
+    #[test]
+    fn photon_light_is_not_traced_again_after_a_diffuse_bounce() {
+        let scene = test_scene(r#"{"lights":[{"type":"rectangle","position":[0,0,4],"edge_u":[2,0,0],"edge_v":[0,-2,0],"intensity":3}],"objects":[]}"#);
+        let map = PhotonMap::new(Vec::new(), 0.1);
+        let ray = Ray { o: Vec3::new(0., 0., -5.), d: Vec3::new(0., 0., 1.) };
+        let mut tracer = environment_tracer(&scene, 5);
+        assert_eq!(tracer.trace(&ray, 2, 1, true).0, Color::new(3., 3., 3.));
+        tracer.caustics = Some(&map);
+        assert_eq!(tracer.trace(&ray, 2, 1, true).0, Color::default());
+        assert_eq!(tracer.trace(&ray, 2, 0, true).0, Color::new(3., 3., 3.), "mirrors still show the panel");
+    }
+
+    #[test]
+    fn environment_through_glass_is_not_counted_twice_by_indirect_light() {
+        let mut scene = test_scene(r#"{"lights":[],"objects":[
+            {"type":"plane","points":[[-200,-2,-100],[200,-2,-100],[200,-2,300],[-200,-2,300]],"material":{"color":[0.8,0.8,0.8],"specular":0}},
+            {"type":"sphere","center":[0,0,5],"radius":1.5,"material":{"color":[1,1,1],"diffuse":0,"specular":0,"refraction":1,"ior":1.5}}]}"#);
+        set_constant_environment(&mut scene, false);
+        let mut d = Vec3::new(0., -1.6, 10.);
+        d.normalize();
+        let ray = Ray { o: Vec3::new(0., 0., -5.), d };
+        let mean = |indirect| {
+            let mut tracer = environment_tracer(&scene, 6);
+            tracer.has_glass = true;
+            tracer.indirect = indirect;
+            (0..40000).map(|_| tracer.trace(&ray, 1, 0, true).0.x).sum::<f32>() / 40000.
+        };
+        let (direct, both) = (mean(false), mean(true));
+        // A little extra is real: the glass also reflects the environment onto the floor,
+        // about 0.005 here at full bounce strength. Counting the environment twice
+        // would add tens of times more.
+        assert!(both <= direct + 0.008, "direct {direct}, with indirect {both}");
+    }
+
+    #[test]
+    fn rectangle_emission_is_one_sided_occluded_and_not_counted_twice() {
+        let text = r#"{"lights":[{"type":"rectangle","position":[0,0,4],"edge_u":[2,0,0],"edge_v":[0,-2,0],"intensity":3}],"objects":[]}"#;
+        let scene = test_scene(text);
+        assert_eq!(center_radiance(&scene, true), Color::new(3.0, 3.0, 3.0));
+        assert_eq!(center_radiance(&scene, false), Color::default());
+        let reversed = test_scene(&text.replace("[0,-2,0]", "[0,2,0]"));
+        assert_eq!(center_radiance(&reversed, true), Color::default());
+        let blocked = test_scene(&text.replace("\"objects\":[]", r#""objects":[{"type":"sphere","center":[0,0,1],"radius":1,"material":{"diffuse":0,"specular":0}}]"#));
+        assert_eq!(center_radiance(&blocked, true), Color::default());
+    }
+
+    #[test]
+    fn rectangle_lighting_scales_with_area_and_inverse_square_distance() {
+        let text = r#"{"lights":[{"type":"rectangle","position":[2,0,0],"edge_u":[0.2,0,0],"edge_v":[0,0.2,0]}],"objects":[{"type":"plane","points":[[-10,-10,5],[10,-10,5],[10,10,5],[-10,10,5]],"material":{"specular":0}}]}"#;
+        let near = center_radiance(&test_scene(text), true).x;
+        let far = center_radiance(&test_scene(&text.replace("[2,0,0]", "[4,0,-5]")), true).x;
+        let larger = center_radiance(&test_scene(&text.replace("[0.2,0,0]", "[0.4,0,0]")), true).x;
+        assert!(near > 0.0);
+        assert!((near / far - 4.0).abs() < 1e-4);
+        assert!((larger / near - 2.0).abs() < 1e-4);
+        let reversed = center_radiance(&test_scene(&text.replace("[0,0.2,0]", "[0,-0.2,0]")), true).x;
+        assert_eq!(reversed, 0.0);
+    }
+
+    #[test]
+    fn spherical_light_is_visible_occludes_and_is_not_counted_twice() {
+        let text = r#"{"lights":[{"type":"sphere","position":[0,0,4],"radius":1,"intensity":3}],"objects":[]}"#;
+        let scene = test_scene(text);
+        assert_eq!(center_radiance(&scene, true), Color::new(3.0, 3.0, 3.0));
+        assert_eq!(center_radiance(&scene, false), Color::default());
+        let blocked = test_scene(&text.replace("\"objects\":[]", r#""objects":[{"type":"sphere","center":[0,0,1],"radius":1,"material":{"diffuse":0,"specular":0}}]"#));
+        assert_eq!(center_radiance(&blocked, true), Color::default());
+    }
+
+    #[test]
+    fn spherical_light_matches_the_exact_irradiance_of_a_sphere() {
+        // A sphere of radiance L fully above the horizon gives E = L π (r/d)² cos θ,
+        // so a white diffuse surface returns L (r/d)² cos θ.
+        let text = r#"{"lights":[{"type":"sphere","position":[2,0,3],"radius":0.5,"intensity":1}],"objects":[{"type":"plane","points":[[-10,-10,5],[10,-10,5],[10,10,5],[-10,10,5]],"material":{"diffuse":1,"specular":0}}]}"#;
+        let scene = test_scene(text);
+        let expected = 0.25 / 8.0 * (2.0 / 8f32.sqrt());
+        assert!((center_radiance(&scene, true).x - expected).abs() < 1e-5, "Fixed lights from the center");
+        let mut tracer = environment_tracer(&scene, 1);
+        let ray = Ray { o: Vec3::new(0.0, 0.0, -5.0), d: Vec3::new(0.0, 0.0, 1.0) };
+        let runs = 20000;
+        let mean = (0..runs).map(|_| tracer.trace(&ray, 1, 0, true).0.x).sum::<f32>() / runs as f32;
+        assert!((mean / expected - 1.0).abs() < 0.03, "mean {mean}, expected {expected}");
+    }
+
+    #[test]
+    fn bloom_spreads_only_light_above_white() {
+        let image = Image::new(64, 64);
+        for pixel in image.pixels.iter() { pixel.store(0xff20_2020, Relaxed); }
+        let glow: Vec<AtomicU32> = (0..64 * 64 * 3).map(|_| AtomicU32::new(0)).collect();
+        apply_bloom(&glow, 1, &image);
+        assert!(image.pixels.iter().all(|p| p.load(Relaxed) == 0xff20_2020), "nothing above white, nothing changes");
+        let center = (32 * 64 + 32) * 3;
+        for k in 0..3 { glow[center + k].store(200f32.to_bits(), Relaxed); }
+        apply_bloom(&glow, 1, &image);
+        let red = |x: usize, y: usize| image.pixels[y * 64 + x].load(Relaxed) & 0xff;
+        assert!(red(32, 32) > red(34, 32) && red(34, 32) > red(40, 32) && red(40, 32) > 0x20);
+        assert_eq!(red(31, 32), red(33, 32), "the halo is symmetric");
+        glow[center].store(f32::NAN.to_bits(), Relaxed);
+        apply_bloom(&glow, 1, &image);
+        assert!(red(60, 60) < 0xff, "an invalid value does not spread");
+    }
+
+    #[test]
+    fn hdr_accumulates_energy_before_compressing_highlights() {
+        // A bright source covering 1/32 of the samples has mean radiance 0.5.
+        // Compressing or clamping that one hit before averaging loses its energy.
+        let sum = AtomicU32::new(0);
+        accumulate_channel(&sum, 16., 1., 1, true);
+        let mut result = 0;
+        for count in 2..=32 {
+            result = accumulate_channel(&sum, 0., 1., count, true);
+        }
+        assert_eq!(result, 128);
+        let reversed = AtomicU32::new(0);
+        for count in 1..32 { accumulate_channel(&reversed, 0., 1., count, true); }
+        assert_eq!(accumulate_channel(&reversed, 16., 1., 32, true), result);
+        let legacy = AtomicU32::new(0);
+        accumulate_channel(&legacy, 16., 1., 1, false);
+        for count in 2..=32 { result = accumulate_channel(&legacy, 0., 1., count, false); }
+        assert_eq!(result, 8); // Existing scenes keep their established pipeline.
+    }
 
     #[test]
     fn shoulder_keeps_midtones_and_stays_below_one() {

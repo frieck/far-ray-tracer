@@ -1,4 +1,4 @@
-import type { CausticPreset, Comparison, Mode, RenderRequest, Resolution, Settings } from "./types";
+import type { DofPreset, CausticPreset, Comparison, Mode, Quality, RenderRequest, Resolution, Settings } from "./types";
 
 export const MODE_NAMES: Record<Mode, string> = {
   classic: "2008",
@@ -64,24 +64,99 @@ export const RESOLUTION_GROUPS: { label: string; options: { value: Resolution; l
 ];
 
 /** Each preset keeps about the same number of photons per lookup, so all stay clean. */
-const CAUSTIC_PRESETS: Record<Exclude<CausticPreset, "custom">, { photons: number; radius: number }> = {
+export const CAUSTIC_PRESETS: Record<Exclude<CausticPreset, "custom">, { photons: number; radius: number }> = {
   soft: { photons: 2_000_000, radius: 0.2 },
   balanced: { photons: 6_000_000, radius: 0.12 },
   sharp: { photons: 16_000_000, radius: 0.07 },
 };
 
+export const DOF_PRESETS: Record<Exclude<DofPreset, "custom">, { aperture: number; passes: number }> = {
+  subtle: { aperture: 0.25, passes: 128 },
+  portrait: { aperture: 0.6, passes: 256 },
+  strong: { aperture: 1.2, passes: 512 },
+};
+
+export function dofValues(settings: Settings) {
+  return settings.dofPreset === "custom"
+    ? { aperture: settings.aperture, passes: settings.dofPasses }
+    : DOF_PRESETS[settings.dofPreset];
+}
+
+/** Passes of the quality preset, or the custom count. */
+export function qualityPasses(settings: Settings): number {
+  return settings.quality === "custom" ? settings.customPasses : settings.quality;
+}
+
+export const QUALITY_PRESETS: { value: Exclude<Quality, "custom">; label: string }[] = [
+  { value: 16, label: "Draft" },
+  { value: 64, label: "Good" },
+  { value: 256, label: "High" },
+];
+
+/** A quality that shows these passes: the preset with that count, or Custom. */
+export function withPasses(passes: number): Partial<Settings> {
+  const preset = QUALITY_PRESETS.find((p) => p.value === passes);
+  return { quality: preset ? preset.value : "custom", customPasses: passes };
+}
+
+/** Depth of field values after editing one of them: the preset they match, or Custom. */
+export function withDof(settings: Settings, change: Partial<{ aperture: number; passes: number }>): Partial<Settings> {
+  const values = { ...dofValues(settings), ...change };
+  const preset = (Object.keys(DOF_PRESETS) as Exclude<DofPreset, "custom">[])
+    .find((name) => DOF_PRESETS[name].aperture === values.aperture && DOF_PRESETS[name].passes === values.passes);
+  return { dofPreset: preset ?? "custom", aperture: values.aperture, dofPasses: values.passes };
+}
+
+/** Caustic values as the panel shows them, from the preset or the custom fields. */
+export function causticSettings(settings: Settings) {
+  if (settings.causticPreset === "custom") {
+    return { photonMillions: settings.photonMillions, radius: settings.causticRadius, strength: settings.causticStrength };
+  }
+  const { photons, radius } = CAUSTIC_PRESETS[settings.causticPreset];
+  return { photonMillions: photons / 1_000_000, radius, strength: 1 };
+}
+
+/** Caustic values after editing one of them: the preset they match, or Custom. */
+export function withCaustics(settings: Settings, change: Partial<ReturnType<typeof causticSettings>>): Partial<Settings> {
+  const values = { ...causticSettings(settings), ...change };
+  const preset = (Object.keys(CAUSTIC_PRESETS) as Exclude<CausticPreset, "custom">[]).find((name) =>
+    CAUSTIC_PRESETS[name].photons === Math.round(values.photonMillions * 1_000_000)
+      && CAUSTIC_PRESETS[name].radius === values.radius && values.strength === 1);
+  return {
+    causticPreset: preset ?? "custom",
+    photonMillions: values.photonMillions,
+    causticRadius: values.radius,
+    causticStrength: values.strength,
+  };
+}
+
+export function effectivePasses(settings: Settings): number {
+  const quality = qualityPasses(settings);
+  return settings.depthOfField ? Math.max(quality, dofValues(settings).passes) : quality;
+}
+
 export const MAX_PASSES = 4096;
 export const MIN_IMAGE_SIDE = 16;
 export const MAX_IMAGE_SIDE = 8192;
+const PREVIEW_SIDE = 480;
 
 export function defaultSettings(cores: number): Settings {
   return {
+    environment: null,
+    materialOverrides: [],
+    pose: { position: [0, 0, -5], target: [0, 0, 0], zoom: 1 },
+    depthOfField: false,
+    dofPreset: "portrait",
+    dofPasses: 256,
+    aperture: 0.5,
+    focusDistance: 10,
     quality: 64,
     customPasses: 128,
     exposure: 1,
+    denoise: false,
+    bloom: false,
     caustics: false,
     causticPreset: "balanced",
-    causticsOnly: false,
     photonMillions: 6,
     causticRadius: 0.12,
     causticStrength: 1,
@@ -91,6 +166,7 @@ export function defaultSettings(cores: number): Settings {
     depth: DEFAULT_DEPTH.enhanced,
     threads: cores,
     indirect: true,
+    bounces: null,
     useKd: true,
     evolution: false,
     mode: "enhanced",
@@ -146,21 +222,51 @@ function causticValues(settings: Settings) {
   return { photons, caustic_radius: radius, caustic_strength: 1 };
 }
 
+/** A small, quick image to follow the camera while it moves. */
+export function buildPreview(settings: Settings): RenderRequest {
+  const [width, height] = imageSize(settings);
+  const scale = Math.min(1, PREVIEW_SIDE / Math.max(width, height));
+  return {
+    ...buildRequest(settings, "enhanced", false),
+    width: Math.max(MIN_IMAGE_SIDE, Math.round(width * scale)),
+    height: Math.max(MIN_IMAGE_SIDE, Math.round(height * scale)),
+    samples: 2,
+    depth: Math.min(settings.depth, 3),
+    aperture: 0,
+    indirect: false,
+    denoise: false,
+    bloom: false,
+    caustics: false,
+  };
+}
+
 export function buildRequest(settings: Settings, mode: Mode, keep: boolean): RenderRequest {
   const [width, height] = imageSize(settings);
   return {
     mode,
+    environment: mode === "enhanced" ? settings.environment : null,
+    material_overrides: mode === "enhanced" ? settings.materialOverrides : [],
+    pose: settings.pose,
+    aperture: mode === "enhanced" && settings.depthOfField ? dofValues(settings).aperture : 0,
+    focus_distance: settings.focusDistance,
     width,
     height,
     depth: settings.depth,
     threads: settings.threads,
     use_kd: settings.useKd,
-    samples: settings.quality === "custom" ? settings.customPasses : settings.quality,
+    samples: effectivePasses(settings),
     indirect: settings.indirect,
+    ...(settings.bounces && {
+      indirect_strength: settings.bounces.strength,
+      max_bounces: settings.bounces.max,
+      indirect_clamp: settings.bounces.clamp,
+    }),
+    denoise: mode === "enhanced" && settings.denoise,
+    bloom: mode === "enhanced" && settings.bloom,
     exposure: settings.exposure,
     caustics: settings.caustics,
     ...causticValues(settings),
-    caustics_only: settings.causticsOnly,
+    caustics_only: false,
     keep,
   };
 }
