@@ -54,6 +54,9 @@ struct AppState {
     last_image: Mutex<Option<FinishedImage>>,
     /// The studio environment that lights material previews, loaded on first use.
     studio: OnceLock<Option<Environment>>,
+    /// The material preview being rendered, so a newer one can cancel it.
+    /// The material previews being rendered, by view, so a newer one in a view can cancel it.
+    previews: Mutex<std::collections::HashMap<String, Arc<Progress>>>,
 }
 
 #[derive(Serialize)]
@@ -348,7 +351,7 @@ fn choose_environment(app: AppHandle, state: State<'_, AppState>) -> Result<Opti
 }
 
 /// Largest side of a material preview, in pixels.
-const MAX_PREVIEW_SIDE: u32 = 512;
+const MAX_PREVIEW_SIDE: u32 = 2048;
 
 /// The bundled studio environment, or the repository's in development.
 fn studio_environment(app: &AppHandle) -> Option<Environment> {
@@ -359,45 +362,65 @@ fn studio_environment(app: &AppHandle) -> Option<Environment> {
     Environment::load(config).ok()
 }
 
-/// Renders one of the open scene's materials, with an optional edit, on a ball. Returns RGBA.
+/// Most samples a material preview may take.
+const MAX_PREVIEW_SAMPLES: u32 = 256;
+
+/// Where the material ball is seen from, for orbiting it.
+#[tauri::command]
+fn material_ball_pose() -> far_core::Pose {
+    far_core::preview::MATERIAL_BALL_POSE
+}
+
+/// Renders one of the open scene's materials, with an optional edit, on a shader ball and
+/// returns RGBA. A newer preview in the same view cancels this one, which then returns an error.
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
 fn material_preview(
     id: usize,
     surface: Option<far_core::surface::Surface>,
-    size: u32,
+    width: u32,
+    height: u32,
+    samples: u32,
+    pose: Option<far_core::Pose>,
+    view: String,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
-    if !(1..=MAX_PREVIEW_SIDE).contains(&size) {
-        return Err(format!("Preview sides must be between 1 and {MAX_PREVIEW_SIDE} pixels"));
+    let valid_side = 1..=MAX_PREVIEW_SIDE;
+    if !valid_side.contains(&width) || !valid_side.contains(&height) || !(1..=MAX_PREVIEW_SAMPLES).contains(&samples) {
+        return Err(format!("Previews need 1 to {MAX_PREVIEW_SIDE} pixels and 1 to {MAX_PREVIEW_SAMPLES} samples"));
     }
     let open = state.scene.lock().unwrap().clone().ok_or("No scene is open")?;
     let environment = state.studio.get_or_init(|| studio_environment(&app)).clone();
-    let mut ball = far_core::preview::material_ball(&open.scene, id, environment)?;
-    if let Some(surface) = surface {
-        let sphere = ball.prims.iter().find_map(|p| match p {
-            far_core::scene::Primitive::Sphere(s) => Some(s.material),
-            _ => None,
-        });
-        if let Some(sphere) = sphere {
-            surface.apply(&mut ball.materials[sphere]);
-        }
+    let data = scenes_folder(&app).unwrap_or_default();
+    let ball = far_core::preview::material_ball(&open.scene, id, surface.as_ref(), environment, &data)?;
+    if let Some(pose) = &pose {
+        pose.validate()?;
     }
-    // Half the cores, so a preview does not stall a render running beside it.
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get() / 2).max(1);
+    let progress = Arc::new(Progress::default());
+    if let Some(previous) = state.previews.lock().unwrap().insert(view, progress.clone()) {
+        previous.cancel.store(true, Relaxed);
+    }
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    // While a render runs, half the cores keep the preview from stalling it.
+    let threads = if state.rendering.load(Relaxed) { (cores / 2).max(1) } else { cores };
     let options = Options {
         mode: Mode::Enhanced,
-        width: size,
-        height: size,
-        samples: 24,
+        pose,
+        width,
+        height,
+        samples,
         denoise: true,
         max_depth: 6,
         use_kd: false,
         threads,
         ..Options::default()
     };
-    let image = Image::new(size, size);
-    render(&ball, None, &options, &image, &Progress::default());
+    let image = Image::new(width, height);
+    render(&ball, None, &options, &image, &progress);
+    if progress.cancel.load(Relaxed) {
+        return Err("Replaced by a newer preview".into());
+    }
     Ok(Response::new(image.rgba()))
 }
 
@@ -651,7 +674,8 @@ fn main() {
             render_scene,
             pick_focus,
             scene_geometry,
-            material_preview
+            material_preview,
+            material_ball_pose
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Far Ray Tracer");

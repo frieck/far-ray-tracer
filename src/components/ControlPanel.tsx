@@ -52,6 +52,10 @@ interface ControlPanelProps {
   outdated: string | false;
   onCancel: () => void;
   onSave: () => void;
+  /** The material the editor shows; null picks the first. */
+  selectedMaterial: number | null;
+  onSelectMaterial: (id: number) => void;
+  onExpandMaterial: () => void;
 }
 
 /** Most rebound limit the slider shows as a number; one step past it means no limit. */
@@ -436,7 +440,8 @@ export function ControlPanel(props: ControlPanelProps) {
 
         {tab === "materials" && (props.scene ? (
           <MaterialEditor key={props.scene.path} materials={props.scene.materials} overrides={settings.materialOverrides}
-            scenePath={props.scene.path}
+            scenePath={props.scene.path} selected={props.selectedMaterial} onSelect={props.onSelectMaterial}
+            onExpand={props.onExpandMaterial}
             onChange={(materialOverrides) => update({ materialOverrides })} />
         ) : (
           <p className="note">Open a scene to edit its materials.</p>

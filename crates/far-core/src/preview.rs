@@ -199,34 +199,81 @@ mod tests {
     }
 }
 
-/// A material ball: one of the scene's materials on a sphere over a neutral floor, under a soft
-/// key light and `environment`, framed for a square image. The material keeps its textures.
+/// Where the material ball is seen from unless a pose is given.
+pub const MATERIAL_BALL_POSE: crate::camera::Pose =
+    crate::camera::Pose { position: [0.9, 2.35, -4.6], target: [0.0, 1.25, 0.0], zoom: 2.1 };
+
+/// Marks the parts of the material ball that take the chosen material.
+const CHOSEN: [f32; 3] = [1.0, 0.0, 1.0];
+
+/// A shader ball: the chosen material, with an optional edit, on a ball with a front medallion,
+/// standing on a pedestal over a measuring grid, under a soft key light and `environment`.
+/// Framed for a square image. `data` is a scene folder whose data holds `preview-grid.png`;
+/// without the grid the floor is plain.
 pub fn material_ball(
     source: &Scene,
     material: usize,
+    surface: Option<&crate::surface::Surface>,
     environment: Option<crate::environment::Environment>,
+    data: &std::path::Path,
 ) -> Result<Scene, String> {
-    let text = serde_json::json!({
-        "camera": { "position": [0, 1.3, -3.6], "target": [0, 0.8, 0], "zoom": 1.55 },
+    use serde_json::json;
+    let chosen_material = source.materials.get(material).ok_or("Unknown object material")?;
+    let chosen = json!({ "color": CHOSEN });
+    let core = json!({ "color": [0.5, 0.5, 0.49], "surface": { "preset": "plastic", "roughness": 0.35 } });
+    let band = json!({ "color": [0.05, 0.05, 0.055], "surface": { "preset": "plastic", "roughness": 0.25 } });
+    let block = json!({ "color": [0.62, 0.62, 0.6], "surface": { "preset": "plastic", "roughness": 0.45 } });
+    let grid = data.join("../scene-data/images/preview-grid.png");
+    let floor = if crate::scene::find_data_folder(&data.join("ball.far")).is_some() && grid.is_file() {
+        json!({ "color": [0.9, 0.9, 0.9], "texture": "preview-grid.png", "scale_u": 0.3, "scale_v": 0.3,
+                "surface": { "preset": "plastic", "roughness": 0.6 } })
+    } else {
+        json!({ "color": [0.6, 0.6, 0.6], "surface": { "preset": "plastic", "roughness": 0.6 } })
+    };
+    // The medallion faces the camera, turned up and to the right. A solid's Y axis turns by X,
+    // then by Y, so these two angles carry it onto `facing`.
+    let mut facing = crate::vector::Vec3::new(0.42, 0.42, -0.8);
+    facing.normalize();
+    let (center, turn_x): ([f32; 3], f32) = ([0.0, 1.62, 0.0], -facing.y.acos());
+    let turn_y = (facing.x / turn_x.sin()).atan2(facing.z / turn_x.sin());
+    let medallion = [turn_x.to_degrees(), turn_y.to_degrees(), 0.0];
+    let along = |distance: f32| [center[0] + facing.x * distance, center[1] + facing.y * distance, center[2] + facing.z * distance];
+    let text = json!({
+        "camera": {
+            "position": MATERIAL_BALL_POSE.position, "target": MATERIAL_BALL_POSE.target, "zoom": MATERIAL_BALL_POSE.zoom
+        },
         "lights": [{
             // Above and behind the camera, so it lights the ball without showing in the frame.
-            "type": "rectangle", "position": [-3.6, 4.4, -5.2],
-            "edge_u": [1.6, 0, 0], "edge_v": [0, 0, 1.6], "intensity": 70
+            "type": "rectangle", "position": [-3.6, 5.0, -5.0],
+            "edge_u": [1.8, 0, 0], "edge_v": [0, 0, 1.8], "intensity": 30
         }],
         "objects": [
-            { "type": "ground", "material": { "color": [0.4, 0.4, 0.42],
-              "surface": { "preset": "plastic", "roughness": 0.55 } } },
-            { "type": "sphere", "center": [0, 0.85, 0], "radius": 0.85, "material": { "color": [1, 1, 1] } }
+            { "type": "ground", "material": floor },
+            { "type": "box", "center": [0, 0.08, 0], "size": [1.9, 0.16, 1.9], "rotation": [0, 18, 0], "material": block },
+            { "type": "cylinder", "center": [0, 0.22, 0], "radius": 0.72, "height": 0.12, "material": chosen },
+            { "type": "torus", "center": [0, 0.22, 0], "major_radius": 0.72, "minor_radius": 0.07, "material": band },
+            { "type": "cone", "center": [0, 0.45, 0], "radius": 0.62, "height": 0.36, "material": chosen },
+            { "type": "cylinder", "center": [0, 0.75, 0], "radius": 0.13, "height": 0.5, "material": chosen },
+            { "type": "sphere", "center": center, "radius": 1.0, "material": chosen },
+            { "type": "cylinder", "center": along(0.97), "radius": 0.5, "height": 0.12,
+              "rotation": medallion, "material": core },
+            { "type": "torus", "center": along(0.95), "major_radius": 0.54, "minor_radius": 0.06,
+              "rotation": medallion, "material": chosen }
         ]
     });
-    let mut ball = Scene::from_far(text.to_string().as_bytes(), std::path::Path::new("material-ball.far"))?;
-    let chosen = source.materials.get(material).ok_or("Unknown object material")?;
-    let sphere = ball.prims.iter()
-        .find_map(|p| match p { Primitive::Sphere(s) => Some(s.material), _ => None })
-        .expect("the material ball has a sphere");
-    ball.materials[sphere] = chosen.clone();
-    // The floor has no texture, so the source's textures keep the chosen material's indices valid.
-    ball.textures = source.textures.clone();
+    let mut ball = Scene::from_far(text.to_string().as_bytes(), &data.join("material-ball.far"))?;
+    let mut edited = chosen_material.clone();
+    if let Some(surface) = surface {
+        surface.apply(&mut edited);
+    }
+    // The chosen material's texture index points into the source's textures, appended here.
+    if let Some(texture) = edited.texture.as_mut() {
+        *texture += ball.textures.len();
+    }
+    ball.textures.extend(source.textures.iter().cloned());
+    for m in ball.materials.iter_mut().filter(|m| m.color.array() == CHOSEN) {
+        *m = edited.clone();
+    }
     ball.environment = environment;
     Ok(ball)
 }
@@ -241,14 +288,14 @@ mod ball_tests {
         let source = Scene::open(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/scenes/cornell-box.far")))
             .expect("cornell box");
         let red = source.materials.iter().position(|m| m.color.x > 0.5 && m.color.y < 0.2).expect("a red wall");
-        let ball = material_ball(&source, red, None).unwrap();
+        let data = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/scenes"));
+        let ball = material_ball(&source, red, None, None, data).unwrap();
         let op = Options { mode: Mode::Enhanced, width: 48, height: 48, samples: 8, ..Options::default() };
         let image = Image::new(op.width, op.height);
         render(&ball, None, &op, &image, &Progress::default());
         let rgba = image.rgba();
-        let center = (24 * 48 + 24) * 4;
-        let [r, g, b] = [rgba[center], rgba[center + 1], rgba[center + 2]];
-        assert!(r > 40 && r > 2 * g && r > 2 * b, "the ball is lit and red: {r} {g} {b}");
-        assert!(material_ball(&source, source.materials.len(), None).is_err());
+        let red_pixels = rgba.chunks_exact(4).filter(|p| p[0] > 40 && p[0] > 2 * p[1] && p[0] > 2 * p[2]).count();
+        assert!(red_pixels > 48 * 48 / 10, "the ball is lit and red: {red_pixels} red pixels");
+        assert!(material_ball(&source, source.materials.len(), None, None, data).is_err());
     }
 }

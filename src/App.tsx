@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ControlPanel } from "./components/ControlPanel";
+import { MaterialStage } from "./components/MaterialStage";
 import { Viewport } from "./components/Viewport";
 import { Renderer, type RenderJob, type RenderView } from "./renderer";
 import { alignView, dolly, orbit, pan, retarget } from "./orbit";
@@ -38,6 +39,8 @@ export function App() {
   const [renderedKey, setRenderedKey] = useState<string | null>(null);
   const [awaitingImage, setAwaitingImage] = useState(false);
   const [showPhotonMap, setShowPhotonMap] = useState(false);
+  const [showMaterial, setShowMaterial] = useState(false);
+  const [selectedMaterial, setSelectedMaterial] = useState<number | null>(null);
   const [pickingFocus, setPickingFocus] = useState(false);
   const [focusHint, setFocusHint] = useState("");
   const focusRequest = useRef(0);
@@ -76,6 +79,8 @@ export function App() {
         if (info) {
           publish({ hasResult: false, caustics: null, hasPhotonMap: false });
           setShowPhotonMap(false);
+          setShowMaterial(false);
+          setSelectedMaterial(null);
           setSettings((old) => old && ({
             ...old,
             environment: info.environment,
@@ -263,6 +268,19 @@ export function App() {
 
   const canSave = view.hasResult && !view.rendering;
 
+  // The ball needs Enhanced mode: its materials, environment and look only exist there.
+  const canShowMaterial = scene !== null && scene.materials.length > 0 && settings !== null && activeMode(settings) === "enhanced";
+  const ballMaterial = canShowMaterial ? scene.materials.find((m) => m.id === selectedMaterial) ?? scene.materials[0] : null;
+  const materialStage = showMaterial && ballMaterial && settings ? (
+    <MaterialStage
+      key={scene?.path}
+      id={ballMaterial.id}
+      label={ballMaterial.label}
+      surface={settings.materialOverrides.find((m) => m.id === ballMaterial.id)?.surface ?? null}
+      onClose={() => setShowMaterial(false)}
+    />
+  ) : null;
+
   // The menu lives for the whole session, so it reads the latest handlers from a ref.
   const onMenu = useRef<(menu: MenuAction) => void>(() => {});
   onMenu.current = ({ action, path }) => {
@@ -284,12 +302,13 @@ export function App() {
           focusRequest.current += 1;
           setPickingFocus(false);
           setFocusHint("");
-        } else void renderer.stop();
+        } else if (showMaterial) setShowMaterial(false);
+        else void renderer.stop();
       }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [renderer, pickingFocus]);
+  }, [renderer, pickingFocus, showMaterial]);
 
   return (
     <>
@@ -307,7 +326,7 @@ export function App() {
           focusHint={focusHint}
           onPickFocus={(x, y) => void pickFocus(x, y)}
           navigable={scene !== null && settings !== null && activeMode(settings) === "enhanced"
-            && !activeComparison(settings) && !pickingFocus && !(showPhotonMap && view.hasPhotonMap)}
+            && !activeComparison(settings) && !pickingFocus && !(showPhotonMap && view.hasPhotonMap) && !materialStage}
           onCameraDrag={(panning, dx, dy, stageHeight) => moveCamera((pose) => panning
             ? pan(pose, dx, dy, stageHeight, imageWidth / imageHeight)
             : orbit(pose, dx, dy))}
@@ -327,6 +346,13 @@ export function App() {
           aspect={imageWidth / imageHeight}
           hasPhotonMap={view.hasPhotonMap}
           showPhotonMap={showPhotonMap && view.hasPhotonMap}
+          canShowMaterial={canShowMaterial}
+          materialStage={materialStage}
+          onMaterialChange={(value) => {
+            focusRequest.current += 1;
+            setPickingFocus(false);
+            setShowMaterial(value);
+          }}
           onPhotonMapChange={(value) => {
             focusRequest.current += 1;
             setPickingFocus(false);
@@ -367,6 +393,12 @@ export function App() {
             outdated={outdated && (view.hasResult ? "Changes are not rendered yet." : "This is a quick 3D view. Render to ray trace it.")}
             onCancel={() => void renderer.stop()}
             onSave={() => void save()}
+            selectedMaterial={selectedMaterial}
+            onSelectMaterial={setSelectedMaterial}
+            onExpandMaterial={() => {
+              setShowPhotonMap(false);
+              setShowMaterial(true);
+            }}
           />
         )}
       </div>

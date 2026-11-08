@@ -1,10 +1,10 @@
-import { useEffect, useState, type CSSProperties, type PointerEvent, type RefObject, useRef } from "react";
+import { useEffect, useState, type CSSProperties, type PointerEvent, type ReactNode, type RefObject, useRef } from "react";
 import { formatNumber, prettyName } from "../format";
 import { MODE_NAMES } from "../settings";
 import type { Mode, Pose, SceneInfo } from "../types";
 import { GlassPanel } from "./GlassPanel";
 import { ViewGizmo } from "./ViewGizmo";
-import { Image, Sparkles } from "lucide-react";
+import { Image, Shell, Sparkles } from "lucide-react";
 
 interface ViewportProps {
   pickingFocus: boolean;
@@ -32,6 +32,11 @@ interface ViewportProps {
   hasPhotonMap: boolean;
   showPhotonMap: boolean;
   onPhotonMapChange: (value: boolean) => void;
+  /** Whether the material ball can be shown over the image. */
+  canShowMaterial: boolean;
+  /** The large material ball, when it is shown. */
+  materialStage: ReactNode | null;
+  onMaterialChange: (value: boolean) => void;
 }
 
 function plural(count: number, word: string): string {
@@ -40,7 +45,8 @@ function plural(count: number, word: string): string {
 
 export function Viewport(props: ViewportProps) {
   const { afterRef, beforeRef, photonRef, scene, mode, status, progress, rendering, aspect, hasPhotonMap, showPhotonMap, onPhotonMapChange } = props;
-  const comparison = showPhotonMap || props.pickingFocus ? null : props.comparison;
+  const showMaterial = props.materialStage !== null;
+  const comparison = showPhotonMap || showMaterial || props.pickingFocus ? null : props.comparison;
   const [divider, setDivider] = useState(0.5);
   const drag = useRef<{ x: number; y: number; panning: boolean } | null>(null);
 
@@ -108,19 +114,30 @@ export function Viewport(props: ViewportProps) {
               <span className="tag right">{MODE_NAMES[mode]}</span>
             </div>
           )}
-          {props.pose && !comparison && !showPhotonMap && (
+          {props.pose && !comparison && !showPhotonMap && !showMaterial && (
             <ViewGizmo pose={props.pose} onAlign={props.navigable ? props.onAlignView : null} />
           )}
           {props.pickingFocus && <p className="focus-hint" role="status">{props.focusHint}</p>}
           {!scene && <p className="empty">Pick a scene to watch it render.</p>}
-          {hasPhotonMap && (
+          {props.materialStage}
+          {(hasPhotonMap || props.canShowMaterial) && (
             <div className="render-views glass" role="group" aria-label="Render view" onClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()} onPointerMove={(event) => event.stopPropagation()}>
-              <button type="button" className="icon" aria-label="Full render" title="Full render" aria-pressed={!showPhotonMap} onClick={() => onPhotonMapChange(false)}>
+              <button type="button" className="icon" aria-label="Full render" title="Full render" aria-pressed={!showPhotonMap && !showMaterial}
+                onClick={() => { onPhotonMapChange(false); props.onMaterialChange(false); }}>
                 <Image size={18} aria-hidden="true" />
               </button>
-              <button type="button" className="icon" aria-label="Photon map" title="Photon map · photon deposits, including hidden surfaces" aria-pressed={showPhotonMap} onClick={() => onPhotonMapChange(true)}>
-                <Sparkles size={18} aria-hidden="true" />
-              </button>
+              {hasPhotonMap && (
+                <button type="button" className="icon" aria-label="Photon map" title="Photon map · photon deposits, including hidden surfaces" aria-pressed={showPhotonMap}
+                  onClick={() => { props.onMaterialChange(false); onPhotonMapChange(true); }}>
+                  <Sparkles size={18} aria-hidden="true" />
+                </button>
+              )}
+              {props.canShowMaterial && (
+                <button type="button" className="icon" aria-label="Material ball" title="Material ball · the selected material, large" aria-pressed={showMaterial}
+                  onClick={() => { onPhotonMapChange(false); props.onMaterialChange(true); }}>
+                  <Shell size={18} aria-hidden="true" />
+                </button>
+              )}
             </div>
           )}
         </div>

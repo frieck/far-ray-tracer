@@ -1,5 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Maximize2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { drawPreview, renderMaterialBall } from "../materialPreview";
 import type { MaterialOverride, MaterialPreset, SceneMaterial, SurfaceMaterial } from "../types";
 import { Select } from "./Select";
 import { Slider } from "./Slider";
@@ -15,8 +16,17 @@ const PRESET_NAMES: Record<MaterialPreset, string> = {
 };
 /** Pixels of the rendered preview; the panel shows it at about half, sharp on Retina screens. */
 const PREVIEW_SIZE = 384;
-/** Waits this long after the last edit, so dragging a slider renders once it settles. */
-const PREVIEW_DELAY_MS = 120;
+/**
+ * Each edit renders a quick, coarse ball first and then the final one. The quick pass takes tens
+ * of milliseconds, so the ball follows a dragged slider; the final pass refines it once it stops.
+ */
+const PREVIEW_PASSES = [
+  { size: PREVIEW_SIZE / 2, samples: 4 },
+  { size: PREVIEW_SIZE, samples: 24 },
+];
+/** Final previews already rendered, by scene, material and edit. */
+const previewCache = new Map<string, ImageData>();
+const MAX_CACHED_PREVIEWS = 64;
 
 const hex = (rgb: number[]) => "#" + rgb.map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, "0")).join("");
 
@@ -29,48 +39,71 @@ function matchingPreset(surface: SurfaceMaterial): MaterialPreset {
   return found ?? "custom";
 }
 
-/** Renders the material on a ball with the engine, again after each edit. */
-function MaterialPreview({ id, surface, scenePath }: { id: number; surface: SurfaceMaterial | null; scenePath: string }) {
+/** Renders the material on a shader ball with the engine, again after each edit. */
+function MaterialPreview({ id, surface, scenePath, onExpand }: {
+  id: number;
+  surface: SurfaceMaterial | null;
+  scenePath: string;
+  onExpand: () => void;
+}) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const request = useRef(0);
   const [busy, setBusy] = useState(true);
-  const key = JSON.stringify(surface);
+  const key = `${scenePath}|${id}|${JSON.stringify(surface)}`;
 
   useEffect(() => {
     const current = ++request.current;
+    const cached = previewCache.get(key);
+    if (cached) {
+      drawPreview(canvas.current, cached);
+      setBusy(false);
+      return;
+    }
     setBusy(true);
-    const timer = setTimeout(() => {
-      invoke<ArrayBuffer>("material_preview", { id, surface, size: PREVIEW_SIZE })
-        .then((buffer) => {
-          if (current !== request.current || !canvas.current) return;
-          const pixels = new ImageData(new Uint8ClampedArray(buffer), PREVIEW_SIZE, PREVIEW_SIZE);
-          canvas.current.getContext("2d")?.putImageData(pixels, 0, 0);
-          setBusy(false);
-        })
-        .catch(() => {
+    void (async () => {
+      for (const { size, samples } of PREVIEW_PASSES) {
+        let pixels: ImageData;
+        try {
+          pixels = await renderMaterialBall({ id, surface, width: size, height: size, samples, pose: null, view: "thumbnail" });
+        } catch {
+          // A newer edit replaced this preview, or the scene closed.
           if (current === request.current) setBusy(false);
-        });
-    }, PREVIEW_DELAY_MS);
-    return () => clearTimeout(timer);
-    // `key` stands for `surface`, so an equal object does not render again.
+          return;
+        }
+        if (current !== request.current) return;
+        drawPreview(canvas.current, pixels);
+        if (size === PREVIEW_SIZE) {
+          if (previewCache.size >= MAX_CACHED_PREVIEWS) previewCache.delete(previewCache.keys().next().value!);
+          previewCache.set(key, pixels);
+        }
+      }
+      if (current === request.current) setBusy(false);
+    })();
+    // `key` stands for `id`, `surface` and the scene, so an equal edit does not render again.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, key, scenePath]);
+  }, [key]);
 
   return (
     <div className="material-preview" data-busy={busy || undefined}>
       <canvas ref={canvas} width={PREVIEW_SIZE} height={PREVIEW_SIZE} aria-label="Material preview" role="img" />
+      <button type="button" className="icon floating" aria-label="Show large" title="Show large, and orbit around it" onClick={onExpand}>
+        <Maximize2 size={15} aria-hidden="true" />
+      </button>
     </div>
   );
 }
 
-export function MaterialEditor({ materials, overrides, scenePath, onChange }: {
+export function MaterialEditor({ materials, overrides, scenePath, selected, onSelect, onExpand, onChange }: {
   materials: SceneMaterial[];
   overrides: MaterialOverride[];
   scenePath: string;
+  /** The material being edited; null picks the first. */
+  selected: number | null;
+  onSelect: (id: number) => void;
+  onExpand: () => void;
   onChange: (value: MaterialOverride[]) => void;
 }) {
-  const [selected, setSelected] = useState(String(materials[0]?.id ?? ""));
-  const material = materials.find((m) => String(m.id) === selected);
+  const material = materials.find((m) => m.id === selected) ?? materials[0];
   if (!material) return <p className="note">This scene has no materials to edit.</p>;
   const edit = overrides.find((m) => m.id === material.id);
   const original: SurfaceMaterial = material.surface ?? {
@@ -88,10 +121,10 @@ export function MaterialEditor({ materials, overrides, scenePath, onChange }: {
 
   return (
     <div className="group">
-      <Select label="Object material" value={selected} onChange={setSelected}>
+      <Select label="Object material" value={String(material.id)} onChange={(id) => onSelect(Number(id))}>
         {materials.map((m) => <option key={m.id} value={String(m.id)}>{m.label}</option>)}
       </Select>
-      <MaterialPreview id={material.id} surface={edit?.surface ?? null} scenePath={scenePath} />
+      <MaterialPreview id={material.id} surface={edit?.surface ?? null} scenePath={scenePath} onExpand={onExpand} />
       <Select<MaterialPreset | "original"> label="Material preset" value={edit ? current.preset : "original"} onChange={(preset) => {
         if (preset === "original") onChange(overrides.filter((m) => m.id !== material.id));
         else if (preset === "custom") apply({ ...current, color, preset: "custom" });

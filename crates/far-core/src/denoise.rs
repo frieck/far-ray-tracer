@@ -211,7 +211,7 @@ mod tests {
     }
 
     fn noise(p: usize) -> f32 {
-        let mut x = p as u32 * 2654435761 + 12345;
+        let mut x = (p as u32).wrapping_mul(2654435761).wrapping_add(12345);
         x ^= x >> 15;
         x = x.wrapping_mul(2246822519);
         x ^= x >> 13;

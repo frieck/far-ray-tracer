@@ -38,6 +38,8 @@ usage:
       --caustic-radius N    photon lookup radius, smaller is sharper (default 0.12)
       --caustic-strength N  multiplier of the caustic light (default 1)
       --caustics-only show only the caustic light
+  far material-ball <scene.far> <material index> -o <output.png> [--size N] [--samples N]
+      render one of the scene's materials on the app's preview ball
   far geometry <scene.far> -o <output.json>
       write what the app's real-time camera view shows
   far compare <a> <b>
@@ -159,6 +161,44 @@ fn render_command(mut args: impl Iterator<Item = String>) {
         .unwrap_or_else(|e| fail(&format!("{output}: {e}")));
 }
 
+fn material_ball(mut args: impl Iterator<Item = String>) {
+    let (Some(scene_path), Some(index)) = (args.next(), args.next()) else {
+        fail("material-ball needs <scene.far> <material index> -o <output.png>");
+    };
+    let (mut output, mut size, mut samples, mut bounces, mut threads, mut no_env) = (None, 384, 24, None, None, false);
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "-o" => output = args.next(),
+            "--size" => size = number(&mut args, &a),
+            "--samples" => samples = number(&mut args, &a),
+            "--bounces" => bounces = Some(number(&mut args, &a)),
+            "--threads" => threads = Some(number(&mut args, &a)),
+            "--no-environment" => no_env = true,
+            _ => fail(&format!("unknown option: {a}")),
+        }
+    }
+    let output = output.unwrap_or_else(|| fail("material-ball needs -o <output.png>"));
+    let index: usize = index.parse().unwrap_or_else(|_| fail("the material index must be a number"));
+    let scene = Scene::open(Path::new(&scene_path)).unwrap_or_else(|e| fail(&e));
+    let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes");
+    let studio = far_core::environment::EnvironmentConfig {
+        path: data.join("../environments/studio.hdr").to_string_lossy().into_owned(),
+        rotation: 140.0,
+        ..Default::default()
+    };
+    let environment = if no_env { None } else { far_core::environment::Environment::load(studio).ok() };
+    let ball = far_core::preview::material_ball(&scene, index, None, environment, &data).unwrap_or_else(|e| fail(&e));
+    let options = Options { mode: Mode::Enhanced, width: size, height: size, samples, denoise: true, max_depth: 6, use_kd: false, max_bounces: bounces, ..Options::default() };
+    let options = Options { threads: threads.unwrap_or(options.threads), ..options };
+    let image = Image::new(size, size);
+    let t0 = Instant::now();
+    render(&ball, None, &options, &image, &Progress::default());
+    println!("render={}ms", t0.elapsed().as_millis());
+    let rgb: Vec<u8> = image.rgba().chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+    image::RgbImage::from_raw(size, size, rgb).expect("image size").save(&output)
+        .unwrap_or_else(|e| fail(&format!("{output}: {e}")));
+}
+
 fn geometry(mut args: impl Iterator<Item = String>) {
     let (Some(scene), Some(_), Some(output)) = (args.next(), args.next(), args.next()) else {
         fail("geometry needs <scene.far> -o <output.json>");
@@ -198,6 +238,7 @@ fn main() {
     match args.next().as_deref() {
         Some("render") => render_command(args),
         Some("geometry") => geometry(args),
+        Some("material-ball") => material_ball(args),
         Some("compare") => match (args.next(), args.next()) {
             (Some(a), Some(b)) => compare(&a, &b),
             _ => fail("compare needs two images"),
