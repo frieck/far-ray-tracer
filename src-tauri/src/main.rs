@@ -66,12 +66,29 @@ struct SceneMaterial {
     color: [f32; 3],
     ior: f32,
     surface: Option<far_core::surface::Surface>,
+    bump: Option<BumpInfo>,
+}
+
+#[derive(Serialize)]
+struct BumpInfo {
+    kind: far_core::bump::BumpKind,
+    strength: f32,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct MaterialOverride {
     id: usize,
-    surface: far_core::surface::Surface,
+    #[serde(default)]
+    surface: Option<far_core::surface::Surface>,
+    #[serde(default)]
+    bump_strength: Option<f32>,
+}
+
+impl MaterialOverride {
+    fn edit(&self) -> far_core::surface::MaterialEdit {
+        far_core::surface::MaterialEdit { surface: self.surface.clone(), bump_strength: self.bump_strength }
+    }
 }
 
 #[derive(Serialize)]
@@ -184,7 +201,8 @@ fn open_scene(path: &Path, state: &AppState) -> Result<SceneInfo, String> {
             far_core::scene::Primitive::Ground(_) => "ground",
         };
         let m = &scene.materials[id];
-        Some(SceneMaterial { id, label: format!("Material {} ({kind})", seen.len()), color: m.color.array(), ior: m.ior, surface: m.surface.clone() })
+        Some(SceneMaterial { id, label: format!("Material {} ({kind})", seen.len()), color: m.color.array(), ior: m.ior, surface: m.surface.clone(),
+            bump: m.bump.map(|b| BumpInfo { kind: b.kind, strength: b.strength }) })
     }).collect();
     let info = SceneInfo {
         environment: scene.environment.as_ref().map(|e| e.config.clone()),
@@ -378,6 +396,7 @@ fn material_ball_pose() -> far_core::Pose {
 fn material_preview(
     id: usize,
     surface: Option<far_core::surface::Surface>,
+    bump_strength: Option<f32>,
     width: u32,
     height: u32,
     samples: u32,
@@ -393,7 +412,8 @@ fn material_preview(
     let open = state.scene.lock().unwrap().clone().ok_or("No scene is open")?;
     let environment = state.studio.get_or_init(|| studio_environment(&app)).clone();
     let data = scenes_folder(&app).unwrap_or_default();
-    let ball = far_core::preview::material_ball(&open.scene, id, surface.as_ref(), environment, &data)?;
+    let edit = far_core::surface::MaterialEdit { surface, bump_strength };
+    let ball = far_core::preview::material_ball(&open.scene, id, Some(&edit), environment, &data)?;
     if let Some(pose) = &pose {
         pose.validate()?;
     }
@@ -573,7 +593,7 @@ fn render_scene(
             if !copy.prims.iter().any(|p| p.material() == edit.id) {
                 return Err("Unknown object material".into());
             }
-            edit.surface.apply(&mut copy.materials[edit.id]);
+            edit.edit().apply(&mut copy.materials[edit.id])?;
         }
         edited = Some(copy);
     }
@@ -684,6 +704,17 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn material_overrides_read_a_surface_a_bump_strength_or_both() {
+        let only_bump: MaterialOverride = serde_json::from_str(r#"{"id":2,"surface":null,"bump_strength":0.5}"#).unwrap();
+        assert_eq!((only_bump.id, only_bump.bump_strength), (2, Some(0.5)));
+        assert!(only_bump.surface.is_none());
+        let surface: MaterialOverride = serde_json::from_str(
+            r#"{"id":0,"surface":{"preset":"metal","roughness":0.2,"metallic":1,"ior":1.5,"color":null}}"#).unwrap();
+        assert!(surface.surface.is_some() && surface.bump_strength.is_none());
+        assert!(serde_json::from_str::<MaterialOverride>(r#"{"id":0,"bump":1}"#).is_err());
+    }
 
     #[test]
     fn worker_panic_returns_an_error_instead_of_waiting_forever() {

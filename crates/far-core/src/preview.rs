@@ -213,7 +213,7 @@ const CHOSEN: [f32; 3] = [1.0, 0.0, 1.0];
 pub fn material_ball(
     source: &Scene,
     material: usize,
-    surface: Option<&crate::surface::Surface>,
+    edit: Option<&crate::surface::MaterialEdit>,
     environment: Option<crate::environment::Environment>,
     data: &std::path::Path,
 ) -> Result<Scene, String> {
@@ -263,12 +263,15 @@ pub fn material_ball(
     });
     let mut ball = Scene::from_far(text.to_string().as_bytes(), &data.join("material-ball.far"))?;
     let mut edited = chosen_material.clone();
-    if let Some(surface) = surface {
-        surface.apply(&mut edited);
+    if let Some(edit) = edit {
+        edit.apply(&mut edited)?;
     }
-    // The chosen material's texture index points into the source's textures, appended here.
+    // The chosen material's texture indices point into the source's textures, appended here.
     if let Some(texture) = edited.texture.as_mut() {
         *texture += ball.textures.len();
+    }
+    if let Some(bump) = edited.bump.as_mut() {
+        bump.texture += ball.textures.len();
     }
     ball.textures.extend(source.textures.iter().cloned());
     for m in ball.materials.iter_mut().filter(|m| m.color.array() == CHOSEN) {

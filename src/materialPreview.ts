@@ -1,9 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { Pose, SurfaceMaterial } from "./types";
+import type { MaterialOverride, Pose } from "./types";
 
 export interface PreviewRequest {
   id: number;
-  surface: SurfaceMaterial | null;
+  /** The editor's change to the material, if any. */
+  edit: MaterialOverride | null;
   width: number;
   height: number;
   samples: number;
@@ -15,7 +16,10 @@ export interface PreviewRequest {
 
 /** Renders a material on the shader ball with the engine. */
 export async function renderMaterialBall(request: PreviewRequest): Promise<ImageData> {
-  const buffer = await invoke<ArrayBuffer>("material_preview", { ...request });
+  const { edit, ...rest } = request;
+  const buffer = await invoke<ArrayBuffer>("material_preview", {
+    ...rest, surface: edit?.surface ?? null, bumpStrength: edit?.bump_strength ?? null,
+  });
   return new ImageData(new Uint8ClampedArray(buffer), request.width, request.height);
 }
 

@@ -276,7 +276,7 @@ export function App() {
       key={scene?.path}
       id={ballMaterial.id}
       label={ballMaterial.label}
-      surface={settings.materialOverrides.find((m) => m.id === ballMaterial.id)?.surface ?? null}
+      edit={settings.materialOverrides.find((m) => m.id === ballMaterial.id) ?? null}
       onClose={() => setShowMaterial(false)}
     />
   ) : null;

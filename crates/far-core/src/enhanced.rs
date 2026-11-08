@@ -243,6 +243,7 @@ impl<'a> Tracer<'a> {
             }
             Primitive::Ground(g) => (scene.ground_color(g, pos), g.normal, g.normal),
         };
+        let smooth = if !self.fixed && m.bump.is_some() { crate::bump::bumped_normal(scene, prim, pos, smooth) } else { smooth };
         let original = smooth;
         let geo = if r.d.dot(geo) > 0.0 { -geo } else { geo };
         let smooth = if r.d.dot(smooth) > 0.0 { -smooth } else { smooth };

@@ -4,6 +4,7 @@
 //! Those defects stay on purpose when they change the image, and each one is
 //! commented where it happens. Enhanced mode fixes them.
 
+pub mod bump;
 pub mod environment;
 pub mod ggx;
 pub mod surface;

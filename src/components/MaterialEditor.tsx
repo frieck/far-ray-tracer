@@ -1,7 +1,7 @@
 import { Maximize2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { drawPreview, renderMaterialBall } from "../materialPreview";
-import type { MaterialOverride, MaterialPreset, SceneMaterial, SurfaceMaterial } from "../types";
+import type { BumpInfo, MaterialOverride, MaterialPreset, SceneMaterial, SurfaceMaterial } from "../types";
 import { Select } from "./Select";
 import { Slider } from "./Slider";
 
@@ -40,16 +40,16 @@ function matchingPreset(surface: SurfaceMaterial): MaterialPreset {
 }
 
 /** Renders the material on a shader ball with the engine, again after each edit. */
-function MaterialPreview({ id, surface, scenePath, onExpand }: {
+function MaterialPreview({ id, edit, scenePath, onExpand }: {
   id: number;
-  surface: SurfaceMaterial | null;
+  edit: MaterialOverride | null;
   scenePath: string;
   onExpand: () => void;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const request = useRef(0);
   const [busy, setBusy] = useState(true);
-  const key = `${scenePath}|${id}|${JSON.stringify(surface)}`;
+  const key = `${scenePath}|${id}|${JSON.stringify(edit)}`;
 
   useEffect(() => {
     const current = ++request.current;
@@ -64,7 +64,7 @@ function MaterialPreview({ id, surface, scenePath, onExpand }: {
       for (const { size, samples } of PREVIEW_PASSES) {
         let pixels: ImageData;
         try {
-          pixels = await renderMaterialBall({ id, surface, width: size, height: size, samples, pose: null, view: "thumbnail" });
+          pixels = await renderMaterialBall({ id, edit, width: size, height: size, samples, pose: null, view: "thumbnail" });
         } catch {
           // A newer edit replaced this preview, or the scene closed.
           if (current === request.current) setBusy(false);
@@ -79,7 +79,7 @@ function MaterialPreview({ id, surface, scenePath, onExpand }: {
       }
       if (current === request.current) setBusy(false);
     })();
-    // `key` stands for `id`, `surface` and the scene, so an equal edit does not render again.
+    // `key` stands for `id`, `edit` and the scene, so an equal edit does not render again.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
@@ -112,7 +112,13 @@ export function MaterialEditor({ materials, overrides, scenePath, selected, onSe
   const current = edit?.surface ?? original;
   const color = current.color ?? material.color;
   const glass = current.preset === "glass";
-  const apply = (surface: SurfaceMaterial) => onChange([...overrides.filter((m) => m.id !== material.id), { id: material.id, surface }]);
+  /** Stores the edit, or drops it when nothing is left to change. */
+  const store = (next: Omit<MaterialOverride, "id">) => {
+    const others = overrides.filter((m) => m.id !== material.id);
+    onChange(next.surface || next.bump_strength !== null ? [...others, { id: material.id, ...next }] : others);
+  };
+  const bumpStrength = edit?.bump_strength ?? null;
+  const apply = (surface: SurfaceMaterial) => store({ surface, bump_strength: bumpStrength });
   /** Any edit makes an override; the preset follows the values. */
   const change = (values: Partial<SurfaceMaterial>) => {
     const next = { ...current, color, ...values };
@@ -124,9 +130,9 @@ export function MaterialEditor({ materials, overrides, scenePath, selected, onSe
       <Select label="Object material" value={String(material.id)} onChange={(id) => onSelect(Number(id))}>
         {materials.map((m) => <option key={m.id} value={String(m.id)}>{m.label}</option>)}
       </Select>
-      <MaterialPreview id={material.id} surface={edit?.surface ?? null} scenePath={scenePath} onExpand={onExpand} />
-      <Select<MaterialPreset | "original"> label="Material preset" value={edit ? current.preset : "original"} onChange={(preset) => {
-        if (preset === "original") onChange(overrides.filter((m) => m.id !== material.id));
+      <MaterialPreview id={material.id} edit={edit ?? null} scenePath={scenePath} onExpand={onExpand} />
+      <Select<MaterialPreset | "original"> label="Material preset" value={edit?.surface ? current.preset : "original"} onChange={(preset) => {
+        if (preset === "original") store({ surface: null, bump_strength: bumpStrength });
         else if (preset === "custom") apply({ ...current, color, preset: "custom" });
         else apply({ ...PRESETS[preset], preset, color });
       }}>
@@ -149,10 +155,36 @@ export function MaterialEditor({ materials, overrides, scenePath, selected, onSe
         format={(v) => v.toFixed(2)} onChange={(metallic) => change({ metallic })} />
       <Slider label="IOR" value={current.ior} min={1} max={3} step={0.01} disabled={current.metallic === 1}
         format={(v) => v.toFixed(2)} onChange={(ior) => change({ ior })} />
+      {material.bump && (
+        <BumpControl bump={material.bump} strength={bumpStrength}
+          onChange={(strength) => store({ surface: edit?.surface ?? null, bump_strength: strength })} />
+      )}
       <p className="note">
         {glass ? "Clear glass with the existing transmission model." : "GGX reflection. Higher roughness spreads reflections."}{" "}
         Edits last for this session; Original restores the scene material.
       </p>
     </div>
+  );
+}
+
+/** Strength of the material's bump or normal map; null keeps the scene's. */
+function BumpControl({ bump, strength, onChange }: {
+  bump: BumpInfo;
+  strength: number | null;
+  onChange: (strength: number | null) => void;
+}) {
+  const height = bump.kind === "height";
+  const value = strength ?? bump.strength;
+  // A height is a depth in scene units, so its range follows the scene's own value.
+  const max = height ? Math.max(0.2, bump.strength * 4) : 3;
+  return (
+    <>
+      <Slider label={height ? "Bump depth" : "Normal map strength"} value={value} min={0} max={max}
+        step={height ? max / 200 : 0.05} format={(v) => (height ? v.toFixed(3) : v.toFixed(2))}
+        onChange={(next) => onChange(next === bump.strength ? null : next)} />
+      <p className="note">
+        {height ? "Height map: depth of the relief, in scene units." : "Normal map: 1 uses the map as drawn."} 0 turns it off.
+      </p>
+    </>
   );
 }

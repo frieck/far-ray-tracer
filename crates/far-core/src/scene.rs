@@ -28,6 +28,8 @@ pub struct Material {
     pub texture: Option<usize>,
     pub ru_scale: f32,
     pub rv_scale: f32,
+    /// Surface detail from a height or normal map; Enhanced mode only.
+    pub bump: Option<crate::bump::Bump>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -282,6 +284,8 @@ pub(crate) struct MaterialData {
     pub(crate) u_scale: f32,
     pub(crate) v_scale: f32,
     pub(crate) texture: String,
+    /// Image, kind and strength of a bump or normal map.
+    pub(crate) bump: Option<(String, crate::bump::BumpKind, f32)>,
 }
 
 /// Stored paths may come from Windows (`C:\...`); only the file name matters.
@@ -365,10 +369,8 @@ impl Scene {
         dir: Option<&Path>,
         cache: &mut HashMap<String, Option<usize>>,
     ) -> usize {
-        let texture = if m.texture.is_empty() {
-            None
-        } else {
-            let name = base_name(&m.texture).to_string();
+        let mut texture_named = |path: &str| {
+            let name = base_name(path).to_string();
             match cache.get(&name) {
                 Some(t) => *t,
                 None => {
@@ -377,6 +379,16 @@ impl Scene {
                     t
                 }
             }
+        };
+        let texture = (!m.texture.is_empty()).then(|| texture_named(&m.texture)).flatten();
+        let bump = match &m.bump {
+            Some((map, _, strength)) if !strength.is_finite() || *strength < 0.0 => {
+                self.warnings.push(format!("Skipped bump map {map}: its strength must be zero or more"));
+                None
+            }
+            Some((map, kind, strength)) => texture_named(map)
+                .map(|texture| crate::bump::Bump { texture, kind: *kind, strength: *strength }),
+            None => None,
         };
         let surface = m.surface;
         let mut material = Material {
@@ -392,6 +404,7 @@ impl Scene {
             texture,
             ru_scale: 1.0 / m.u_scale,
             rv_scale: 1.0 / m.v_scale,
+            bump,
         };
         if let Some(surface) = surface { surface.apply(&mut material); }
         self.materials.push(material);
@@ -613,6 +626,46 @@ impl Scene {
         let theta = (e.ve.dot(vp) / sine).clamp(-1.0, 1.0).acos() * (2.0 / PI);
         let u = if e.vc.dot(vp) >= 0.0 { (1.0 - theta) * m.ru_scale } else { theta * m.ru_scale };
         self.textures[t].texel_fixed(u, v) * m.color
+    }
+
+    /// Texture coordinates at a point of a primitive, as its Enhanced color lookup reads them,
+    /// scale included. The point may lie slightly off the surface.
+    pub fn texture_uv(&self, prim: usize, pos: Vec3) -> Option<(f32, f32)> {
+        let m = &self.materials[self.prims[prim].material()];
+        Some(match &self.prims[prim] {
+            Primitive::Sphere(e) => {
+                let mut vp = pos - e.center;
+                vp.normalize();
+                let phi = (-vp.dot(e.vn)).clamp(-1.0, 1.0).acos();
+                let v = phi * m.rv_scale * (1.0 / PI);
+                let sine = phi.sin().max(1e-6);
+                let theta = (e.ve.dot(vp) / sine).clamp(-1.0, 1.0).acos() * (2.0 / PI);
+                let u = if e.vc.dot(vp) >= 0.0 { (1.0 - theta) * m.ru_scale } else { theta * m.ru_scale };
+                (u, v)
+            }
+            Primitive::Solid(s) => {
+                let (u, v) = s.uv(pos);
+                (u * m.ru_scale, v * m.rv_scale)
+            }
+            Primitive::Ground(g) => {
+                let (u, v) = g.uv(pos);
+                (u * m.ru_scale, v * m.rv_scale)
+            }
+            Primitive::Triangle(t) => {
+                // Barycentric coordinates of the point projected onto the triangle's plane.
+                let [a, b, c] = t.vertices.map(|i| self.vertices[i as usize]);
+                let (e1, e2, rel) = (b.pos - a.pos, c.pos - a.pos, pos - a.pos);
+                let (d11, d12, d22) = (e1.dot(e1), e1.dot(e2), e2.dot(e2));
+                let (r1, r2) = (rel.dot(e1), rel.dot(e2));
+                let det = d11 * d22 - d12 * d12;
+                if det.abs() < 1e-20 {
+                    return None;
+                }
+                let s1 = (d22 * r1 - d12 * r2) / det;
+                let s2 = (d11 * r2 - d12 * r1) / det;
+                (a.u + s1 * (b.u - a.u) + s2 * (c.u - a.u), a.v + s1 * (b.v - a.v) + s2 * (c.v - a.v))
+            }
+        })
     }
 
     /// Triangle color in Enhanced mode.

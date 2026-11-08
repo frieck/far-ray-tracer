@@ -100,3 +100,29 @@ mod tests {
         ] { assert!(serde_json::from_str::<Surface>(json).is_err(), "{json}"); }
     }
 }
+
+/// An edit from the app's material editor: a new surface, a new bump strength, or both.
+/// Changing only the bump keeps a 2008 material as it is.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MaterialEdit {
+    pub surface: Option<Surface>,
+    pub bump_strength: Option<f32>,
+}
+
+impl MaterialEdit {
+    pub fn apply(&self, m: &mut crate::scene::Material) -> Result<(), String> {
+        if let Some(surface) = &self.surface {
+            surface.apply(m);
+        }
+        if let Some(strength) = self.bump_strength {
+            if !strength.is_finite() || strength < 0.0 {
+                return Err("The bump strength must be zero or more".into());
+            }
+            if let Some(bump) = m.bump.as_mut() {
+                bump.strength = strength;
+            }
+        }
+        Ok(())
+    }
+}

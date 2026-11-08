@@ -19,8 +19,15 @@ export interface SceneMaterial {
   color: [number, number, number];
   ior: number;
   surface: SurfaceMaterial | null;
+  bump: BumpInfo | null;
 }
-export interface MaterialOverride { id: number; surface: SurfaceMaterial }
+/** An edit of one material: a new surface, a new bump strength, or both. */
+export interface MaterialOverride { id: number; surface: SurfaceMaterial | null; bump_strength: number | null }
+export interface BumpInfo {
+  /** A height map, whose strength is a depth in scene units, or a tangent-space normal map. */
+  kind: "height" | "normal";
+  strength: number;
+}
 export type Mode = "classic" | "fixed" | "enhanced";
 export type Comparison = "off" | "classic" | "fixed";
 export type Quality = 16 | 64 | 256 | "custom";

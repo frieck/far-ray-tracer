@@ -411,6 +411,32 @@ Classic and Fixed have no GGX, so they approximate these materials with a sharp 
 reflection of the same head-on strength. The historical C++ reference rejects modern
 surface materials explicitly.
 
+### Bump and normal maps (Enhanced)
+
+A material's `bump` adds surface detail, such as tile joints or hammered dents, by tilting
+the shading normal; the geometry and its silhouette do not change.
+```json
+{
+  "color": [1.0, 0.77, 0.36],
+  "surface": { "preset": "metal", "roughness": 0.22 },
+  "bump": { "map": "hammered-normal.png", "kind": "normal", "strength": 1 },
+  "scale_u": 0.33, "scale_v": 0.5
+}
+```
+- `kind` is `height` (the default) or `normal`.
+  - A **height** map is grayscale, white is high, and `strength` is the relief depth in
+    scene units.
+  - A **normal** map is tangent-space with the OpenGL convention (green points up in the
+    image), and `strength` multiplies its tilt; 1 uses it as drawn.
+- The map follows the material's texture coordinates and `scale_u` / `scale_v`, so it lines
+  up with the color texture, on spheres, solids, triangles and the infinite ground.
+- Images live in the scene's `images` folder, like color textures.
+
+The Materials panel shows the strength of a material that has a map; 0 turns it off.
+Changing only the strength keeps a 2008 material as it is. Classic and Fixed ignore the
+maps. Open `assets/scenes/bump-maps.far` for tiles (height map) and hammered metal (normal
+map); `tools/bump_maps.py` builds its images.
+
 ### Denoising (Enhanced)
 
 **Denoise** is off by default, and the app suggests it when HDR lighting is active; the

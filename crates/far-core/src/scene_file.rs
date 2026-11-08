@@ -94,6 +94,22 @@ struct MaterialFile {
     texture: String,
     scale_u: f32,
     scale_v: f32,
+    bump: Option<BumpFile>,
+}
+
+/// A bump or normal map: `{"map": "bricks.png", "kind": "height", "strength": 0.02}`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BumpFile {
+    map: String,
+    #[serde(default)]
+    kind: crate::bump::BumpKind,
+    #[serde(default = "one")]
+    strength: f32,
+}
+
+fn one() -> f32 {
+    1.0
 }
 
 impl Default for MaterialFile {
@@ -110,6 +126,7 @@ impl Default for MaterialFile {
             texture: String::new(),
             scale_u: 1.0,
             scale_v: 1.0,
+            bump: None,
         }
     }
 }
@@ -128,6 +145,7 @@ impl From<MaterialFile> for MaterialData {
             u_scale: m.scale_u,
             v_scale: m.scale_v,
             texture: m.texture,
+            bump: m.bump.map(|b| (b.map, b.kind, b.strength)),
         }
     }
 }
