@@ -52,6 +52,8 @@ struct AppState {
     progress: Arc<Progress>,
     rendering: AtomicBool,
     last_image: Mutex<Option<FinishedImage>>,
+    /// The studio environment that lights material previews, loaded on first use.
+    studio: OnceLock<Option<Environment>>,
 }
 
 #[derive(Serialize)]
@@ -345,6 +347,60 @@ fn choose_environment(app: AppHandle, state: State<'_, AppState>) -> Result<Opti
     Ok(Some(config))
 }
 
+/// Largest side of a material preview, in pixels.
+const MAX_PREVIEW_SIDE: u32 = 512;
+
+/// The bundled studio environment, or the repository's in development.
+fn studio_environment(app: &AppHandle) -> Option<Environment> {
+    let bundled = app.path().resource_dir().ok().map(|d| d.join("assets/environments/studio.hdr"));
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/environments/studio.hdr");
+    let path = bundled.into_iter().chain([repository]).find(|p| p.is_file())?;
+    let config = EnvironmentConfig { path: path.to_string_lossy().into_owned(), rotation: 140.0, ..EnvironmentConfig::default() };
+    Environment::load(config).ok()
+}
+
+/// Renders one of the open scene's materials, with an optional edit, on a ball. Returns RGBA.
+#[tauri::command(async)]
+fn material_preview(
+    id: usize,
+    surface: Option<far_core::surface::Surface>,
+    size: u32,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Response, String> {
+    if !(1..=MAX_PREVIEW_SIDE).contains(&size) {
+        return Err(format!("Preview sides must be between 1 and {MAX_PREVIEW_SIDE} pixels"));
+    }
+    let open = state.scene.lock().unwrap().clone().ok_or("No scene is open")?;
+    let environment = state.studio.get_or_init(|| studio_environment(&app)).clone();
+    let mut ball = far_core::preview::material_ball(&open.scene, id, environment)?;
+    if let Some(surface) = surface {
+        let sphere = ball.prims.iter().find_map(|p| match p {
+            far_core::scene::Primitive::Sphere(s) => Some(s.material),
+            _ => None,
+        });
+        if let Some(sphere) = sphere {
+            surface.apply(&mut ball.materials[sphere]);
+        }
+    }
+    // Half the cores, so a preview does not stall a render running beside it.
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get() / 2).max(1);
+    let options = Options {
+        mode: Mode::Enhanced,
+        width: size,
+        height: size,
+        samples: 24,
+        denoise: true,
+        max_depth: 6,
+        use_kd: false,
+        threads,
+        ..Options::default()
+    };
+    let image = Image::new(size, size);
+    render(&ball, None, &options, &image, &Progress::default());
+    Ok(Response::new(image.rgba()))
+}
+
 fn render_environment(config: &EnvironmentConfig, scene: &Scene, state: &AppState) -> Result<Environment, String> {
     config.validate()?;
     if let Some(environment) = &scene.environment {
@@ -594,7 +650,8 @@ fn main() {
             save_image,
             render_scene,
             pick_focus,
-            scene_geometry
+            scene_geometry,
+            material_preview
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Far Ray Tracer");

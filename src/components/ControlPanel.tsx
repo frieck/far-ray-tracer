@@ -436,6 +436,7 @@ export function ControlPanel(props: ControlPanelProps) {
 
         {tab === "materials" && (props.scene ? (
           <MaterialEditor key={props.scene.path} materials={props.scene.materials} overrides={settings.materialOverrides}
+            scenePath={props.scene.path}
             onChange={(materialOverrides) => update({ materialOverrides })} />
         ) : (
           <p className="note">Open a scene to edit its materials.</p>

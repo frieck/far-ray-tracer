@@ -397,3 +397,9 @@ input[type="range"]::-webkit-slider-thumb {
 .view-gizmo [role="button"]:focus-visible { outline: none; }
 .view-gizmo [role="button"]:focus-visible circle { stroke: #fff; stroke-width: 2; }
 .view-gizmo-label { fill: #0b0c10; font-size: 10px; font-weight: 700; pointer-events: none; }
+
+.material-preview { position: relative; aspect-ratio: 1; border-radius: 12px; overflow: hidden; background: #0d0e12; box-shadow: inset 0 0 0 1px var(--edge); }
+.material-preview canvas { display: block; width: 100%; height: 100%; }
+.material-preview::after { content: ""; position: absolute; top: 10px; right: 10px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); opacity: 0; transition: opacity 160ms ease; }
+.material-preview[data-busy]::after { opacity: 0.9; animation: preview-pulse 900ms ease-in-out infinite alternate; }
+@keyframes preview-pulse { from { transform: scale(0.7); } to { transform: scale(1.1); } }

@@ -198,3 +198,57 @@ mod tests {
         assert_eq!((preview.objects[1].look.metalness, preview.objects[1].look.roughness), (1.0, 0.3));
     }
 }
+
+/// A material ball: one of the scene's materials on a sphere over a neutral floor, under a soft
+/// key light and `environment`, framed for a square image. The material keeps its textures.
+pub fn material_ball(
+    source: &Scene,
+    material: usize,
+    environment: Option<crate::environment::Environment>,
+) -> Result<Scene, String> {
+    let text = serde_json::json!({
+        "camera": { "position": [0, 1.3, -3.6], "target": [0, 0.8, 0], "zoom": 1.55 },
+        "lights": [{
+            // Above and behind the camera, so it lights the ball without showing in the frame.
+            "type": "rectangle", "position": [-3.6, 4.4, -5.2],
+            "edge_u": [1.6, 0, 0], "edge_v": [0, 0, 1.6], "intensity": 70
+        }],
+        "objects": [
+            { "type": "ground", "material": { "color": [0.4, 0.4, 0.42],
+              "surface": { "preset": "plastic", "roughness": 0.55 } } },
+            { "type": "sphere", "center": [0, 0.85, 0], "radius": 0.85, "material": { "color": [1, 1, 1] } }
+        ]
+    });
+    let mut ball = Scene::from_far(text.to_string().as_bytes(), std::path::Path::new("material-ball.far"))?;
+    let chosen = source.materials.get(material).ok_or("Unknown object material")?;
+    let sphere = ball.prims.iter()
+        .find_map(|p| match p { Primitive::Sphere(s) => Some(s.material), _ => None })
+        .expect("the material ball has a sphere");
+    ball.materials[sphere] = chosen.clone();
+    // The floor has no texture, so the source's textures keep the chosen material's indices valid.
+    ball.textures = source.textures.clone();
+    ball.environment = environment;
+    Ok(ball)
+}
+
+#[cfg(test)]
+mod ball_tests {
+    use super::*;
+    use crate::engine::{render, Image, Mode, Options, Progress};
+
+    #[test]
+    fn the_material_ball_shows_the_chosen_material() {
+        let source = Scene::open(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/scenes/cornell-box.far")))
+            .expect("cornell box");
+        let red = source.materials.iter().position(|m| m.color.x > 0.5 && m.color.y < 0.2).expect("a red wall");
+        let ball = material_ball(&source, red, None).unwrap();
+        let op = Options { mode: Mode::Enhanced, width: 48, height: 48, samples: 8, ..Options::default() };
+        let image = Image::new(op.width, op.height);
+        render(&ball, None, &op, &image, &Progress::default());
+        let rgba = image.rgba();
+        let center = (24 * 48 + 24) * 4;
+        let [r, g, b] = [rgba[center], rgba[center + 1], rgba[center + 2]];
+        assert!(r > 40 && r > 2 * g && r > 2 * b, "the ball is lit and red: {r} {g} {b}");
+        assert!(material_ball(&source, source.materials.len(), None).is_err());
+    }
+}
