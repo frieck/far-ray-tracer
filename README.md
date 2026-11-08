@@ -1,4 +1,8 @@
-# Far Ray Tracer
+<p align="center">
+  <img src="src-tauri/icons/128x128@2x.png" width="128" height="128" alt="Far Ray Tracer icon: a glass sphere splitting a beam of light into a spectrum">
+</p>
+
+<h1 align="center">Far Ray Tracer</h1>
 
 A ray tracer that renders `.far` scenes and shows the image as it builds up.
 It began as a C++ program written in 2008 for a computer science final project on
