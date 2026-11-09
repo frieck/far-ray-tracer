@@ -32,6 +32,30 @@ pub struct Material {
     pub bump: Option<crate::bump::Bump>,
     /// A height map that moves the surface itself.
     pub displacement: Option<crate::displace::Displacement>,
+    /// Rough, tinted or dispersive glass; None for the original's clear glass.
+    pub glass: Option<crate::surface::Glass>,
+    pub subsurface: Option<crate::surface::Subsurface>,
+    /// Texture maps of a physically based material; Enhanced mode only.
+    pub maps: Maps,
+}
+
+/// Textures that vary a material over its surface.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Maps {
+    /// Scales the roughness: white keeps it, black makes the surface smooth.
+    pub roughness: Option<usize>,
+    /// Scales how metallic the surface is.
+    pub metallic: Option<usize>,
+    /// Light the surface gives off: color times strength, times the map when there is one.
+    pub emission: Option<Emission>,
+    /// Cuts the surface away where the map is darker than half gray.
+    pub alpha: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Emission {
+    pub color: Color,
+    pub map: Option<usize>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -267,6 +291,8 @@ pub struct Scene {
     pub displaced: Vec<Option<crate::displace::DisplacedFace>>,
     /// The original shapes of displaced objects, which `displaced` points into.
     pub displaced_sources: Vec<Primitive>,
+    /// Whether some material cuts holes with an alpha map, which rays must look through.
+    pub cutouts: bool,
     pub vertices: Vec<Vertex>,
     /// Corrected normals of each triangle corner, indexed like `prims`.
     /// Only Enhanced mode uses them; Classic mode keeps `Vertex::normal`.
@@ -295,6 +321,11 @@ pub(crate) struct MaterialData {
     pub(crate) bump: Option<(String, crate::bump::BumpKind, f32)>,
     /// Image, height and detail of a displacement map.
     pub(crate) displacement: Option<(String, f32, u32)>,
+    pub(crate) roughness_map: String,
+    pub(crate) metallic_map: String,
+    /// Emitted color, strength included, and an optional map.
+    pub(crate) emission: Option<(Color, String)>,
+    pub(crate) alpha_map: String,
 }
 
 /// Stored paths may come from Windows (`C:\...`); only the file name matters.
@@ -367,6 +398,7 @@ impl Scene {
             corner_normals: Vec::new(),
             displaced: Vec::new(),
             displaced_sources: Vec::new(),
+            cutouts: false,
             materials: Vec::new(),
             textures: Vec::new(),
             extends: Aabb::new(Vec3::new(-14.0, -6.0, -6.0), Vec3::new(28.0, 14.0, 36.0)),
@@ -412,6 +444,17 @@ impl Scene {
                 .map(|texture| crate::displace::Displacement { texture, height: *height, detail: *detail }),
             None => None,
         };
+        let mut map = |name: &str| (!name.is_empty()).then(|| texture_named(name)).flatten();
+        let maps = Maps {
+            roughness: map(&m.roughness_map),
+            metallic: map(&m.metallic_map),
+            emission: m.emission.as_ref().and_then(|(color, name)| {
+                let valid = [color.x, color.y, color.z].iter().all(|c| c.is_finite() && *c >= 0.0);
+                valid.then(|| Emission { color: *color, map: map(name) })
+            }),
+            alpha: map(&m.alpha_map),
+        };
+        self.cutouts |= maps.alpha.is_some();
         let surface = m.surface;
         let mut material = Material {
             ggx: None,
@@ -428,6 +471,9 @@ impl Scene {
             rv_scale: 1.0 / m.v_scale,
             bump,
             displacement,
+            glass: None,
+            subsurface: None,
+            maps,
         };
         self.warnings.extend(problems);
         if let Some(surface) = surface { surface.apply(&mut material); }

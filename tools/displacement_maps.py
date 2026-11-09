@@ -52,7 +52,7 @@ write_png(ROOT / "assets" / "scene-data" / "images" / "cobbles-height.png", heig
 stone = {"color": [0.55, 0.52, 0.48], "surface": {"preset": "ceramic", "roughness": 0.55}}
 scene = {
     "camera": {"position": [0, 2.1, -6.4], "target": [0, 0.5, 0.4], "zoom": 1.25},
-    "environment": {"path": "../environments/studio.hdr", "intensity": 0.75, "rotation": 150, "visible": True},
+    "environment": {"path": "../../environments/studio.hdr", "intensity": 0.75, "rotation": 150, "visible": True},
     "lights": [{"type": "rectangle", "position": [-5, 4.5, -2], "edge_u": [2, 0, 0], "edge_v": [0, 0, 2],
                 "color": [1, 0.94, 0.85], "intensity": 9}],
     "objects": [
@@ -75,6 +75,6 @@ scene = {
                       "bump": {"map": "cobbles-height.png", "kind": "height", "strength": 0.055}}},
     ],
 }
-out = ROOT / "assets" / "scenes" / "displacement.far"
+out = ROOT / "assets" / "scenes" / "materials" / "displacement.far"
 out.write_text(json.dumps(scene, indent=1) + "\n", encoding="utf-8")
 print(f"{out}: {len(scene['objects'])} objects")

@@ -84,7 +84,7 @@ def main():
     hammered_bump = {"map": "hammered-normal.png", "kind": "normal", "strength": 1.0}
     scene = {
         "camera": {"position": [0, 1.7, -6.2], "target": [0, 0.55, 0], "zoom": 1.25},
-        "environment": {"path": "../environments/studio.hdr", "intensity": 0.75, "rotation": 150, "visible": True},
+        "environment": {"path": "../../environments/studio.hdr", "intensity": 0.75, "rotation": 150, "visible": True},
         "lights": [{"type": "rectangle", "position": [-4, 5, -3], "edge_u": [2, 0, 0], "edge_v": [0, 0, 2],
                     "color": [1, 0.95, 0.88], "intensity": 7}],
         "objects": [
@@ -99,7 +99,7 @@ def main():
                                                            scale_u=0.25, scale_v=0.5)},
         ],
     }
-    out = ROOT / "assets" / "scenes" / "bump-maps.far"
+    out = ROOT / "assets" / "scenes" / "materials" / "bump-maps.far"
     out.write_text(json.dumps(scene, indent=1) + "\n", encoding="utf-8")
     print(f"{out}: {len(scene['objects'])} objects")
 

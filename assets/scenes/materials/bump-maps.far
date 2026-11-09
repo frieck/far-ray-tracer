@@ -13,7 +13,7 @@
   "zoom": 1.25
  },
  "environment": {
-  "path": "../environments/studio.hdr",
+  "path": "../../environments/studio.hdr",
   "intensity": 0.75,
   "rotation": 150,
   "visible": true

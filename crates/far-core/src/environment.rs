@@ -305,7 +305,7 @@ mod tests {
         let map = EnvironmentMap::load(&path).unwrap();
         assert!(map.pixels.iter().any(|p| p.x > 8.));
         assert!(EnvironmentMap::load(&path.with_extension("missing")).is_err());
-        let bad = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/hdri-studio.far");
+        let bad = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/techniques/hdri-studio.far");
         assert!(EnvironmentMap::load(&bad).is_err());
     }
     #[test]

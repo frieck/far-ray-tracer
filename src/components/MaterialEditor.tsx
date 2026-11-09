@@ -30,8 +30,13 @@ const MAX_CACHED_PREVIEWS = 64;
 
 const hex = (rgb: number[]) => "#" + rgb.map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, "0")).join("");
 
+/** Whether a surface uses any layer beyond plain GGX, which no preset has. */
+const layered = (s: SurfaceMaterial) =>
+  !!(s.clearcoat || s.sheen || s.anisotropy || s.subsurface);
+
 /** The preset these values match, glass aside, or Custom. */
 function matchingPreset(surface: SurfaceMaterial): MaterialPreset {
+  if (layered(surface)) return "custom";
   const found = (["metal", "plastic", "ceramic"] as const).find((name) => {
     const preset = PRESETS[name];
     return preset.roughness === surface.roughness && preset.metallic === surface.metallic && preset.ior === surface.ior;
@@ -122,7 +127,11 @@ export function MaterialEditor({ materials, overrides, scenePath, selected, onSe
   /** Any edit makes an override; the preset follows the values. */
   const change = (values: Partial<SurfaceMaterial>) => {
     const next = { ...current, color, ...values };
-    apply({ ...next, preset: glass ? "glass" : matchingPreset(next) });
+    if (glass) {
+      apply({ ...next, preset: "glass", metallic: 0, clearcoat: 0, sheen: 0, anisotropy: 0, subsurface: 0 });
+    } else {
+      apply({ ...next, absorption_depth: null, abbe: null, preset: matchingPreset(next) });
+    }
   };
 
   return (
@@ -149,18 +158,19 @@ export function MaterialEditor({ materials, overrides, scenePath, selected, onSe
           change({ color: [1, 3, 5].map((i) => parseInt(value.slice(i, i + 2), 16) / 255) as [number, number, number] });
         }} />
       </label>
-      <Slider label="Roughness" value={current.roughness} min={0} max={1} step={0.01} disabled={glass}
+      <Slider label="Roughness" value={current.roughness} min={0} max={1} step={0.01}
         format={(v) => v.toFixed(2)} onChange={(roughness) => change({ roughness })} />
       <Slider label="Metallic" value={current.metallic} min={0} max={1} step={0.01} disabled={glass}
         format={(v) => v.toFixed(2)} onChange={(metallic) => change({ metallic })} />
       <Slider label="IOR" value={current.ior} min={1} max={3} step={0.01} disabled={current.metallic === 1}
         format={(v) => v.toFixed(2)} onChange={(ior) => change({ ior })} />
+      {glass ? <GlassControls surface={current} onChange={change} /> : <LayerControls surface={current} onChange={change} />}
       {material.bump && (
         <BumpControl bump={material.bump} strength={bumpStrength}
           onChange={(strength) => store({ surface: edit?.surface ?? null, bump_strength: strength })} />
       )}
       <p className="note">
-        {glass ? "Clear glass with the existing transmission model." : "GGX reflection. Higher roughness spreads reflections."}{" "}
+        {glass ? "Glass: roughness frosts it." : "GGX reflection. Higher roughness spreads reflections."}{" "}
         Edits last for this session; Original restores the scene material.
       </p>
     </div>
@@ -184,6 +194,71 @@ function BumpControl({ bump, strength, onChange }: {
         onChange={(next) => onChange(next === bump.strength ? null : next)} />
       <p className="note">
         {height ? "Height map: depth of the relief, in scene units." : "Normal map: 1 uses the map as drawn."} 0 turns it off.
+      </p>
+    </>
+  );
+}
+
+/** Past the end of a slider: the setting is off. */
+const OFF_TINT = 5.05;
+
+/** Tint depth and dispersion of glass. */
+function GlassControls({ surface, onChange }: { surface: SurfaceMaterial; onChange: (v: Partial<SurfaceMaterial>) => void }) {
+  const depth = surface.absorption_depth ?? null;
+  const abbe = surface.abbe ?? null;
+  // Dispersion from 0, none, to 1, Abbe number 5, far stronger than any real glass.
+  const dispersion = abbe === null ? 0 : (100 - abbe) / 95;
+  return (
+    <>
+      <Slider label="Tint depth" value={depth ?? OFF_TINT} min={0.05} max={OFF_TINT} step={0.05}
+        format={(v) => (v >= OFF_TINT ? "Off" : v.toFixed(2))}
+        onChange={(v) => onChange({ absorption_depth: v >= OFF_TINT ? null : v })} />
+      <Slider label="Dispersion" value={dispersion} min={0} max={1} step={0.01}
+        format={(v) => (v <= 0 ? "Off" : `Abbe ${Math.round(100 - 95 * v)}`)}
+        onChange={(v) => onChange({ abbe: v <= 0 ? null : 100 - 95 * v })} />
+      <p className="note">
+        Tint depth: how far light travels keeping the glass color; thicker glass is darker. Dispersion splits light
+        into a spectrum, best seen in caustics.
+      </p>
+    </>
+  );
+}
+
+/** Clear coat, sheen, anisotropy and subsurface of a GGX surface. */
+function LayerControls({ surface, onChange }: { surface: SurfaceMaterial; onChange: (v: Partial<SurfaceMaterial>) => void }) {
+  const clearcoat = surface.clearcoat ?? 0;
+  const sheen = surface.sheen ?? 0;
+  const anisotropy = surface.anisotropy ?? 0;
+  const subsurface = surface.subsurface ?? 0;
+  const sheenColor = surface.sheen_color ?? [1, 1, 1];
+  return (
+    <>
+      <h2>Coat and sheen</h2>
+      <Slider label="Clear coat" value={clearcoat} min={0} max={1} step={0.01} format={(v) => v.toFixed(2)}
+        onChange={(v) => onChange({ clearcoat: v })} />
+      <Slider label="Coat roughness" value={surface.clearcoat_roughness ?? 0.03} min={0} max={1} step={0.01}
+        disabled={clearcoat === 0} format={(v) => v.toFixed(2)} onChange={(v) => onChange({ clearcoat_roughness: v })} />
+      <Slider label="Sheen" value={sheen} min={0} max={1} step={0.01} format={(v) => v.toFixed(2)}
+        onChange={(v) => onChange({ sheen: v })} />
+      <label className="field-row"><span>Sheen color</span>
+        <input type="color" aria-label="Sheen color" value={hex(sheenColor)} disabled={sheen === 0} onChange={(e) => {
+          const value = e.target.value;
+          onChange({ sheen_color: [1, 3, 5].map((i) => parseInt(value.slice(i, i + 2), 16) / 255) as [number, number, number] });
+        }} />
+      </label>
+      <h2>Grain</h2>
+      <Slider label="Anisotropy" value={anisotropy} min={-1} max={1} step={0.02} format={(v) => v.toFixed(2)}
+        onChange={(v) => onChange({ anisotropy: v })} />
+      <Slider label="Grain rotation" value={surface.anisotropy_rotation ?? 0} min={0} max={180} step={1}
+        disabled={anisotropy === 0} format={(v) => `${v}°`} onChange={(v) => onChange({ anisotropy_rotation: v })} />
+      <h2>Subsurface</h2>
+      <Slider label="Subsurface" value={subsurface} min={0} max={1} step={0.01} format={(v) => v.toFixed(2)}
+        onChange={(v) => onChange({ subsurface: v })} />
+      <Slider label="Scatter distance" value={surface.subsurface_radius ?? 0.1} min={0.01} max={1} step={0.01}
+        disabled={subsurface === 0} format={(v) => v.toFixed(2)} onChange={(v) => onChange({ subsurface_radius: v })} />
+      <p className="note">
+        Clear coat varnishes the surface; sheen gives cloth its soft edges; anisotropy stretches highlights along
+        the texture direction, as on brushed metal; subsurface lets light travel inside, as in wax or skin.
       </p>
     </>
   );

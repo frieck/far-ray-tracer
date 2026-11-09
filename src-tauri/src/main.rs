@@ -230,12 +230,17 @@ fn scenes_folder(app: &AppHandle) -> Option<PathBuf> {
     bundled.into_iter().chain([repository]).find(|p| p.is_dir())
 }
 
+/// Example folders and their submenu titles, in menu order.
+const EXAMPLE_GROUPS: [(&str, &str); 3] = [("materials", "Materials"), ("techniques", "Techniques"), ("2008", "From 2008")];
+/// Folders of scenes that only the tests and the validation against the original use.
+const HIDDEN_EXAMPLES: [&str; 2] = ["debug", "validation"];
+
 fn collect_scenes(folder: &Path, group: &str, scenes: &mut Vec<SceneEntry>) {
     let Ok(entries) = std::fs::read_dir(folder) else { return };
     for path in entries.flatten().map(|e| e.path()) {
         let name = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         if path.is_dir() {
-            if name != "debug" {
+            if !HIDDEN_EXAMPLES.contains(&name.as_str()) {
                 collect_scenes(&path, &name, scenes);
             }
         } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("far")) {
@@ -254,9 +259,14 @@ fn example_scenes(app: &AppHandle) -> Vec<SceneEntry> {
     scenes
 }
 
-/// Turns a file name such as `plane-and-mesh` into `Plane and mesh`.
+/// Turns a file name such as `plane-and-mesh` into `Plane and mesh`, keeping acronyms such
+/// as GGX and HDRI in capitals.
 fn pretty_name(name: &str) -> String {
-    let text = name.replace('-', " ");
+    const ACRONYMS: [&str; 3] = ["ggx", "hdri", "hdr"];
+    let words: Vec<String> = name.split('-').map(|word| {
+        if ACRONYMS.contains(&word) { word.to_uppercase() } else { word.to_string() }
+    }).collect();
+    let text = words.join(" ");
     let mut letters = text.chars();
     match letters.next() {
         Some(first) => first.to_uppercase().chain(letters).collect(),
@@ -274,14 +284,21 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     for scene in scenes.iter().filter(|s| s.group.is_empty()) {
         examples = examples.item(&item(scene)?);
     }
-    let mut thesis = SubmenuBuilder::new(app, "Thesis Tests");
-    let mut has_thesis_scenes = false;
-    for scene in scenes.iter().filter(|s| !s.group.is_empty()) {
-        thesis = thesis.item(&item(scene)?);
-        has_thesis_scenes = true;
+    // One submenu per folder, in this order; folders not listed follow, by name.
+    let mut groups: Vec<&str> = scenes.iter().map(|s| s.group.as_str()).filter(|g| !g.is_empty()).collect();
+    groups.dedup();
+    groups.sort_by_key(|g| (EXAMPLE_GROUPS.iter().position(|(folder, _)| folder == g).unwrap_or(usize::MAX), *g));
+    if !groups.is_empty() {
+        examples = examples.separator();
     }
-    if has_thesis_scenes {
-        examples = examples.separator().item(&thesis.build()?);
+    for group in groups {
+        let title = EXAMPLE_GROUPS.iter().find(|(folder, _)| *folder == group)
+            .map_or_else(|| pretty_name(group), |(_, title)| title.to_string());
+        let mut submenu = SubmenuBuilder::new(app, title);
+        for scene in scenes.iter().filter(|s| s.group == group) {
+            submenu = submenu.item(&item(scene)?);
+        }
+        examples = examples.item(&submenu.build()?);
     }
 
     let open = MenuItemBuilder::with_id(MENU_OPEN, "Open Scene…").accelerator("CmdOrCtrl+O").build(app)?;

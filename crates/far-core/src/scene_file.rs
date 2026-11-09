@@ -96,6 +96,22 @@ struct MaterialFile {
     scale_v: f32,
     bump: Option<BumpFile>,
     displacement: Option<DisplacementFile>,
+    roughness_map: String,
+    metallic_map: String,
+    emission: Option<EmissionFile>,
+    alpha_map: String,
+}
+
+/// Light a surface gives off: `{"color": [1, 0.6, 0.2], "strength": 4, "map": "neon.png"}`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EmissionFile {
+    #[serde(default = "white")]
+    color: Point,
+    #[serde(default = "one")]
+    strength: f32,
+    #[serde(default)]
+    map: String,
 }
 
 /// A displacement map: `{"map": "rocks.png", "height": 0.1, "detail": 128}`.
@@ -143,6 +159,10 @@ impl Default for MaterialFile {
             scale_v: 1.0,
             bump: None,
             displacement: None,
+            roughness_map: String::new(),
+            metallic_map: String::new(),
+            emission: None,
+            alpha_map: String::new(),
         }
     }
 }
@@ -163,6 +183,10 @@ impl From<MaterialFile> for MaterialData {
             texture: m.texture,
             bump: m.bump.map(|b| (b.map, b.kind, b.strength)),
             displacement: m.displacement.map(|d| (d.map, d.height, d.detail)),
+            roughness_map: m.roughness_map,
+            metallic_map: m.metallic_map,
+            emission: m.emission.map(|e| (vector(e.color) * e.strength, e.map)),
+            alpha_map: m.alpha_map,
         }
     }
 }

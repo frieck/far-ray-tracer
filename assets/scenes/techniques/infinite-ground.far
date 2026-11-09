@@ -15,7 +15,7 @@
   "focus_distance": 10.5
  },
  "environment": {
-  "path": "../environments/studio.hdr",
+  "path": "../../environments/studio.hdr",
   "intensity": 1.0,
   "rotation": 60,
   "visible": true

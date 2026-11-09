@@ -97,7 +97,7 @@
     }
   ],
   "environment": {
-    "path": "../environments/studio.hdr",
+    "path": "../../environments/studio.hdr",
     "intensity": 1,
     "rotation": 200,
     "visible": false

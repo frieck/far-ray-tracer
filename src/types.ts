@@ -12,6 +12,22 @@ export interface SurfaceMaterial {
   metallic: number;
   ior: number;
   color: [number, number, number] | null;
+  /** Glass: distance through which light keeps the color; null keeps plain glass's tint. */
+  absorption_depth?: number | null;
+  /** Glass: Abbe number; lower spreads light into wider rainbows; null disperses nothing. */
+  abbe?: number | null;
+  clearcoat?: number;
+  clearcoat_roughness?: number;
+  sheen?: number;
+  sheen_color?: [number, number, number];
+  /** From -1 to 1: highlights stretched across or along the surface's texture direction. */
+  anisotropy?: number;
+  /** Degrees. */
+  anisotropy_rotation?: number;
+  /** Share of diffuse light that travels under the surface. */
+  subsurface?: number;
+  /** Mean distance light travels under the surface, in scene units. */
+  subsurface_radius?: number;
 }
 export interface SceneMaterial {
   id: number;

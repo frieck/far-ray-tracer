@@ -111,6 +111,27 @@ pub fn tilt(scene: &Scene, p: &Primitive, pos: Vec3, normal: Vec3, bump: Bump) -
     if tilted.dot(normal) > 0.05 { tilted } else { normal }
 }
 
+/// The direction in which the texture's u coordinate grows at `pos`, along the surface: the
+/// grain that anisotropic materials follow. Rings around a sphere, for one.
+pub fn texture_tangent(scene: &Scene, p: &Primitive, pos: Vec3, normal: Vec3) -> Option<Vec3> {
+    let at = scene.texture_uv_on(p, pos)?;
+    let (t1, t2) = base(normal);
+    let (d1, d2) = (rate(scene, p, pos, t1, at)?, rate(scene, p, pos, t2, at)?);
+    let det = d1.0 * d2.1 - d2.0 * d1.1;
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    unit((t1 * d2.1 - t2 * d1.1) * (1.0 / det))
+}
+
+/// Brightness of a texture at a point of a primitive, through the primitive's texture
+/// coordinates: the value of a grayscale map.
+pub fn map_value(scene: &Scene, p: &Primitive, pos: Vec3, texture: usize) -> Option<f32> {
+    let (u, v) = scene.texture_uv_on(p, pos)?;
+    let c = scene.textures[texture].texel_fixed(u, v);
+    Some((c.x + c.y + c.z) / 3.0)
+}
+
 fn unit(v: Vec3) -> Option<Vec3> {
     let length = v.length();
     (length > 1e-12 && length.is_finite()).then(|| v * (1.0 / length))

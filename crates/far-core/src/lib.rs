@@ -20,6 +20,7 @@ pub mod preview;
 pub mod scene;
 mod scene_file;
 pub mod solid;
+pub mod spectral;
 pub mod texture;
 pub mod twister;
 pub mod vector;

@@ -92,6 +92,11 @@ const PHOTON_BATCH: u32 = 8192;
 const MAX_PHOTON_BOUNCES: u32 = 10;
 /// Rays per glossy reflection in Fixed mode, which has no passes to average them.
 const FIXED_GLOSSY_SAMPLES: u32 = 128;
+/// Most holes cut by alpha maps one ray looks through.
+const MAX_CUTOUT_CROSSINGS: u32 = 16;
+/// Most scattering events of light under a surface.
+const MAX_SUBSURFACE_STEPS: u32 = 128;
+
 /// Glossy reflection stops at this depth in Fixed mode, as in the original.
 const FIXED_GLOSSY_DEPTH: i32 = 3;
 
@@ -115,6 +120,10 @@ struct Hit<'a> {
     refl: f32,
     refr: f32,
     m: &'a Material,
+    /// The material's GGX at this point, after its maps and with its surface direction.
+    ggx: Option<crate::ggx::Ggx>,
+    /// Light the surface gives off here.
+    emission: Color,
 }
 
 /// Orthonormal basis around `n` (Duff et al., 2017).
@@ -130,6 +139,33 @@ fn base(n: Vec3) -> (Vec3, Vec3) {
 
 fn reflect(d: Vec3, n: Vec3) -> Vec3 {
     d - 2.0 * d.dot(n) * n
+}
+
+/// Share of light kept at each scattering under a surface, for a surface whose overall color
+/// under many scatterings is `color` (Chiang, Kutz and Burley 2016).
+fn scattering_albedo(color: Color) -> Color {
+    let single = |a: f32| {
+        let a = a.clamp(0.0, 0.999);
+        1.0 - (4.09712 + 4.20863 * a - (9.59217 + 41.6808 * a + 17.7126 * a * a).sqrt()).powi(2)
+    };
+    Color::new(single(color.x), single(color.y), single(color.z))
+}
+
+/// Share of light left after `distance` inside a material. Glass with an absorption depth
+/// keeps its color over that depth (Beer's law); the original's glass absorbs the more the
+/// lighter its color, a habit kept for its scenes.
+fn absorption(m: &Material, distance: f32) -> Color {
+    let distance = distance.min(100.0);
+    match m.glass.and_then(|g| g.absorption_depth) {
+        Some(depth) => {
+            let keep = |c: f32| (c.max(1e-4).ln() * distance / depth).exp();
+            Color::new(keep(m.color.x), keep(m.color.y), keep(m.color.z))
+        }
+        None => {
+            let absorbed = (Color::new(1.0, 1.0, 1.0) - m.color) * (ABSORPTION * -distance);
+            Color::new(absorbed.x.exp(), absorbed.y.exp(), absorbed.z.exp())
+        }
+    }
 }
 
 /// Compresses only the highest tones: up to 0.8 the image is unchanged, and above
@@ -174,6 +210,8 @@ struct Tracer<'a> {
     first_hit: bool,
     /// What the camera ray of the current sample hit, for the denoiser.
     primary: Primary,
+    /// The wavelength this path follows, once it has crossed glass that disperses.
+    wavelength: Option<f32>,
 }
 
 impl<'a> Tracer<'a> {
@@ -192,6 +230,35 @@ impl<'a> Tracer<'a> {
     }
 
     fn nearest(&mut self, r: &Ray, limit: f32) -> Option<(usize, f32, i32)> {
+        if !self.fixed && self.ctx.scene.cutouts {
+            return self.nearest_through_cutouts(r, limit);
+        }
+        self.nearest_surface(r, limit)
+    }
+
+    /// Like `nearest`, but rays pass through the holes alpha maps cut, so leaves and grilles
+    /// show what is behind them and let light through.
+    fn nearest_through_cutouts(&mut self, r: &Ray, limit: f32) -> Option<(usize, f32, i32)> {
+        let scene = self.ctx.scene;
+        let mut skipped = 0.0;
+        let mut ray = *r;
+        for _ in 0..MAX_CUTOUT_CROSSINGS {
+            let (prim, dist, result) = self.nearest_surface(&ray, limit - skipped)?;
+            let p = &scene.prims[prim];
+            let pos = ray.o + ray.d * dist;
+            let open = scene.materials[p.material()].maps.alpha
+                .and_then(|map| crate::bump::map_value(scene, p, pos, map))
+                .is_some_and(|alpha| alpha < 0.5);
+            if !open {
+                return Some((prim, skipped + dist, result));
+            }
+            skipped += dist + SURFACE_OFFSET;
+            ray = Ray { o: pos + ray.d * SURFACE_OFFSET, d: ray.d };
+        }
+        None
+    }
+
+    fn nearest_surface(&mut self, r: &Ray, limit: f32) -> Option<(usize, f32, i32)> {
         self.ctx.rays += 1;
         let mut dist = limit;
         if let Some(kd) = self.ctx.kd {
@@ -209,6 +276,9 @@ impl<'a> Tracer<'a> {
     }
 
     fn blocked(&mut self, r: &Ray, limit: f32) -> bool {
+        if !self.fixed && self.ctx.scene.cutouts {
+            return self.nearest_through_cutouts(r, limit).is_some();
+        }
         self.ctx.rays += 1;
         if let Some(kd) = self.ctx.kd {
             return self.ctx.occluded(kd, r, limit);
@@ -255,23 +325,43 @@ impl<'a> Tracer<'a> {
                 (scene.ground_color(g, pos), g.normal, smooth)
             }
         };
-        let smooth = if !self.fixed && m.bump.is_some() {
-            match scene.displaced_face(prim) {
-                Some(face) => {
-                    let source = &scene.displaced_sources[face.source as usize];
-                    crate::bump::bumped_normal(scene, source, face.base_at(self.ctx.uv[prim]).0, smooth)
-                }
-                None => crate::bump::bumped_normal(scene, p, pos, smooth),
+        // Maps read the original shape of a displaced triangle, at the point under the hit.
+        let (shape, at) = match scene.displaced_face(prim) {
+            Some(face) => (&scene.displaced_sources[face.source as usize], face.base_at(self.ctx.uv[prim]).0),
+            None => (p, pos),
+        };
+        let smooth = if !self.fixed && m.bump.is_some() { crate::bump::bumped_normal(scene, shape, at, smooth) } else { smooth };
+        let ggx = m.ggx.map(|mut g| {
+            if self.fixed {
+                return g;
             }
-        } else {
-            smooth
+            if let Some(map) = m.maps.roughness {
+                g.roughness *= crate::bump::map_value(scene, shape, at, map).unwrap_or(1.0);
+            }
+            if let Some(map) = m.maps.metallic {
+                g.metallic *= crate::bump::map_value(scene, shape, at, map).unwrap_or(1.0);
+            }
+            if g.anisotropy != 0.0 {
+                g.tangent = crate::bump::texture_tangent(scene, shape, at, smooth);
+            }
+            if let Some(sss) = m.subsurface {
+                g.subsurface = sss.amount;
+            }
+            g
+        });
+        let emission = match m.maps.emission {
+            Some(e) if !self.fixed => match e.map.zip(scene.texture_uv_on(shape, at)) {
+                Some((map, (u, v))) => e.color * scene.textures[map].texel_fixed(u, v),
+                None => e.color,
+            },
+            _ => Color::default(),
         };
         let original = smooth;
         let geo = if r.d.dot(geo) > 0.0 { -geo } else { geo };
         let smooth = if r.d.dot(smooth) > 0.0 { -smooth } else { smooth };
         // The smooth normal can point backward at grazing angles; the geometric one cannot.
         let smooth = if smooth.dot(geo) <= 0.0 { geo } else { smooth };
-        let k = if self.fixed || m.ggx.is_some() { 1.0 } else { 1.0 / (m.diff + m.refl + m.refr).max(1.0).sqrt() };
+        let k = if self.fixed || ggx.is_some() { 1.0 } else { 1.0 / (m.diff + m.refl + m.refr).max(1.0).sqrt() };
         Hit {
             pos,
             dist,
@@ -280,13 +370,15 @@ impl<'a> Tracer<'a> {
             smooth,
             original,
             entering: result > 0,
-            diff: if !self.fixed { m.ggx.map_or(m.diff * k, |g| {
+            diff: if !self.fixed { ggx.map_or(m.diff * k, |g| {
                 let f = g.fresnel(color, m.ior, -r.d.dot(smooth));
                 (1.0 - g.metallic) * (1.0 - f.x.max(f.y).max(f.z))
             }) } else { m.diff },
             refl: m.refl * k,
             refr: m.refr * k,
             m,
+            ggx: if self.fixed { None } else { ggx },
+            emission,
         }
     }
 
@@ -305,9 +397,11 @@ impl<'a> Tracer<'a> {
             return if self.blocked(&r, limit) { Color::default() } else { white };
         }
         let (mut o, mut remaining, mut transmitted) = (start, limit, white);
+        // Glass with an absorption depth tints the shadow by the length of each crossing.
+        let (mut traveled, mut entered) = (0.0f32, None);
         for _ in 0..MAX_GLASS_CROSSINGS {
             let r = Ray { o, d: dir };
-            let Some((prim, dist, _)) = self.nearest(&r, remaining) else {
+            let Some((prim, dist, result)) = self.nearest(&r, remaining) else {
                 return transmitted;
             };
             let m = &scene.materials[scene.prims[prim].material()];
@@ -316,6 +410,13 @@ impl<'a> Tracer<'a> {
             }
             let transmittance = m.refr / (m.refr + m.diff);
             transmitted = transmitted * (Color::new(1.0, 1.0, 1.0) * transmittance);
+            let here = traveled + dist;
+            if result > 0 {
+                entered = Some(here);
+            } else if m.glass.is_some_and(|g| g.absorption_depth.is_some()) {
+                transmitted = transmitted * absorption(m, here - entered.take().unwrap_or(0.0));
+            }
+            traveled = here + SURFACE_OFFSET;
             o = o + dir * (dist + SURFACE_OFFSET);
             remaining -= dist + SURFACE_OFFSET;
             if remaining <= 0.0 {
@@ -367,7 +468,7 @@ impl<'a> Tracer<'a> {
             }
             let light_color = scene.materials[light.material].color * transmitted;
             if !self.fixed {
-                if let Some(ggx) = a.m.ggx {
+                if let Some(ggx) = a.ggx {
                     if l.dot(a.geo) > 0.0 {
                         acc += if photons_carry {
                             ggx.evaluate_diffuse(a.smooth, -d, l, a.color, a.m.ior)
@@ -441,7 +542,7 @@ impl<'a> Tracer<'a> {
                 let cosine = l.dot(a.original);
                 if cosine > 0. && l.dot(a.geo) > 0. && pdf > 0. {
                     let transmitted = self.visibility(a.pos + a.geo * SURFACE_OFFSET, l, MAX_DISTANCE);
-                    let response = if let Some(ggx) = a.m.ggx {
+                    let response = if let Some(ggx) = a.ggx {
                         ggx.evaluate(a.smooth, -d, l, a.color, a.m.ior,
                             (depth < self.ctx.max_depth).then_some(pdf))
                     } else {
@@ -460,7 +561,7 @@ impl<'a> Tracer<'a> {
     fn shade_area_light(&self, acc: &mut Color, a: &Hit, d: Vec3, depth: i32, l: Vec3, dot: f32,
         radiance: Color, light_pdf: Option<f32>, photons_carry: bool) {
         if !self.fixed {
-            if let Some(ggx) = a.m.ggx {
+            if let Some(ggx) = a.ggx {
                 if l.dot(a.geo) > 0.0 {
                     *acc += if photons_carry {
                         ggx.evaluate_diffuse(a.smooth, -d, l, a.color, a.m.ior)
@@ -478,7 +579,7 @@ impl<'a> Tracer<'a> {
         }
     }
 
-    fn indirect_light(&mut self, a: &Hit, depth: i32, bounces: u32) -> Color {
+    fn indirect_light(&mut self, a: &Hit, d: Vec3, depth: i32, bounces: u32) -> Color {
         let (u, v) = self.pair();
         let angle = 2.0 * PI * v;
         self.first_hit = false;
@@ -488,7 +589,11 @@ impl<'a> Tracer<'a> {
         if dir.dot(a.geo) <= 0.0 {
             return Color::default();
         }
-        let weight = a.diff * a.color;
+        // A GGX surface weighs the bounce by its diffuse lobes, sheen and coat included.
+        let weight = match a.ggx {
+            Some(ggx) => ggx.diffuse_weight(a.smooth, -d, dir, a.color, a.m.ior),
+            None => a.diff * a.color,
+        };
         // Russian roulette: a dark surface passes on little light, so its path usually
         // ends here. A path that survives is divided by its chance to survive, so the
         // average stays exact while paths stay short.
@@ -508,23 +613,23 @@ impl<'a> Tracer<'a> {
 
     fn reflection(&mut self, a: &Hit, d: Vec3, depth: i32, bounces: u32) -> Color {
         if !self.fixed {
-            if let Some(ggx) = a.m.ggx {
+            if let Some(ggx) = a.ggx {
                 let (u, v) = self.pair();
-                let Some((dir, weight)) = ggx.sample(a.smooth, -d, u, v, a.color, a.m.ior) else { return Color::default(); };
+                let Some((dir, weight)) = ggx.sample(a.smooth, -d, u, v, self.random(), a.color, a.m.ior) else { return Color::default(); };
                 if dir.dot(a.geo) <= 0.0 { return Color::default(); }
                 let ray = Ray { o: a.pos + a.geo * SURFACE_OFFSET, d: dir };
                 let (color, distance) = self.trace(&ray, depth + 1, bounces, true);
                 let mut mis = 1.0;
                 if distance == MAX_DISTANCE {
                     if let Some(environment) = self.ctx.scene.environment.as_ref().filter(|e| e.active()) {
-                        mis = crate::ggx::power_weight(ggx.pdf(a.smooth, -d, dir), environment.pdf(dir));
+                        mis = crate::ggx::power_weight(ggx.pdf(a.smooth, -d, dir, a.color, a.m.ior), environment.pdf(dir));
                     }
                 }
                 for light in &self.ctx.scene.rect_lights {
                     if let Some(hit) = light.intersect(ray.o, dir, distance + SURFACE_OFFSET) {
                         if (hit - distance).abs() < SURFACE_OFFSET && -dir.dot(light.normal) > 0.0 {
                             let light_pdf = hit * hit / (light.area * -dir.dot(light.normal));
-                            mis = crate::ggx::power_weight(ggx.pdf(a.smooth, -d, dir), light_pdf);
+                            mis = crate::ggx::power_weight(ggx.pdf(a.smooth, -d, dir, a.color, a.m.ior), light_pdf);
                         }
                     }
                 }
@@ -533,7 +638,7 @@ impl<'a> Tracer<'a> {
                         let cosine = -dir.dot((ray.o + dir * hit - light.center) * light.inv_radius);
                         if (hit - distance).abs() < SURFACE_OFFSET && cosine > 0.0 {
                             let light_pdf = hit * hit / (2.0 * PI * light.sq_radius * cosine);
-                            mis = crate::ggx::power_weight(ggx.pdf(a.smooth, -d, dir), light_pdf);
+                            mis = crate::ggx::power_weight(ggx.pdf(a.smooth, -d, dir, a.color, a.m.ior), light_pdf);
                         }
                     }
                 }
@@ -573,35 +678,86 @@ impl<'a> Tracer<'a> {
     /// Glass. The original uses the same index entering and leaving, so the ray does
     /// not bend on the way out, and it absorbs more the lighter the color is. Here the
     /// bend changes direction, absorption applies only inside the material, and the
-    /// reflected share follows Schlick's Fresnel approximation.
+    /// reflected share follows Schlick's Fresnel approximation. Enhanced glass can also be
+    /// rough, tinted by depth, and split light by wavelength.
     fn refraction(&mut self, a: &Hit, d: Vec3, depth: i32, bounces: u32) -> Color {
-        let eta = if a.entering { 1.0 / a.m.ior } else { a.m.ior };
-        let cos_i = -a.smooth.dot(d);
+        let glass = a.m.glass.filter(|_| !self.fixed);
+        // A path that first meets dispersive glass here follows one wavelength from now on,
+        // and carries that wavelength's color.
+        let mut chosen = None;
+        let ior = match glass.and_then(|g| g.abbe) {
+            Some(abbe) => {
+                let wavelength = match self.wavelength {
+                    Some(w) => w,
+                    None => {
+                        let u = self.pair().0;
+                        let w = crate::spectral::sample(u);
+                        self.wavelength = Some(w);
+                        chosen = Some(w);
+                        w
+                    }
+                };
+                crate::spectral::ior(a.m.ior, abbe, wavelength)
+            }
+            None => a.m.ior,
+        };
+        let c = self.refract_at(a, d, depth, bounces, ior, glass.map_or(0.0, |g| g.roughness));
+        match chosen {
+            Some(w) => {
+                // Light from other branches of the path does not depend on this wavelength.
+                self.wavelength = None;
+                c * crate::spectral::weight(w)
+            }
+            None => c,
+        }
+    }
+
+    fn refract_at(&mut self, a: &Hit, d: Vec3, depth: i32, bounces: u32, ior: f32, roughness: f32) -> Color {
+        // Rough glass bends light at a microfacet seen from the ray, not at the smooth surface.
+        let rough = (roughness > 0.0).then(|| crate::ggx::Ggx::new(roughness, 0.0));
+        let n = match rough {
+            Some(ggx) => {
+                let (u, v) = self.pair();
+                ggx.sample_normal(a.smooth, -d, u, v).unwrap_or(a.smooth)
+            }
+            None => a.smooth,
+        };
+        // Microfacets hide part of the light that leaves them.
+        let masking = |out: Vec3, side: Vec3| rough.map_or(1.0, |ggx| ggx.g1(side, out));
+        let eta = if a.entering { 1.0 / ior } else { ior };
+        let cos_i = -n.dot(d);
         let cos_t2 = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
         let reflected = |s: &mut Self| {
-            let r = Ray { o: a.pos + a.geo * SURFACE_OFFSET, d: reflect(d, a.smooth) };
-            s.trace(&r, depth + 1, bounces, true).0
+            let dir = reflect(d, n);
+            if dir.dot(a.geo) <= 0.0 {
+                return Color::default();
+            }
+            let r = Ray { o: a.pos + a.geo * SURFACE_OFFSET, d: dir };
+            s.trace(&r, depth + 1, bounces, true).0 * masking(dir, a.smooth)
         };
         if cos_t2 <= 0.0 {
             return a.refr * reflected(self);
         }
         let cos_t = cos_t2.sqrt();
-        let f0 = ((a.m.ior - 1.0) / (a.m.ior + 1.0)).powi(2);
+        let f0 = ((ior - 1.0) / (ior + 1.0)).powi(2);
         let cos_f = if a.entering { cos_i } else { cos_t };
         let fresnel = if self.fixed { 0.0 } else { f0 + (1.0 - f0) * (1.0 - cos_f).powi(5) };
 
         let transmit = |s: &mut Self| {
-            let mut dir = eta * d + (eta * cos_i - cos_t) * a.smooth;
+            let mut dir = eta * d + (eta * cos_i - cos_t) * n;
             dir.normalize();
+            if dir.dot(a.geo) >= 0.0 {
+                return Color::default();
+            }
             let r = Ray { o: a.pos - a.geo * SURFACE_OFFSET, d: dir };
             // After a diffuse bounce, shadow rays have already brought this light through
             // the glass, so the transmitted ray must not see the emitter as well.
             let (c, dist) = s.trace(&r, depth + 1, bounces, !(s.has_glass && bounces > 0));
+            let c = c * masking(dir, -a.smooth);
             if !a.entering {
                 return c;
             }
-            let absorbed = (Color::new(1.0, 1.0, 1.0) - a.m.color) * (ABSORPTION * -dist.min(100.0));
-            c * Color::new(absorbed.x.exp(), absorbed.y.exp(), absorbed.z.exp())
+            c * absorption(a.m, dist)
         };
 
         // At the first surface both sides are traced, since that is what shows the most.
@@ -621,7 +777,8 @@ impl<'a> Tracer<'a> {
     /// surface it reaches after at least one such bounce; light that arrives straight
     /// from the lamp is direct light and is already handled by `direct_light`.
     fn trace_photon(&mut self, mut ray: Ray, mut power: Color, photons: &mut Vec<Photon>) {
-        let mut inside: Option<Color> = None;
+        let mut inside: Option<&Material> = None;
+        self.wavelength = None;
         for bounce in 0..MAX_PHOTON_BOUNCES {
             let Some((prim, dist, result)) = self.nearest(&ray, MAX_DISTANCE) else {
                 return;
@@ -631,17 +788,16 @@ impl<'a> Tracer<'a> {
                 || scene.bulbs.iter().any(|light| light.intersect(ray.o, ray.d, dist).is_some()) {
                 return;
             }
-            if let Some(color) = inside {
-                let absorbed = (Color::new(1.0, 1.0, 1.0) - color) * (ABSORPTION * -dist);
-                power = power * Color::new(absorbed.x.exp(), absorbed.y.exp(), absorbed.z.exp());
+            if let Some(m) = inside {
+                power = power * absorption(m, dist);
             }
             let a = self.hit_at(&ray, prim, dist, result);
             if bounce > 0 && a.diff > 0.0 && ray.d.dot(a.original) < 0.0 {
                 photons.push(Photon { pos: a.pos, normal: a.original, power });
             }
-            if let Some(ggx) = a.m.ggx {
+            if let Some(ggx) = a.ggx {
                 let (u, v) = (self.random(), self.random());
-                let Some((dir, weight)) = ggx.sample(a.smooth, -ray.d, u, v, a.color, a.m.ior) else { return; };
+                let Some((dir, weight)) = ggx.sample(a.smooth, -ray.d, u, v, self.random(), a.color, a.m.ior) else { return; };
                 if dir.dot(a.geo) <= 0.0 { return; }
                 power = power * weight;
                 ray = Ray { o: a.pos + a.geo * SURFACE_OFFSET, d: dir };
@@ -658,25 +814,126 @@ impl<'a> Tracer<'a> {
                 ray = bounce_off;
                 continue;
             }
-            let eta = if a.entering { 1.0 / a.m.ior } else { a.m.ior };
-            let cos_i = -a.smooth.dot(ray.d);
+            // Dispersive glass gives the photon one wavelength, and its color, for the rest of
+            // its way: this is what spreads a caustic into a spectrum.
+            let ior = match a.m.glass.and_then(|g| g.abbe) {
+                Some(abbe) => {
+                    let wavelength = match self.wavelength {
+                        Some(w) => w,
+                        None => {
+                            let w = crate::spectral::sample(self.random());
+                            power = power * crate::spectral::weight(w);
+                            self.wavelength = Some(w);
+                            w
+                        }
+                    };
+                    crate::spectral::ior(a.m.ior, abbe, wavelength)
+                }
+                None => a.m.ior,
+            };
+            // Rough glass bends at a microfacet.
+            let n = match a.m.glass.filter(|g| g.roughness > 0.0) {
+                Some(g) => {
+                    let (u, v) = (self.random(), self.random());
+                    crate::ggx::Ggx::new(g.roughness, 0.0).sample_normal(a.smooth, -ray.d, u, v).unwrap_or(a.smooth)
+                }
+                None => a.smooth,
+            };
+            let bounce_off = Ray { o: a.pos + a.geo * SURFACE_OFFSET, d: reflect(ray.d, n) };
+            let eta = if a.entering { 1.0 / ior } else { ior };
+            let cos_i = -n.dot(ray.d);
             let cos_t2 = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
             if cos_t2 <= 0.0 {
                 ray = bounce_off;
                 continue;
             }
             let cos_t = cos_t2.sqrt();
-            let f0 = ((a.m.ior - 1.0) / (a.m.ior + 1.0)).powi(2);
+            let f0 = ((ior - 1.0) / (ior + 1.0)).powi(2);
             let cos_f = if a.entering { cos_i } else { cos_t };
             if self.random() < f0 + (1.0 - f0) * (1.0 - cos_f).powi(5) {
                 ray = bounce_off;
                 continue;
             }
-            let mut dir = eta * ray.d + (eta * cos_i - cos_t) * a.smooth;
+            let mut dir = eta * ray.d + (eta * cos_i - cos_t) * n;
             dir.normalize();
+            if dir.dot(a.geo) >= 0.0 {
+                return;
+            }
             ray = Ray { o: a.pos - a.geo * SURFACE_OFFSET, d: dir };
-            inside = a.entering.then_some(a.m.color);
+            inside = a.entering.then_some(a.m);
         }
+    }
+
+    /// Light that enters the surface, scatters inside and leaves it elsewhere: a random walk
+    /// through the material, as in wax, skin or marble. Each scattering keeps a share of
+    /// the light set by the surface color; where the walk leaves, the light arriving there is
+    /// gathered as on a white matte surface.
+    fn subsurface(&mut self, a: &Hit, d: Vec3, sss: crate::surface::Subsurface, ggx: crate::ggx::Ggx,
+        depth: i32, bounces: u32) -> Color {
+        let f = ggx.fresnel(a.color, a.m.ior, -d.dot(a.smooth));
+        let enters = (1.0 - ggx.metallic) * (1.0 - f.x.max(f.y).max(f.z)) * sss.amount;
+        if enters <= 0.0 {
+            return Color::default();
+        }
+        let albedo = scattering_albedo(a.color);
+        let (u, v) = self.pair();
+        self.first_hit = false;
+        // Into the surface, spread like light through a matte face.
+        let (t, b) = base(-a.smooth);
+        let angle = 2.0 * PI * v;
+        let (radius, z) = (u.sqrt(), (1.0 - u).max(0.0).sqrt());
+        let mut dir = t * (radius * angle.cos()) + b * (radius * angle.sin()) - a.smooth * z;
+        if dir.dot(a.geo) >= 0.0 {
+            return Color::default();
+        }
+        let mut pos = a.pos - a.geo * SURFACE_OFFSET;
+        let mut carried = Color::new(enters, enters, enters);
+        for step in 0..MAX_SUBSURFACE_STEPS {
+            let length = -(1.0 - self.random()).max(1e-12).ln() * sss.radius;
+            let ray = Ray { o: pos, d: dir };
+            if let Some((prim, dist, result)) = self.nearest(&ray, length) {
+                let exit = self.hit_at(&ray, prim, dist, result);
+                // The hit normal faces the walk, which is inside; outside is the other way.
+                let out = -exit.geo;
+                return carried * self.light_leaving(exit.pos + out * SURFACE_OFFSET, out, depth, bounces + 1);
+            }
+            pos = pos + dir * length;
+            carried = carried * albedo;
+            // Isotropic scattering: any direction.
+            let (u, v) = (self.random(), self.random());
+            let z = 1.0 - 2.0 * u;
+            let ring = (1.0 - z * z).max(0.0).sqrt();
+            dir = Vec3::new(ring * (2.0 * PI * v).cos(), ring * (2.0 * PI * v).sin(), z);
+            // Russian roulette keeps long walks in dim material short.
+            if step >= 8 {
+                let survival = carried.x.max(carried.y).max(carried.z).clamp(0.05, 0.95);
+                if self.random() >= survival {
+                    return Color::default();
+                }
+                carried = carried * (1.0 / survival);
+            }
+        }
+        Color::default()
+    }
+
+    /// Light arriving at a point of a surface, as a white matte surface there returns it:
+    /// where a subsurface walk leaves the material.
+    fn light_leaving(&mut self, pos: Vec3, n: Vec3, depth: i32, bounces: u32) -> Color {
+        static MATTE: std::sync::OnceLock<Material> = std::sync::OnceLock::new();
+        let matte = MATTE.get_or_init(|| Material {
+            ggx: None, surface: None, color: Color::new(1.0, 1.0, 1.0), refl: 0.0, diff: 1.0, spec: 0.0,
+            refr: 0.0, ior: 1.0, drefl: 0.0, texture: None, ru_scale: 1.0, rv_scale: 1.0, bump: None,
+            displacement: None, glass: None, subsurface: None, maps: crate::scene::Maps::default(),
+        });
+        let at = Hit {
+            pos, dist: 0.0, color: Color::new(1.0, 1.0, 1.0), geo: n, smooth: n, original: n, entering: false,
+            diff: 1.0, refl: 0.0, refr: 0.0, m: matte, ggx: None, emission: Color::default(),
+        };
+        let mut light = self.direct_light(&at, -n, depth, bounces);
+        if self.indirect && bounces < self.bounces.max {
+            light += self.indirect_light(&at, -n, depth, bounces);
+        }
+        light
     }
 
     /// Returns the color seen by the ray and the distance to the hit point.
@@ -729,7 +986,7 @@ impl<'a> Tracer<'a> {
         if self.first_hit {
             self.primary = Primary { albedo: a.color.array(), normal: a.smooth.array(), depth: dist };
         }
-        let mut acc = if self.caustics_only { Color::default() } else { self.direct_light(&a, r.d, depth, bounces) };
+        let mut acc = if self.caustics_only { Color::default() } else { self.direct_light(&a, r.d, depth, bounces) + a.emission };
         if let Some(map) = self.caustics {
             if bounces == 0 && a.diff > 0.0 && r.d.dot(a.original) < 0.0 {
                 let (light, found) = map.irradiance(a.pos, a.original);
@@ -740,7 +997,12 @@ impl<'a> Tracer<'a> {
         }
         // The side that receives no direct light does not bounce light either.
         if self.indirect && bounces < self.bounces.max && a.diff > 0.0 && r.d.dot(a.original) < 0.0 {
-            acc += self.indirect_light(&a, depth, bounces);
+            acc += self.indirect_light(&a, r.d, depth, bounces);
+        }
+        if let (Some(sss), Some(ggx)) = (a.m.subsurface, a.ggx) {
+            if !self.caustics_only && bounces < self.bounces.max && r.d.dot(a.original) < 0.0 {
+                acc += self.subsurface(&a, r.d, sss, ggx, depth, bounces);
+            }
         }
         if depth < self.ctx.max_depth {
             self.first_hit = depth == 1 && bounces == 0;
@@ -842,6 +1104,7 @@ fn build_photon_map(scene: &Scene, kd: Option<&KdTree>, op: &Options, progress: 
             grid: 1.0,
             first_hit: false,
             primary: Primary::default(),
+            wavelength: None,
         };
         loop {
             let batch = next_batch.fetch_add(1, Relaxed) as u32;
@@ -1130,6 +1393,7 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
                 grid: grid as f32,
                 first_hit: false,
                 primary: Primary::default(),
+                wavelength: None,
             };
             loop {
                 if progress.cancel.load(Relaxed) {
@@ -1161,6 +1425,7 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
                             Ray { o: origin, d }
                         };
                         t.primary = Primary::default();
+                        t.wavelength = None;
                         let (c, _) = t.trace(&ray, 1, 0, true);
                         let p = (y * w + x) as usize;
                         if let Some(guide) = &guide {
@@ -1287,7 +1552,7 @@ mod tests {
             ctx: Context::with_fixes(scene, None, 5), fixed: true,
             has_glass: false, indirect: false, bounces: Bounces::for_scene(scene), caustics: None, caustic_strength: 1.0,
             caustics_only: false, photon_lookups: 0, photons_gathered: 0,
-            stratum: (0.0, 0.0), grid: 1.0, first_hit: false, primary: Primary::default(),
+            stratum: (0.0, 0.0), grid: 1.0, first_hit: false, primary: Primary::default(), wavelength: None,
         };
         tracer.trace(&Ray { o: Vec3::new(0.0, 0.0, -5.0), d: Vec3::new(0.0, 0.0, 1.0) }, 1, 0, allow_emission).0
     }
@@ -1297,7 +1562,7 @@ mod tests {
             ctx: Context::with_fixes(scene, None, depth), fixed: false,
             has_glass: false, indirect: false, bounces: Bounces::for_scene(scene), caustics: None, caustic_strength: 1.,
             caustics_only: false, photon_lookups: 0, photons_gathered: 0,
-            stratum: (0., 0.), grid: 1., first_hit: false, primary: Primary::default(),
+            stratum: (0., 0.), grid: 1., first_hit: false, primary: Primary::default(), wavelength: None,
         }
     }
 
@@ -1342,17 +1607,60 @@ mod tests {
     }
 
     #[test]
+    fn glass_keeps_its_color_over_its_absorption_depth() {
+        let mut m = test_scene(r#"{"lights":[],"objects":[{"type":"sphere","center":[0,0,5],"radius":1,"material":{"color":[0.2,0.6,0.9],"surface":{"preset":"glass","absorption_depth":0.5}}}]}"#).materials[0].clone();
+        let kept = absorption(&m, 0.5);
+        assert!((kept - Color::new(0.2, 0.6, 0.9)).length() < 1e-4);
+        assert!((absorption(&m, 1.0) - Color::new(0.04, 0.36, 0.81)).length() < 1e-4);
+        m.glass = None;
+        assert!(absorption(&m, 1.0).x < 1.0, "the original's glass still absorbs");
+    }
+
+    #[test]
+    fn scattering_albedo_is_monotone_and_spans_black_to_white() {
+        let low = scattering_albedo(Color::new(0.0, 0.0, 0.0));
+        let high = scattering_albedo(Color::new(0.999, 0.999, 0.999));
+        assert!(low.x.abs() < 1e-3 && high.x > 0.999);
+        let mut last = -1.0;
+        for i in 0..=20 {
+            let a = scattering_albedo(Color::new(i as f32 / 20.0, 0.0, 0.0)).x;
+            assert!(a >= last && a <= 1.0);
+            last = a;
+        }
+    }
+
+    #[test]
+    fn rays_pass_through_holes_an_alpha_map_cuts() {
+        let mut scene = test_scene(r#"{"lights":[],"objects":[{"type":"plane","points":[[-18,-18,5],[18,-18,5],[18,18,5],[-18,18,5]],"material":{"color":[1,1,1]}},{"type":"plane","points":[[-30,-30,9],[30,-30,9],[30,30,9],[-30,30,9]],"material":{"color":[1,1,1]}}]}"#);
+        // Half of each texture repeat open, half solid, along u; a plane's texture repeats
+        // every 18 units, so this plane spans two repeats.
+        let pixels = (0..64).map(|i| { let v = if i % 8 < 4 { 0.0 } else { 1.0 }; Color::new(v, v, v) }).collect();
+        scene.textures.push(crate::texture::Texture { width: 8, height: 8, image: pixels });
+        scene.materials[0].maps.alpha = Some(scene.textures.len() - 1);
+        scene.cutouts = true;
+        let mut tracer = environment_tracer(&scene, 1);
+        let mut through = 0;
+        for i in 0..20 {
+            let x = -16.15 + 1.7 * i as f32;
+            let ray = Ray { o: Vec3::new(x, 0.3, 0.0), d: Vec3::new(0.0, 0.0, 1.0) };
+            let (_, dist, _) = tracer.nearest(&ray, 100.0).expect("one of the planes");
+            if dist > 6.0 { through += 1; }
+        }
+        assert!(through > 4 && through < 16, "{through} of 20 rays passed through the holes");
+    }
+
+    #[test]
     fn environment_ggx_mis_matches_single_brdf_estimator_including_depth_limit() {
         let mut scene = test_scene(r#"{"lights":[],"objects":[{"type":"plane","points":[[-100,-100,5],[100,-100,5],[100,100,5],[-100,100,5]],"material":{"color":[0.8,0.8,0.8],"surface":{"preset":"metal","roughness":0.6}}}]}"#);
         set_constant_environment(&mut scene, true);
         let ray = Ray { o: Vec3::new(0., 0., -5.), d: Vec3::new(0., 0., 1.) };
-        let ggx = crate::ggx::Ggx { roughness: 0.6, metallic: 1. };
+        let ggx = crate::ggx::Ggx::new(0.6, 1.);
         let n = Vec3::new(0., 0., -1.);
         let mut expected = 0.;
         let count = 30000;
         for i in 0..count {
             if let Some((_, weight)) = ggx.sample(n, n, (i as f32 + 0.5) / count as f32,
-                0.37, Color::new(0.8, 0.8, 0.8), 1.5) {
+                0.37, 0.5, Color::new(0.8, 0.8, 0.8), 1.5) {
                 expected += weight.x * 0.25 / count as f32;
             }
         }

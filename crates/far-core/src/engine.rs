@@ -819,7 +819,7 @@ mod tests {
 
     #[test]
     fn a_large_displaced_scene_finds_the_same_hits_with_and_without_the_tree() {
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/scenes/displacement.far");
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/scenes/materials/displacement.far");
         let scene = Scene::open(std::path::Path::new(path)).unwrap();
         let kd = KdTree::build_corrected(&scene);
         let mut ctx = Context::with_fixes(&scene, Some(&kd), 1);

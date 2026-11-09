@@ -46,7 +46,7 @@ fn every_scene_renders_something_in_every_mode() {
 
 #[test]
 fn enhanced_render_does_not_depend_on_thread_count() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/cube.far");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/2008/cube.far");
     let scene = Scene::open(&path).unwrap();
     let kd = KdTree::build(&scene);
     let pixels = |threads| {
@@ -67,14 +67,24 @@ fn enhanced_render_does_not_depend_on_thread_count() {
 
 #[test]
 fn enhanced_mode_has_no_black_patches_on_meshes() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/rhino.far");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/2008/rhino.far");
     let scene = Scene::open(&path).unwrap();
     assert!(scene.corner_normals.len() == scene.prims.len());
     assert!(scene.corner_normals.iter().flatten().all(|n| n.x.is_finite() && n.y.is_finite() && n.z.is_finite()));
 }
 
-fn scene_path(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes").join(name)
+/// A scene by its file name, wherever it sits under `assets/scenes`: the examples are sorted
+/// into folders, and a test should not break when they move.
+fn scene_path(name: &str) -> std::path::PathBuf {
+    fn find(folder: &std::path::Path, file: &str) -> Option<std::path::PathBuf> {
+        let mut entries: Vec<_> = std::fs::read_dir(folder).ok()?.flatten().map(|e| e.path()).collect();
+        entries.sort();
+        entries.iter().find(|p| p.file_name().is_some_and(|n| n == file)).cloned()
+            .or_else(|| entries.iter().filter(|p| p.is_dir()).find_map(|p| find(p, file)))
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes");
+    let file = name.rsplit('/').next().unwrap_or(name);
+    find(&root, file).unwrap_or_else(|| root.join(name))
 }
 
 fn render_small(scene: &Scene, kd: Option<&KdTree>, mode: Mode) -> Vec<u8> {
@@ -427,7 +437,7 @@ fn photon_pass_honors_cancellation() {
 
 #[test]
 fn ggx_overrides_are_isolated_and_render_deterministically() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/ggx-materials.far");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/materials/ggx-materials.far");
     let original = Scene::open(&path).unwrap();
     let mut edited = original.clone();
     let id = edited.prims.last().unwrap().material();
@@ -451,7 +461,7 @@ fn ggx_overrides_are_isolated_and_render_deterministically() {
 
 #[test]
 fn hdri_render_controls_are_deterministic_and_preserve_historical_modes() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/hdri-studio.far");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/techniques/hdri-studio.far");
     let scene = Scene::open(&path).unwrap();
     let kd = KdTree::build(&scene);
     let pixels = |scene: &Scene, mode, threads| {
@@ -489,7 +499,7 @@ fn hdri_render_controls_are_deterministic_and_preserve_historical_modes() {
 
 #[test]
 fn denoiser_is_deterministic_and_only_touches_enhanced() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/hdri-studio.far");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/techniques/hdri-studio.far");
     let scene = Scene::open(&path).unwrap();
     let kd = KdTree::build(&scene);
     let pixels = |mode, samples, denoise, threads| {

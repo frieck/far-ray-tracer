@@ -1,0 +1,186 @@
+{
+ "camera": {
+  "position": [
+   0.4,
+   1.2,
+   -5.0
+  ],
+  "target": [
+   0.4,
+   0.2,
+   0.7
+  ],
+  "zoom": 1.1
+ },
+ "environment": {
+  "path": "../../environments/studio.hdr",
+  "intensity": 0.55,
+  "rotation": 160,
+  "visible": true
+ },
+ "lights": [
+  {
+   "type": "rectangle",
+   "position": [
+    -4.2,
+    3.8,
+    -2.4
+   ],
+   "edge_u": [
+    0,
+    1.2,
+    0
+   ],
+   "edge_v": [
+    -0.55,
+    0,
+    1.2
+   ],
+   "color": [
+    1,
+    0.94,
+    0.86
+   ],
+   "intensity": 22
+  }
+ ],
+ "objects": [
+  {
+   "type": "ground",
+   "position": [
+    0,
+    -0.5,
+    0
+   ],
+   "material": {
+    "color": [
+     0.72,
+     0.72,
+     0.7
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.6
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    -1.7,
+    0.15000000000000002,
+    0.7
+   ],
+   "radius": 0.65,
+   "material": {
+    "color": [
+     0.95,
+     0.95,
+     0.97
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.5
+    },
+    "roughness_map": "checker-roughness.png",
+    "scale_u": 0.5,
+    "scale_v": 0.5
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -0.3,
+    0.05,
+    0.9
+   ],
+   "size": [
+    1.0,
+    1.1,
+    1.0
+   ],
+   "rotation": [
+    0,
+    30,
+    0
+   ],
+   "material": {
+    "color": [
+     1.0,
+     0.8,
+     0.45
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.25
+    },
+    "metallic_map": "stripes-metallic.png"
+   }
+  },
+  {
+   "type": "torus",
+   "center": [
+    1.2,
+    -0.15,
+    0.4
+   ],
+   "major_radius": 0.55,
+   "minor_radius": 0.2,
+   "rotation": [
+    70,
+    0,
+    0
+   ],
+   "material": {
+    "color": [
+     0.1,
+     0.1,
+     0.12
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.4
+    },
+    "emission": {
+     "color": [
+      1,
+      0.6,
+      0.3
+     ],
+     "strength": 6,
+     "map": "bands-emission.png"
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    2.6,
+    0.45,
+    1.3
+   ],
+   "size": [
+    1.2,
+    1.9,
+    0.04
+   ],
+   "rotation": [
+    0,
+    -30,
+    0
+   ],
+   "material": {
+    "color": [
+     0.15,
+     0.4,
+     0.75
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3
+    },
+    "alpha_map": "grille-alpha.png"
+   }
+  }
+ ]
+}

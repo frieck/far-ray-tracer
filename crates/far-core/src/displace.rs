@@ -463,7 +463,7 @@ mod tests {
     use super::*;
 
     fn example() -> Scene {
-        Scene::open(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/scenes/displacement.far")))
+        Scene::open(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/scenes/materials/displacement.far")))
             .expect("the displacement example opens")
     }
 

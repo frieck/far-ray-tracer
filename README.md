@@ -88,13 +88,23 @@ and Custom takes any number up to 4096. Resolution offers common display sizes u
 and Custom takes any size up to 8192 pixels per side. The original image plane is 4:3, so
 other proportions show more of the scene along one axis instead of stretching it.
 
-Example scenes are in **File > Open Example**. Shortcuts: `Cmd/Ctrl+O` opens a scene,
-`Cmd/Ctrl+R` renders, `Cmd/Ctrl+S` saves a PNG and `Esc` cancels.
+Example scenes are in **File > Open Example**, in `assets/scenes`:
+
+| Menu | Folder | Scenes |
+| --- | --- | --- |
+| (top) | `assets/scenes` | Showcase, Cornell box, Christmas |
+| Materials | `materials` | Glass, Coatings, Subsurface, Maps, GGX materials, Bump maps, Displacement |
+| Techniques | `techniques` | Infinite ground, HDRI studio, Depth of field, Rectangular lights, Primitives |
+| From 2008 | `2008` | The final project's own scenes, including Rhino, Knot show and the thesis test scenes A and B |
+
+`2008/validation` and `debug` hold the simplest 2008 scenes, kept for the tests and the
+validation against the original but left out of the menu. Shortcuts: `Cmd/Ctrl+O` opens a
+scene, `Cmd/Ctrl+R` renders, `Cmd/Ctrl+S` saves a PNG and `Esc` cancels.
 
 ## Command line
 
 ```bash
-cargo run --release -p far-cli -- render assets/scenes/cube.far -o cube.png --enhanced --samples 64 --depth 5
+cargo run --release -p far-cli -- render assets/scenes/2008/cube.far -o cube.png --enhanced --samples 64 --depth 5
 ```
 
 Without `--fixed` or `--enhanced` it renders the 2008 stage. Run `far` with no arguments to
@@ -187,7 +197,7 @@ antialiasing, soft shadows and glossy reflection.
 
 Caustics are off by default. They work with glass and mirror objects, except that a light
 inside an object's bounding sphere, such as one above a large mirror floor, sends no photons
-at it. `assets/scenes/caustics.far` shows the effect.
+at it. `assets/scenes/2008/caustics.far` shows the effect.
 
 | Preset | Photons | Radius | Look |
 | --- | ---: | ---: | --- |
@@ -236,7 +246,7 @@ about 3 to 4 seconds on `cube`, `rhino` and `scene-b`.
 ## Scenes
 
 The app and command line use one format: `.far`, readable JSON.
-`tools/far_gen.py` can create scenes from Python. The format holds every primitive. `assets/scenes/primitives.far` is a complete example:
+`tools/far_gen.py` can create scenes from Python. The format holds every primitive. `assets/scenes/techniques/primitives.far` is a complete example:
 
 ```json
 {
@@ -281,7 +291,7 @@ an infinite `ground` instead:
 - It has no bounds, so it stays out of the KD-Tree and every ray tests it separately,
   which costs one dot product and one division. The 3D view draws it as a large square.
 - Photons for caustics are not aimed at it, so a mirror ground does not focus light.
-- Open File > Open Example > Infinite ground shows one under an HDR sky.
+- Open File > Open Example > Techniques > Infinite ground shows one under an HDR sky.
 
 Open File > Open Example > Cornell box is the classic test of indirect light, built by
 `tools/cornell_box.py`. The ceiling and the faces of the blocks that look away from the
@@ -348,7 +358,7 @@ sampling with GGX reflections, like panels. Fixed lights from the center for har
 Classic treats each one as a legacy point light. They do not emit caustic photons yet.
 Open `assets/scenes/christmas.far` for a scene lit by strings of them.
 
-Open **File > Open Example > Rectangular lights** for a two-panel studio scene with
+Open **File > Open Example > Techniques > Rectangular lights** for a two-panel studio scene with
 mirror and glass spheres. Enable Caustics to inspect the resulting photon map.
 
 Depth of field is available in Enhanced mode under **Camera > Depth of field**.
@@ -404,12 +414,12 @@ Camera moves last for the session; to keep one, add it to the scene:
 they stay comparable with the original. CLI overrides are `--camera X,Y,Z`,
 `--target X,Y,Z` and `--zoom N`.
 
-**File > Open Example > Depth of field** demonstrates objects at three distances.
+**File > Open Example > Techniques > Depth of field** demonstrates objects at three distances.
 Use High quality for smoother blur. CLI overrides are `--aperture` and
 `--focus-distance`, for example:
 
 ```bash
-cargo run --release -p far-cli -- render assets/scenes/depth-of-field.far -o dof.png --enhanced --samples 256 --aperture 1.2 --focus-distance 11.7
+cargo run --release -p far-cli -- render assets/scenes/techniques/depth-of-field.far -o dof.png --enhanced --samples 256 --aperture 1.2 --focus-distance 11.7
 ```
 
 Rules for all scenes:
@@ -457,17 +467,62 @@ Author persistent materials in a `.far` object's `material`:
 ```
 The surface also accepts `metallic` (0–1), `ior` (1–3), and optional `color`
 (three values in 0–1). Presets supply defaults; explicit values override them.
-Open `assets/scenes/ggx-materials.far` to compare roughness 0.12, 0.35 and 0.7.
+Open `assets/scenes/materials/ggx-materials.far` to compare roughness 0.12, 0.35 and 0.7.
 
-Opaque surfaces use isotropic, single-scattering GGX reflection, Smith masking,
-Schlick Fresnel and visible-normal importance sampling, with multiple importance sampling for
-rectangular emitters. This extends the existing integrator; it is not a replacement
-with a fully physically based path tracer. Glass retains clear legacy transmission;
-frosted glass and anisotropic brushed metal are not implemented. Higher roughness
-can require more samples. Legacy materials without `surface` keep their behavior.
+Opaque surfaces use single-scattering GGX reflection, Smith masking, Schlick Fresnel and
+visible-normal importance sampling, with multiple importance sampling for light sources.
+Higher roughness can require more samples. Legacy materials without `surface` keep their
+behavior.
 Classic and Fixed have no GGX, so they approximate these materials with a sharp mirror
 reflection of the same head-on strength. The historical C++ reference rejects modern
 surface materials explicitly.
+
+### Layered materials and glass (Enhanced)
+
+A `surface` can add layers over GGX, all off by default:
+
+| Key | Range | Effect |
+| --- | --- | --- |
+| `clearcoat` | 0–1 | A clear varnish over the base, as on car paint |
+| `clearcoat_roughness` | 0–1 | How blurred the varnish reflects (default 0.03) |
+| `sheen` | 0–1 | The soft grazing glow of cloth such as velvet |
+| `sheen_color` | three values, 0–1 | Its color (default white) |
+| `anisotropy` | −1–1 | Highlights stretched across (positive) or along (negative) the texture direction, as on brushed metal; around a sphere, the direction is its rings |
+| `anisotropy_rotation` | degrees | Turns that direction |
+| `subsurface` | 0–1 | Share of diffuse light that travels under the surface, as in wax, jade or skin |
+| `subsurface_radius` | scene units | Mean distance it travels between scatterings (default 0.1) |
+
+Glass (`"preset": "glass"`) takes `roughness` for frosted glass and two more keys:
+- `absorption_depth`: the distance through which light keeps the glass `color`, so thick
+  glass is deep and thin edges pale, and shadows through it are tinted (Beer's law).
+- `abbe`: the Abbe number, 5 to 100. Lower splits white light into a wider spectrum; real
+  glass is about 30 to 65. Paths through dispersive glass follow one wavelength each, so
+  edges and caustics show rainbows.
+
+A material can also vary over its surface with grayscale maps, read through its texture
+coordinates like the color texture:
+```json
+{
+  "surface": { "preset": "metal", "roughness": 0.5 },
+  "roughness_map": "checker-roughness.png",
+  "metallic_map": "stripes-metallic.png",
+  "emission": { "color": [1, 0.6, 0.3], "strength": 6, "map": "bands-emission.png" },
+  "alpha_map": "grille-alpha.png"
+}
+```
+`roughness_map` and `metallic_map` scale those values; `emission` makes the surface give off
+light, colored by its map; `alpha_map` cuts the surface away where the map is darker than half
+gray, and rays and shadows pass through the holes.
+
+How it works: the clear coat is a second GGX lobe whose reflection takes light from the base,
+picked at random in proportion to its Fresnel reflectance; sheen is added to the diffuse lobe;
+anisotropy uses two roughness values in a tangent frame measured from the texture coordinates;
+frosted glass refracts at a microfacet sampled from the visible normals; dispersion uses
+Cauchy's equation fitted to the IOR and Abbe number, and the CIE 1931 color matching
+functions to color each wavelength; subsurface light takes a random walk inside the object
+and gathers light where it leaves. The Materials panel edits all of these.
+`tools/materials.py` builds the Glass, Coatings, Subsurface and Maps examples, in
+`assets/scenes/materials`. Classic and Fixed ignore the layers and maps.
 
 ### Bump and normal maps (Enhanced)
 
@@ -492,7 +547,7 @@ the shading normal; the geometry and its silhouette do not change.
 
 The Materials panel shows the strength of a material that has a map; 0 turns it off.
 Changing only the strength keeps a 2008 material as it is. Classic and Fixed ignore the
-maps. Open `assets/scenes/bump-maps.far` for tiles (height map) and hammered metal (normal
+maps. Open `assets/scenes/materials/bump-maps.far` for tiles (height map) and hammered metal (normal
 map); `tools/bump_maps.py` builds its images.
 
 ### Displacement
@@ -527,7 +582,7 @@ Displacement is geometry, so every stage sees it, although Classic and Fixed sha
 displaced meshes by their facets. Scenes over 50 000 primitives build the KD-Tree with a
 sweep over primitive extents, and without the original's starting cost of 10 000, which
 left them with an empty tree; smaller scenes build exactly as before. The material preview
-displaces its ball at a lower detail. Open `assets/scenes/displacement.far`: a cobbled
+displaces its ball at a lower detail. Open `assets/scenes/materials/displacement.far`: a cobbled
 ground, a displaced sphere and box, and the same map as a bump on a smaller sphere, whose
 outline stays smooth. `tools/displacement_maps.py` builds it.
 
@@ -579,7 +634,7 @@ field is `path`; intensity defaults to 1, rotation to 0, and both switches to tr
 Intensity accepts 0–100. Maps are limited to 16,777,216 pixels; Radiance HDR is the
 supported input format, not EXR or an ordinary LDR panorama.
 
-Open **File → Open Example → Hdri Studio** (or `assets/scenes/hdri-studio.far`) for a scene lit
+Open **File → Open Example → Techniques → HDRI studio** (or `assets/scenes/techniques/hdri-studio.far`) for a scene lit
 only by the bundled environment. The synthetic studio map is generated by
 `python3 tools/generate_studio_hdr.py` and requires no external downloads.
 

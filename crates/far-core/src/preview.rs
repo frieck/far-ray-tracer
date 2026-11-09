@@ -156,8 +156,18 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    /// A scene by its file name, wherever it sits under `assets/scenes`: the examples are sorted
+    /// into folders, and a test should not break when they move.
     fn assets(name: &str) -> std::path::PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes").join(name)
+        fn find(folder: &std::path::Path, file: &str) -> Option<std::path::PathBuf> {
+            let mut entries: Vec<_> = std::fs::read_dir(folder).ok()?.flatten().map(|e| e.path()).collect();
+            entries.sort();
+            entries.iter().find(|p| p.file_name().is_some_and(|n| n == file)).cloned()
+                .or_else(|| entries.iter().filter(|p| p.is_dir()).find_map(|p| find(p, file)))
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes");
+        let file = name.rsplit('/').next().unwrap_or(name);
+        find(&root, file).unwrap_or_else(|| root.join(name))
     }
 
     #[test]

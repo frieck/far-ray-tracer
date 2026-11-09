@@ -7,27 +7,26 @@ Rendering techniques still to add. Effort is a rough guess: **low** is a day or 
 
 Visual gain for the effort:
 
-1. Rough and colored glass, then spectral dispersion: they complete glass, the heart of the
-   showcase and of the app icon.
+1. ~~Rough and colored glass, then spectral dispersion~~ (done, with every material below).
 2. ACES/AgX tone mapping and shaped bokeh: cheap, and every image gains.
 3. Volumes with light shafts: the largest change in atmosphere.
 4. glTF and OBJ import: opens the app to real scenes.
 
 ## Materials
 
-- [ ] **Rough glass**: GGX transmission, for frosted glass. Removes a limit the README
+- [x] **Rough glass**: GGX transmission, for frosted glass. Removes a limit the README
   states. Medium.
-- [ ] **Colored glass**: absorption that grows with thickness (Beer's law), like a green
+- [x] **Colored glass**: absorption that grows with thickness (Beer's law), like a green
   bottle. Low.
-- [ ] **Spectral dispersion**: glass splits light into a rainbow, as in the app icon.
+- [x] **Spectral dispersion**: glass splits light into a rainbow, as in the app icon.
   Needs rendering by wavelength. Medium.
-- [ ] **Subsurface scattering**: light that enters and spreads inside skin, wax, marble or
+- [x] **Subsurface scattering**: light that enters and spreads inside skin, wax, marble or
   jade. High.
-- [ ] **Clearcoat**: a varnish layer over the base, for car paint or varnished wood.
+- [x] **Clearcoat**: a varnish layer over the base, for car paint or varnished wood.
   Low to medium.
-- [ ] **Anisotropic GGX**: brushed metal. Medium.
-- [ ] **Sheen**: velvet and cloth. Medium.
-- [ ] **Full PBR maps**: roughness, metallic and emission from textures, and alpha cutouts
+- [x] **Anisotropic GGX**: brushed metal. Medium.
+- [x] **Sheen**: velvet and cloth. Medium.
+- [x] **Full PBR maps**: roughness, metallic and emission from textures, and alpha cutouts
   for leaves and grilles. Low to medium.
 
 ## Light and atmosphere
