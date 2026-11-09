@@ -149,6 +149,67 @@ fn bulb_factor(scene: &Scene, index: usize, direction: Vec3) -> f32 {
     }
 }
 
+/// Up to this many panels and bulbs, every point samples each of them. With more, as in a room
+/// lit by strings of bulbs, each point samples one, picked by the light it likely brings, and
+/// divides by the chance: one shadow ray instead of dozens, for far less noise in the same time.
+const ALL_LIGHTS_UP_TO: usize = 4;
+
+/// Panels and bulbs, panels first.
+fn emitter_count(scene: &Scene) -> usize {
+    scene.rect_lights.len() + scene.bulbs.len()
+}
+
+/// Roughly how much light panel or bulb `index` sends to `pos`: its brightness times the solid
+/// angle it covers, and for a panel the side it faces.
+fn emitter_weight(scene: &Scene, index: usize, pos: Vec3) -> f32 {
+    let luminance = |c: Color| (0.2126 * c.x + 0.7152 * c.y + 0.0722 * c.z).max(0.0);
+    if let Some(light) = scene.rect_lights.get(index) {
+        let to_point = pos - light.proxy.center;
+        let distance2 = to_point.dot(to_point).max(0.25 * light.area).max(1e-6);
+        let facing = (light.normal.dot(to_point) / distance2.sqrt() + 0.1).clamp(0.0, 1.1);
+        return luminance(scene.materials[light.proxy.material].color) * light.area * facing / distance2;
+    }
+    let bulb = index - scene.rect_lights.len();
+    let light = &scene.bulbs[bulb];
+    let to_point = pos - light.center;
+    let distance2 = to_point.dot(to_point).max(light.sq_radius).max(1e-6);
+    let aimed = bulb_factor(scene, bulb, to_point * (1.0 / distance2.sqrt()));
+    luminance(scene.materials[light.material].color) * PI * light.sq_radius * aimed / distance2
+}
+
+/// Picks one panel or bulb for `pos` with `u` in [0, 1): its index and the chance it had.
+fn pick_emitter(scene: &Scene, pos: Vec3, u: f32) -> Option<(usize, f32)> {
+    let count = emitter_count(scene);
+    let total: f32 = (0..count).map(|i| emitter_weight(scene, i, pos)).sum();
+    if !(total > 0.0 && total.is_finite()) {
+        return None;
+    }
+    let mut left = u * total;
+    let mut last = None;
+    for i in 0..count {
+        let weight = emitter_weight(scene, i, pos);
+        if weight <= 0.0 {
+            continue;
+        }
+        last = Some((i, weight / total));
+        left -= weight;
+        if left < 0.0 {
+            break;
+        }
+    }
+    last
+}
+
+/// The chance `pick_emitter` picks panel or bulb `index` at `pos`: 1 when every light is sampled.
+fn emitter_probability(scene: &Scene, pos: Vec3, index: usize) -> f32 {
+    let count = emitter_count(scene);
+    if count <= ALL_LIGHTS_UP_TO {
+        return 1.0;
+    }
+    let total: f32 = (0..count).map(|i| emitter_weight(scene, i, pos)).sum();
+    if total > 0.0 { emitter_weight(scene, index, pos) / total } else { 0.0 }
+}
+
 fn reflect(d: Vec3, n: Vec3) -> Vec3 {
     d - 2.0 * d.dot(n) * n
 }
@@ -650,7 +711,20 @@ impl<'a> Tracer<'a> {
                 acc += (highlight * a.m.spec / (50.0 - 50.0 * highlight + highlight)) * light_color;
             }
         }
-        for light in &scene.rect_lights {
+        // With many panels and bulbs, one is sampled, picked by the light it likely brings.
+        let picked = if !self.fixed && emitter_count(scene) > ALL_LIGHTS_UP_TO {
+            let u = self.random();
+            match pick_emitter(scene, a.pos, u) {
+                Some(pick) => Some(pick),
+                None => Some((usize::MAX, 1.0)),
+            }
+        } else {
+            None
+        };
+        let chosen = |index: usize| picked.is_none_or(|(k, _)| k == index);
+        let chance = picked.map_or(1.0, |(_, p)| p);
+        for (index, light) in scene.rect_lights.iter().enumerate() {
+            if !chosen(index) { continue; }
             let (u, v) = if self.fixed { (0.5, 0.5) } else { self.pair() };
             let target = light.point(u, v);
             let delta = target - a.pos;
@@ -666,11 +740,12 @@ impl<'a> Tracer<'a> {
             let shadow = target - start;
             let shadow_distance = shadow.length();
             let transmitted = self.visibility(start, shadow * (1.0 / shadow_distance), shadow_distance);
-            let radiance = scene.materials[light.proxy.material].color * transmitted * weight;
-            let light_pdf = distance * distance / (light.area * emission_cos);
+            let radiance = scene.materials[light.proxy.material].color * transmitted * (weight / chance);
+            let light_pdf = chance * distance * distance / (light.area * emission_cos);
             self.shade_area_light(&mut acc, a, d, depth, l, dot, radiance, Some(light_pdf), photons_carry);
         }
         for (index, light) in scene.bulbs.iter().enumerate() {
+            if !chosen(scene.rect_lights.len() + index) { continue; }
             let target = self.point_on_light(light, a.pos);
             let delta = target - a.pos;
             let distance = delta.length();
@@ -678,7 +753,7 @@ impl<'a> Tracer<'a> {
             let l = delta * (1.0 / distance);
             let dot = l.dot(a.original);
             if dot <= 0.0 { continue; }
-            let aimed = bulb_factor(scene, index, -l);
+            let aimed = bulb_factor(scene, index, -l) / chance;
             if aimed <= 0.0 { continue; }
             // Fixed lights from the center, as a disc of the bulb's radius seen head-on.
             let (weight, light_pdf) = if self.fixed {
@@ -688,7 +763,7 @@ impl<'a> Tracer<'a> {
                 if emission_cos <= 0.0 { continue; }
                 // Uniform samples on the half of the sphere that faces the point.
                 let area = 2.0 * PI * light.sq_radius;
-                (area * emission_cos / (PI * distance * distance), Some(distance * distance / (area * emission_cos)))
+                (area * emission_cos / (PI * distance * distance), Some(chance * distance * distance / (area * emission_cos)))
             };
             // Measured from the offset start, so the shadow ray stops short of the bulb itself.
             let start = a.pos + a.geo * SURFACE_OFFSET;
@@ -789,19 +864,21 @@ impl<'a> Tracer<'a> {
                         mis = crate::ggx::power_weight(ggx.pdf(a.smooth, -d, dir, a.color, a.m.ior), environment.pdf(dir));
                     }
                 }
-                for light in &self.ctx.scene.rect_lights {
+                let scene = self.ctx.scene;
+                for (index, light) in scene.rect_lights.iter().enumerate() {
                     if let Some(hit) = light.intersect(ray.o, dir, distance + SURFACE_OFFSET) {
                         if (hit - distance).abs() < SURFACE_OFFSET && -dir.dot(light.normal) > 0.0 {
-                            let light_pdf = hit * hit / (light.area * -dir.dot(light.normal));
+                            let light_pdf = emitter_probability(scene, a.pos, index) * hit * hit / (light.area * -dir.dot(light.normal));
                             mis = crate::ggx::power_weight(ggx.pdf(a.smooth, -d, dir, a.color, a.m.ior), light_pdf);
                         }
                     }
                 }
-                for light in &self.ctx.scene.bulbs {
+                for (index, light) in scene.bulbs.iter().enumerate() {
                     if let Some(hit) = light.intersect(ray.o, dir, distance + SURFACE_OFFSET) {
                         let cosine = -dir.dot((ray.o + dir * hit - light.center) * light.inv_radius);
                         if (hit - distance).abs() < SURFACE_OFFSET && cosine > 0.0 {
-                            let light_pdf = hit * hit / (2.0 * PI * light.sq_radius * cosine);
+                            let light_pdf = emitter_probability(scene, a.pos, scene.rect_lights.len() + index)
+                                * hit * hit / (2.0 * PI * light.sq_radius * cosine);
                             mis = crate::ggx::power_weight(ggx.pdf(a.smooth, -d, dir, a.color, a.m.ior), light_pdf);
                         }
                     }
@@ -1162,7 +1239,16 @@ impl<'a> Tracer<'a> {
             let transmitted = self.visibility(pos, l, distance);
             acc += scene.materials[light.material].color * transmitted * (PI * volume::phase(l.dot(d), g));
         }
-        for light in &scene.rect_lights {
+        let picked = if emitter_count(scene) > ALL_LIGHTS_UP_TO {
+            let u = self.random();
+            Some(pick_emitter(scene, pos, u).unwrap_or((usize::MAX, 1.0)))
+        } else {
+            None
+        };
+        let chosen = |index: usize| picked.is_none_or(|(k, _)| k == index);
+        let chance = picked.map_or(1.0, |(_, p)| p);
+        for (index, light) in scene.rect_lights.iter().enumerate() {
+            if !chosen(index) { continue; }
             let (u, v) = self.pair();
             let target = light.point(u, v);
             let delta = target - pos;
@@ -1170,11 +1256,12 @@ impl<'a> Tracer<'a> {
             let l = delta * (1.0 / distance);
             let emission_cos = -light.normal.dot(l);
             if emission_cos <= 0.0 { continue; }
-            let weight = light.area * emission_cos / (distance * distance);
+            let weight = light.area * emission_cos / (distance * distance * chance);
             let transmitted = self.visibility(pos, l, distance);
             acc += scene.materials[light.proxy.material].color * transmitted * (weight * volume::phase(l.dot(d), g));
         }
         for (index, light) in scene.bulbs.iter().enumerate() {
+            if !chosen(scene.rect_lights.len() + index) { continue; }
             let target = self.point_on_light(light, pos);
             let delta = target - pos;
             let distance = delta.length();
@@ -1182,7 +1269,7 @@ impl<'a> Tracer<'a> {
             let l = delta * (1.0 / distance);
             let emission_cos = -((target - light.center) * light.inv_radius).dot(l);
             if emission_cos <= 0.0 { continue; }
-            let aimed = bulb_factor(scene, index, -l);
+            let aimed = bulb_factor(scene, index, -l) / chance;
             if aimed <= 0.0 { continue; }
             let weight = 2.0 * PI * light.sq_radius * emission_cos * aimed / (distance * distance);
             let transmitted = self.visibility(pos, l, distance);
@@ -1865,6 +1952,35 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn many_lights_are_picked_by_the_light_they_bring() {
+        let christmas = Scene::open(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/scenes/christmas.far"))).unwrap();
+        assert!(emitter_count(&christmas) > ALL_LIGHTS_UP_TO);
+        let pos = Vec3::new(0.0, 0.0, 9.0);
+        let count = emitter_count(&christmas);
+        let total: f32 = (0..count).map(|i| emitter_probability(&christmas, pos, i)).sum();
+        assert!((total - 1.0).abs() < 1e-4, "{total}");
+        // Picks follow the chances.
+        let samples = 20_000;
+        let mut picked = vec![0u32; count];
+        for k in 0..samples {
+            let (i, p) = pick_emitter(&christmas, pos, (k as f32 + 0.5) / samples as f32).unwrap();
+            assert!((p - emitter_probability(&christmas, pos, i)).abs() < 1e-5);
+            picked[i] += 1;
+        }
+        for (i, &n) in picked.iter().enumerate() {
+            let expected = emitter_probability(&christmas, pos, i) * samples as f32;
+            assert!((n as f32 - expected).abs() <= 2.0, "light {i}: {n} vs {expected}");
+        }
+        // Nearer bulbs are likelier.
+        let near = (0..count).max_by(|&a, &b| emitter_probability(&christmas, pos, a).total_cmp(&emitter_probability(&christmas, pos, b))).unwrap();
+        assert!(emitter_probability(&christmas, pos, near) > 1.0 / count as f32);
+        // A few lights are all sampled every time.
+        let cornell = Scene::open(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/scenes/cornell-box.far"))).unwrap();
+        assert!(emitter_count(&cornell) <= ALL_LIGHTS_UP_TO);
+        assert_eq!(emitter_probability(&cornell, pos, 0), 1.0);
+    }
 
     #[test]
     fn bounce_settings_follow_the_lights_unless_overridden() {

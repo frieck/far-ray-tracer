@@ -14,6 +14,19 @@ and moves under its version when that version is released.
   it is saved to another folder.
 - A gallery of the example scenes in the README, rendered by `tools/screenshots.sh`.
 
+### Changed
+
+- **Faster rendering in Enhanced mode:**
+  - scenes with many lights sample one per point, picked by the light it brings: the Christmas
+    scene renders about 4.5 times faster, with less noise in the same time;
+  - the KD-Tree grows deeper with the scene and splits across any side, so meshes render about
+    a third faster;
+  - a displaced ground renders about 40% faster.
+- Caustics take at most 50 million photons (about 2 GB), and a model at most 20 million
+  triangles; larger values give a clear error instead of running out of memory.
+- Damaged scenes, models, IES files, `.3ds` meshes and HDR images are tested: each fails with an
+  error, never a crash.
+
 ### Fixed
 
 - `Cmd/Ctrl+S` and the Save Scene menu items did nothing in 3.0.0-beta.3 and beta.4; they now
@@ -22,13 +35,6 @@ and moves under its version when that version is released.
   closing the app.
 - Saved paths are right where folders are reached through a link (such as `/var` on macOS).
 - The update dialog shows only the new and current versions, with Later and Install.
-
-### Changed
-
-- Caustics take at most 50 million photons (about 2 GB), and a model at most 20 million
-  triangles; larger values give a clear error instead of running out of memory.
-- Damaged scenes, models, IES files, `.3ds` meshes and HDR images are tested: each fails with an
-  error, never a crash.
 
 ## [3.0.0-beta.4] - 2026-11-09
 

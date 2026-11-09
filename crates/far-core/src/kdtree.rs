@@ -9,7 +9,15 @@ use crate::scene::{Scene, Primitive, Triangle};
 use crate::vector::{Aabb, Vec3};
 use rayon::prelude::*;
 
+/// A split whose cost is above this share of the leaf's is poor enough to try the other axes.
+const POOR_SPLIT: f32 = 0.6;
+/// The original's depth limit, which Classic mode keeps to match it.
 const MAX_DEPTH: i32 = 20;
+/// The corrected tree grows deeper with the scene, so large meshes end in small leaves: the
+/// usual 8 + 1.3 log2(n) of KD-Tree builders, never below the original's limit.
+fn corrected_depth(primitives: usize) -> i32 {
+    ((8.0 + 1.3 * (primitives.max(1) as f32).log2()) as i32).clamp(MAX_DEPTH, 40)
+}
 const LEAF_AXIS: u32 = 3;
 /// Below this, splitting the work between threads does not pay off.
 const MIN_PARALLEL: usize = 256;
@@ -84,7 +92,8 @@ impl KdTree {
         // Infinite planes have no bounds; the traversal tests them on its own.
         let root: Vec<u32> = (0..scene.prims.len() as u32).rev().filter(|&i| !scene.grounds.contains(&(i as usize))).collect();
         let sweep_from = if scene.prims.len() > LARGE_SCENE { SWEEP_FROM } else { usize::MAX };
-        let tree = subdivide(scene, corrected, sweep_from, root, scene.extends, 0);
+        let max_depth = if corrected { corrected_depth(root.len()) } else { MAX_DEPTH };
+        let tree = subdivide(scene, corrected, sweep_from, max_depth, root, scene.extends, 0);
         let mut kd = KdTree { nodes: vec![Node { a: 0, b: LEAF_AXIS }], list: Vec::new() };
         kd.flatten(tree, 0);
         kd
@@ -304,22 +313,55 @@ fn sweep_counts(spans: &[(f32, f32)], candidates: &[f32]) -> (Vec<u32>, Vec<u32>
     }).unzip()
 }
 
-fn subdivide(scene: &Scene, corrected: bool, sweep_from: usize, list: Vec<u32>, bounds: Aabb, depth: i32) -> BuildNode {
+fn subdivide(scene: &Scene, corrected: bool, sweep_from: usize, max_depth: i32, list: Vec<u32>, bounds: Aabb, depth: i32) -> BuildNode {
     let n = list.len();
     let s = bounds.size;
-    let axis = if s.x >= s.y && s.x >= s.z {
+    let longest = if s.x >= s.y && s.x >= s.z {
         0
     } else if s.y >= s.x && s.y >= s.z {
         1
     } else {
         2
     };
+    // The original splits only across the longest side. The corrected tree also tries the
+    // other two and keeps the cheapest, so a bundle of long thin triangles (the side of a vase,
+    // say) still splits.
+    let mut split = best_split(scene, corrected, sweep_from, &list, bounds, longest);
+    // Most of the time the longest side splits well; the others are tried only when it does
+    // not, which keeps building about as fast as the original's.
+    if corrected && split.lowest > POOR_SPLIT * n as f32 {
+        let (a, b) = ((longest + 1) % 3, (longest + 2) % 3);
+        // Counted by extents, which is fast; exact counts here would make building slower.
+        let try_axis = |axis: usize| (s.cell(axis) > 0.0).then(|| best_split(scene, corrected, 0, &list, bounds, axis));
+        let (first, second) = if n >= MIN_PARALLEL { rayon::join(|| try_axis(a), || try_axis(b)) } else { (try_axis(a), try_axis(b)) };
+        for other in [first, second].into_iter().flatten() {
+            if other.lowest < split.lowest {
+                split = other;
+            }
+        }
+    }
+    let Split { axis, best, b1, b2, lowest, spans } = split;
+    finish(scene, corrected, sweep_from, max_depth, list, spans, axis, best, b1, b2, lowest, n as f32, depth)
+}
+
+/// The cheapest split of `list` across one axis, by the original's cost.
+struct Split {
+    axis: usize,
+    best: f32,
+    b1: Aabb,
+    b2: Aabb,
+    lowest: f32,
+    spans: Vec<(f32, f32)>,
+}
+
+fn best_split(scene: &Scene, corrected: bool, sweep_from: usize, list: &[u32], bounds: Aabb, axis: usize) -> Split {
+    let n = list.len();
     let pos1 = bounds.pos.cell(axis);
     let pos2 = bounds.pos.cell(axis) + bounds.size.cell(axis);
 
     let mut candidates = Vec::with_capacity(n * 2);
     let mut spans = Vec::with_capacity(n);
-    for &i in &list {
+    for &i in list {
         let p = &scene.prims[i as usize];
         spans.push(span(scene, p, axis));
         let mut add = |v: f32| {
@@ -350,11 +392,10 @@ fn subdivide(scene: &Scene, corrected: bool, sweep_from: usize, list: Vec<u32>, 
     let (left_counts, right_counts) = if n >= sweep_from {
         sweep_counts(&spans, &candidates)
     } else {
-        exact_counts(scene, corrected, &list, &spans, &candidates, bounds, axis, pos1, pos2)
+        exact_counts(scene, corrected, list, &spans, &candidates, bounds, axis, pos1, pos2)
     };
 
     let sav = 0.5 / bounds.semi_area();
-    let leaf_cost = n as f32;
     // The original starts from a cost of 10000. Past about 10000 primitives no split costs less,
     // and it splits into two empty boxes, losing everything; large scenes start from infinity.
     let mut lowest = if sweep_from == usize::MAX { 10000.0f32 } else { f32::INFINITY };
@@ -374,7 +415,7 @@ fn subdivide(scene: &Scene, corrected: bool, sweep_from: usize, list: Vec<u32>, 
             b2 = b4;
         }
     }
-    finish(scene, corrected, sweep_from, list, spans, axis, best, b1, b2, lowest, leaf_cost, depth)
+    Split { axis, best, b1, b2, lowest, spans }
 }
 
 /// The original's counts: each primitive tested exactly against the boxes of every candidate.
@@ -415,7 +456,7 @@ fn exact_counts(
 /// Makes a leaf, or splits `list` at `best` into the two boxes and builds both sides.
 #[allow(clippy::too_many_arguments)]
 fn finish(
-    scene: &Scene, corrected: bool, sweep_from: usize, list: Vec<u32>, spans: Vec<(f32, f32)>,
+    scene: &Scene, corrected: bool, sweep_from: usize, max_depth: i32, list: Vec<u32>, spans: Vec<(f32, f32)>,
     axis: usize, best: f32, b1: Aabb, b2: Aabb, lowest: f32, leaf_cost: f32, depth: i32,
 ) -> BuildNode {
     let n = list.len();
@@ -441,10 +482,10 @@ fn finish(
     right.reverse();
     drop(list);
 
-    let may_split = depth < MAX_DEPTH;
+    let may_split = depth < max_depth;
     let branch = |l: Vec<u32>, c: Aabb| {
         if may_split && l.len() > 2 {
-            subdivide(scene, corrected, sweep_from, l, c, depth + 1)
+            subdivide(scene, corrected, sweep_from, max_depth, l, c, depth + 1)
         } else {
             BuildNode::Leaf(l)
         }

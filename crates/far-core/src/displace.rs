@@ -403,8 +403,7 @@ const MAX_GROUND_STEPS: f32 = 1500.0;
 
 /// Intersection with a displaced ground, from above. Rays from below its base plane see the
 /// plain plane, as an undisplaced ground shows them.
-pub(crate) fn intersect_ground(scene: &Scene, prim: usize, g: &Ground, d: &Displacement, r: &Ray, dist: &mut f32) -> i32 {
-    let p = &scene.prims[prim];
+pub(crate) fn intersect_ground(scene: &Scene, _prim: usize, g: &Ground, d: &Displacement, r: &Ray, dist: &mut f32) -> i32 {
     let altitude0 = (r.o - g.point).dot(g.normal);
     if altitude0 < 0.0 || d.height <= 0.0 {
         return g.intersect(r.o, r.d, dist);
@@ -430,9 +429,16 @@ pub(crate) fn intersect_ground(scene: &Scene, prim: usize, g: &Ground, d: &Displ
         / scene.textures[d.texture].width.max(1) as f32;
     let across = (1.0 - climb * climb).max(0.0).sqrt().max(1e-3);
     let step = (0.5 * texel / across).max((end - start) / MAX_GROUND_STEPS);
+    // Along the ray, the texture coordinates and the altitude change linearly, so each step
+    // reads them from the start and the rate instead of finding them again from the point:
+    // this march is most of the work in a scene with a displaced ground.
+    let (u0, v0) = g.uv(r.o);
+    let (du, dv) = (r.d.dot(g.u_axis) / crate::scene::GROUND_TILE, r.d.dot(g.v_axis) / crate::scene::GROUND_TILE);
+    let (u_scale, v_scale) = (m.ru_scale, m.rv_scale);
+    let texture = &scene.textures[d.texture];
     let above = |t: f32| {
-        let pos = r.o + r.d * t;
-        (pos - g.point).dot(g.normal) - height_at(scene, p, d, pos)
+        let c = texture.texel_fixed((u0 + du * t) * u_scale, (v0 + dv * t) * v_scale);
+        altitude0 + climb * t - d.height * (c.x + c.y + c.z) / 3.0
     };
     // A ray that starts inside the relief, as one leaving the surface does, must first get out.
     let mut t = start;

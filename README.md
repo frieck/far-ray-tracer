@@ -286,6 +286,30 @@ Measured on an Apple M4 Max with 16 cores at 800 x 600, depth 3, in the 2008 sta
 
 The KD-Tree build always runs in parallel. Classic mode uses the same tree as the original;
 Fixed and Enhanced use one with the split-plane fix above, so each is built on first use.
+That tree also grows deeper with the scene (to about 8 + 1.3 log2 of its primitives, instead
+of the original's fixed 20 levels) and, where splitting across the longest side helps little,
+tries the other two sides, so dense meshes end in small leaves.
+
+Enhanced mode also:
+
+- samples one light per point when a scene has more than four panels and bulbs, picked by the
+  light each likely brings there (its brightness, size, distance, side and spotlight cone),
+  with multiple importance sampling against GGX reflections;
+- steps the march through a displaced ground with texture coordinates that change linearly
+  along the ray.
+
+At 800 × 600, against 3.0.0-beta.4 on the same machine:
+
+| Scene | Samples | Before | After |
+| --- | ---: | ---: | ---: |
+| Christmas (44 bulbs, 2 panels) | 16 | 33.5 s | 7.3 s |
+| Displacement | 32 | 13.4 s | 7.7 s |
+| Models (OBJ and glTF) | 32 | 4.6 s | 3.1 s |
+| Showcase | 32 | 6.1 s | 4.5 s |
+
+Scenes with few lights and no meshes render as before. Picking one light trades a little noise
+per sample for far fewer shadow rays: in the Christmas scene, the same render time leaves
+about 2.5 times less error.
 
 Fixed runs at about the same speed as the 2008 stage. Enhanced at 64 samples, depth 5, takes
 about 3 to 4 seconds on `cube`, `rhino` and `scene-b`.
