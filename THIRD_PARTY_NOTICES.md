@@ -25,3 +25,11 @@ The C++ reference uses nlohmann/json 3.12.0, vendored in
 `reference/cpp/vendor/json.hpp`. Copyright (c) 2013-2025 Niels Lohmann.
 Distributed under the MIT license in `reference/cpp/vendor/LICENSE.json`.
 Source: https://github.com/nlohmann/json/tree/v3.12.0
+
+## Intel Open Image Denoise and oneTBB
+
+The app carries Intel Open Image Denoise 2.5.1 and the oneTBB library it uses, from the
+official release (https://github.com/OpenImageDenoise/oidn/releases/tag/v2.5.1), fetched by
+`tools/fetch_oidn.sh`. Copyright (c) Intel Corporation. Both are distributed under the Apache
+License 2.0; the bundle includes the license and Intel's third-party notice in
+`oidn/licenses`. They are not covered by `LICENSE`.

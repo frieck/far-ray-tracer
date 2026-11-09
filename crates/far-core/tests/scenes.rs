@@ -556,3 +556,36 @@ fn only_enhanced_follows_a_moved_camera() {
         assert_eq!(pixels(mode, None), pixels(mode, Some(pose)));
     }
 }
+
+/// A region renders exactly the pixels a whole render has there, denoised or not, so
+/// switching between them shows no seam; outside it, the image is left alone.
+#[test]
+fn a_region_renders_the_same_pixels_as_the_whole_image() {
+    let scene = Scene::open(&scene_path("cornell-box.far")).unwrap();
+    let region = far_core::engine::Region { x0: 37, y0: 21, x1: 101, y1: 70 };
+    for (mode, denoise) in [(Mode::Enhanced, false), (Mode::Enhanced, true), (Mode::Classic, false)] {
+        let kd = KdTree::for_mode(&scene, mode);
+        let whole_options = Options { mode, width: 320, height: 240, samples: 8, denoise, threads: 3, ..Options::default() };
+        let whole = Image::new(320, 240);
+        render(&scene, Some(&kd), &whole_options, &whole, &Progress::default());
+        let part = Image::new(320, 240);
+        let options = Options { region: Some(region), threads: 2, ..whole_options };
+        let progress = Progress::default();
+        render(&scene, Some(&kd), &options, &part, &progress);
+        let (a, b) = (whole.rgba(), part.rgba());
+        for y in 0..240usize {
+            for x in 0..320usize {
+                let p = (y * 320 + x) * 4;
+                let inside = (37..101).contains(&x) && (21..70).contains(&y);
+                if inside {
+                    assert_eq!(a[p..p + 4], b[p..p + 4], "{mode:?}, denoise {denoise}: pixel {x},{y} differs");
+                }
+            }
+        }
+        // Far from the region nothing was traced.
+        assert_eq!(b[(239 * 320 + 319) * 4..][..3], [0, 0, 0], "{mode:?}: the far corner stayed black");
+        let tiles = progress.tiles_total.load(std::sync::atomic::Ordering::Relaxed);
+        let whole_tiles = if mode == Mode::Classic { 100 } else { 80 * 8 };
+        assert!(tiles * 3 < whole_tiles, "{mode:?}: {tiles} of {whole_tiles} tiles for a small region");
+    }
+}

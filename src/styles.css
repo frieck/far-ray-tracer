@@ -416,3 +416,10 @@ input[type="range"]::-webkit-slider-thumb {
 .material-stage-bar span { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
 .material-stage-bar .icon { width: 30px; height: 30px; }
 .material-stage-hint { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); padding: 4px 10px; border-radius: 999px; background: rgba(15, 16, 22, 0.55); color: var(--muted); font-size: 11px; white-space: nowrap; pointer-events: none; }
+
+/* Render region */
+.stage[data-drawing-region] { cursor: crosshair; }
+.region { position: absolute; border: 1.5px dashed rgba(255, 255, 255, 0.85); box-shadow: 0 0 0 100vmax rgba(8, 9, 12, 0.42); pointer-events: none; }
+.region[data-drawing] { border-color: var(--accent); }
+.region-clear { position: absolute; top: -11px; right: -11px; width: 22px; height: 22px; padding: 0; border-radius: 50%; background: rgba(15, 16, 22, 0.8); pointer-events: auto; }
+.render-views-gap { width: 1px; align-self: stretch; margin: 4px 2px; background: var(--edge); }

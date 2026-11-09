@@ -153,7 +153,7 @@ export function defaultSettings(cores: number): Settings {
     quality: 64,
     customPasses: 128,
     exposure: 1,
-    denoise: false,
+    denoise: true,
     bloom: false,
     caustics: false,
     causticPreset: "balanced",

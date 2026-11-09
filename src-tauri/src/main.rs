@@ -167,6 +167,12 @@ struct RenderRequest {
     caustics_only: bool,
     /// The image the Save command should write. Comparison renders do not count.
     keep: bool,
+    /// Renders only this rectangle, in pixels: [x0, y0, x1, y1], the end excluded.
+    #[serde(default)]
+    region: Option<[u32; 4]>,
+    /// Adaptive sampling: a pixel stops once its error is below this; 0 samples evenly.
+    #[serde(default)]
+    noise_threshold: f32,
 }
 
 #[derive(Serialize)]
@@ -186,6 +192,8 @@ struct RenderResult {
     rays: u64,
     cancelled: bool,
     caustics: Option<CausticReport>,
+    /// The denoiser the render used, if any.
+    denoiser: Option<far_core::engine::Denoiser>,
 }
 
 fn open_scene(path: &Path, state: &AppState) -> Result<SceneInfo, String> {
@@ -228,6 +236,21 @@ fn scenes_folder(app: &AppHandle) -> Option<PathBuf> {
     let bundled = app.path().resource_dir().ok().map(|d| d.join("assets/scenes"));
     let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/scenes");
     bundled.into_iter().chain([repository]).find(|p| p.is_dir())
+}
+
+/// Loads Intel Open Image Denoise from the app bundle, or from the checkout in development, on a
+/// thread of its own: it takes a moment, and until it is ready the engine's own filter denoises.
+fn load_denoiser(app: &AppHandle) {
+    let bundled = app.path().resource_dir().ok().map(|d| d.join("oidn/lib"));
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("oidn/lib");
+    let folder = bundled.into_iter().chain([repository]).find(|p| p.is_dir());
+    if let Some(folder) = folder {
+        std::thread::spawn(move || {
+            if let Err(e) = far_core::oidn::load(&folder) {
+                eprintln!("Denoising without Open Image Denoise: {e}");
+            }
+        });
+    }
 }
 
 /// Example folders and their submenu titles, in menu order.
@@ -643,6 +666,8 @@ fn render_scene(
         max_depth: request.depth,
         threads: request.threads.max(1),
         continuous_rng: false,
+        region: request.region.map(|[x0, y0, x1, y1]| far_core::engine::Region { x0, y0, x1, y1 }),
+        noise_threshold: request.noise_threshold,
     };
     let passes = if mode == Mode::Enhanced { request.samples } else { 1 };
     let image = Image::new(options.width, options.height);
@@ -690,6 +715,7 @@ fn render_scene(
         rays: progress.rays.load(Relaxed),
         cancelled: progress.cancel.load(Relaxed),
         caustics,
+        denoiser: *progress.denoiser.lock().unwrap(),
     })
 }
 
@@ -698,6 +724,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .setup(|app| {
+            load_denoiser(app.handle());
             let menu = build_menu(app.handle())?;
             app.set_menu(menu)?;
             Ok(())

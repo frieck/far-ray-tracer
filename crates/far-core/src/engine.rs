@@ -27,8 +27,43 @@ pub enum Mode {
     Enhanced,
 }
 
+/// A rectangle of the image in pixels, from (x0, y0) included to (x1, y1) excluded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct Region {
+    pub x0: u32,
+    pub y0: u32,
+    pub x1: u32,
+    pub y1: u32,
+}
+
+impl Region {
+    /// The part of the region inside an image of this size; None if nothing is left.
+    pub fn within(self, width: u32, height: u32) -> Option<Self> {
+        let r = Self { x0: self.x0.min(width), y0: self.y0.min(height), x1: self.x1.min(width), y1: self.y1.min(height) };
+        (r.x0 < r.x1 && r.y0 < r.y1).then_some(r)
+    }
+
+    /// The tiles of a grid of `tile` pixels that hold part of the region, widened by `margin`
+    /// tiles on each side: (first column, first row, end column, end row).
+    pub fn tiles(self, tile: u32, columns: u32, rows: u32, margin: u32) -> (u32, u32, u32, u32) {
+        (
+            (self.x0 / tile).saturating_sub(margin),
+            (self.y0 / tile).saturating_sub(margin),
+            (self.x1.div_ceil(tile) + margin).min(columns),
+            (self.y1.div_ceil(tile) + margin).min(rows),
+        )
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Options {
+    /// Renders only this part of the image; the rest of `image` is left as it is. Its pixels
+    /// come out exactly as in a whole render.
+    pub region: Option<Region>,
+    /// Adaptive sampling: a pixel stops taking samples once its estimated error falls below
+    /// this; `samples` is then the most a pixel takes. 0 samples every pixel equally.
+    /// Enhanced mode only.
+    pub noise_threshold: f32,
     /// Filters the finished image. Enhanced mode only.
     pub denoise: bool,
     /// Spreads very bright light into a soft halo. Enhanced mode only.
@@ -96,6 +131,8 @@ impl Default for Options {
             max_depth: 3,
             threads: std::thread::available_parallelism().map_or(1, |n| n.get()),
             continuous_rng: false,
+            region: None,
+            noise_threshold: 0.0,
         }
     }
 }
@@ -151,6 +188,17 @@ pub struct Progress {
     /// Reads of the photon map during the render, and the photons they used.
     pub photon_lookups: AtomicU64,
     pub photons_gathered: AtomicU64,
+    /// The denoiser the finished render used, if any.
+    pub denoiser: Mutex<Option<Denoiser>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Denoiser {
+    /// Intel Open Image Denoise.
+    Oidn,
+    /// The engine's own non-local means filter.
+    Builtin,
 }
 
 /// Largest tile, up to 32 pixels, that divides the image exactly.
@@ -719,7 +767,12 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
     let (w, h) = (op.width, op.height);
     let tile = tile_size(w, h);
     let (tiles_x, tiles_y) = (w / tile, h / tile);
-    let total = (tiles_x * tiles_y) as usize;
+    let (tx0, ty0, tx1, ty1) = match op.region.and_then(|r| r.within(w, h)) {
+        Some(r) => r.tiles(tile, tiles_x, tiles_y, 0),
+        None => (0, 0, tiles_x, tiles_y),
+    };
+    let columns = tx1 - tx0;
+    let total = (columns * (ty1 - ty0)) as usize;
     progress.tiles_done.store(0, Ordering::Relaxed);
     progress.tiles_total.store(total, Ordering::Relaxed);
     progress.rays.store(0, Ordering::Relaxed);
@@ -743,11 +796,12 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
             if i >= total {
                 break;
             }
+            let (tx, ty) = (tx0 + i as u32 % columns, ty0 + i as u32 / columns);
             if !op.continuous_rng {
-                // The seed depends only on the tile, so the image does not change with the thread count.
-                ctx.rng = Twister::new(DEFAULT_SEED ^ (i as u32).wrapping_mul(0x9e37_79b9));
+                // The seed depends only on the tile, so the image does not change with the
+                // thread count, and a region renders as it would in the whole image.
+                ctx.rng = Twister::new(DEFAULT_SEED ^ (ty * tiles_x + tx).wrapping_mul(0x9e37_79b9));
             }
-            let (tx, ty) = (i as u32 % tiles_x, i as u32 / tiles_x);
             // Sums in the original order so the points come out identical.
             let mut tdir = p1 + (ty * tile) as f32 * dy;
             for _ in 0..tx {

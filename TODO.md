@@ -46,9 +46,17 @@ Visual gain for the effort:
 
 ## Quality and speed
 
-- [ ] **Adaptive sampling**: stop sampling pixels that have converged; same quality,
-  faster. Medium.
-- [ ] **AI denoiser (Intel Open Image Denoise)**: the one in Blender and V-Ray; a large jump
+- [x] **Low-discrepancy sampling**: Owen-scrambled Sobol points for each decision of a
+  camera sample. Low to medium.
+- [x] **Adaptive sampling**: stop sampling pixels that have converged. In the command line
+  only (`--noise-threshold`): it saves little in these scenes, see the README. A better
+  error estimate (two half buffers, as in Cycles) could make it pay. Medium.
+- [ ] **Light cache for indirect light**: V-Ray's default; indirect light read from a
+  precomputed map instead of long paths, removing most of its noise. Slightly approximate.
+  High.
+- [ ] **Path guiding**: learn where light comes from and send bounces there, as Cycles does.
+  High.
+- [x] **AI denoiser (Intel Open Image Denoise)**: the one in Blender and V-Ray; a large jump
   in quality at few samples. Low to medium, but needs a native library.
 - [ ] **Bidirectional path tracing or progressive photon mapping**: hard caustics, such as
   light seen through glass. High.

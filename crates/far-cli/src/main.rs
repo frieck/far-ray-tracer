@@ -26,6 +26,8 @@ usage:
       --indirect-clamp N     most light one rebound brings back; 0 for no limit
                       (default: 10, or 1.5 with a 2008 light)
       --denoise       filter the finished image in enhanced mode
+      --noise-threshold N   adaptive sampling: a pixel stops once its error is below N
+                      (0.01 is a good start); --samples is then the most it takes
       --bloom         spread very bright light into a soft halo in enhanced mode
       --exposure N    brightness multiplier in enhanced mode (default 1)
       --aperture N    lens diameter in scene units; 0 disables depth of field
@@ -38,6 +40,7 @@ usage:
       --caustic-radius N    photon lookup radius, smaller is sharper (default 0.12)
       --caustic-strength N  multiplier of the caustic light (default 1)
       --caustics-only show only the caustic light
+      --region X0,Y0,X1,Y1  render only this rectangle of pixels; the rest stays black
   far material-ball <scene.far> <material index> -o <output.png> [--size N] [--samples N]
       render one of the scene's materials on the app's preview ball
   far geometry <scene.far> -o <output.json>
@@ -86,6 +89,7 @@ fn render_command(mut args: impl Iterator<Item = String>) {
                 options.indirect_clamp = Some(if limit > 0.0 { limit } else { f32::INFINITY });
             }
             "--denoise" => options.denoise = true,
+            "--noise-threshold" => options.noise_threshold = number(&mut args, &a),
             "--bloom" => options.bloom = true,
             "--aperture" => options.aperture = Some(number(&mut args, &a)),
             "--focus-distance" => options.focus_distance = Some(number(&mut args, &a)),
@@ -98,6 +102,12 @@ fn render_command(mut args: impl Iterator<Item = String>) {
             "--caustic-radius" => options.caustic_radius = number(&mut args, &a),
             "--caustic-strength" => options.caustic_strength = number(&mut args, &a),
             "--caustics-only" => options.caustics_only = true,
+            "--region" => {
+                let text = args.next().unwrap_or_default();
+                let values: Vec<u32> = text.split(',').filter_map(|v| v.parse().ok()).collect();
+                let [x0, y0, x1, y1] = values[..] else { fail("--region needs X0,Y0,X1,Y1") };
+                options.region = Some(far_core::engine::Region { x0, y0, x1, y1 });
+            }
             "--exact" => {
                 options.threads = 1;
                 options.continuous_rng = true;
@@ -125,6 +135,9 @@ fn render_command(mut args: impl Iterator<Item = String>) {
     for warning in &scene.warnings {
         eprintln!("warning: {warning}");
     }
+    if options.denoise {
+        load_denoiser();
+    }
     let t1 = Instant::now();
     let kd = options.use_kd.then(|| KdTree::for_mode(&scene, options.mode));
     let t2 = Instant::now();
@@ -142,6 +155,9 @@ fn render_command(mut args: impl Iterator<Item = String>) {
         (t3 - t2).as_millis(),
         progress.rays.load(Ordering::Relaxed)
     );
+    if let Some(denoiser) = *progress.denoiser.lock().unwrap() {
+        println!("denoiser={}", if denoiser == far_core::engine::Denoiser::Oidn { "oidn" } else { "builtin" });
+    }
     if let Some(stats) = *progress.photon_stats.lock().unwrap() {
         let lookups = progress.photon_lookups.load(Ordering::Relaxed);
         let gathered = progress.photons_gathered.load(Ordering::Relaxed);
@@ -201,6 +217,16 @@ fn material_ball(mut args: impl Iterator<Item = String>) {
         .unwrap_or_else(|e| fail(&format!("{output}: {e}")));
 }
 
+/// Loads Intel Open Image Denoise from `FAR_OIDN_DIR`, or from the folder `tools/fetch_oidn.sh`
+/// fills in a checkout. Without it, the engine's own filter denoises.
+fn load_denoiser() {
+    let folder = std::env::var_os("FAR_OIDN_DIR").map(std::path::PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src-tauri/oidn/lib"));
+    if let Err(e) = far_core::oidn::load(&folder) {
+        eprintln!("note: denoising without Open Image Denoise ({e})");
+    }
+}
+
 fn geometry(mut args: impl Iterator<Item = String>) {
     let (Some(scene), Some(_), Some(output)) = (args.next(), args.next(), args.next()) else {
         fail("geometry needs <scene.far> -o <output.json>");
@@ -217,21 +243,23 @@ fn compare(a: &str, b: &str) {
         fail("the images have different sizes");
     }
     let (w, h) = a.dimensions();
-    let (mut different, mut visible, mut largest) = (0u64, 0u64, 0i32);
+    let (mut different, mut visible, mut largest, mut squares) = (0u64, 0u64, 0i32, 0f64);
     for y in 1..h {
         for x in 1..w {
             let (p, q) = (a.get_pixel(x, y), b.get_pixel(x, y));
             let d = (0..3).map(|i| (p[i] as i32 - q[i] as i32).abs()).max().unwrap_or(0);
             different += (d > 0) as u64;
+            squares += (0..3).map(|i| (p[i] as f64 - q[i] as f64).powi(2)).sum::<f64>() / 3.0;
             visible += (d > 16) as u64;
             largest = largest.max(d);
         }
     }
     let total = ((w - 1) * (h - 1)) as f64;
     println!(
-        "different={different} ({:.3}%) above_16={visible} ({:.3}%) largest_difference={largest}",
+        "different={different} ({:.3}%) above_16={visible} ({:.3}%) largest_difference={largest} rmse={:.3}",
         100.0 * different as f64 / total,
-        100.0 * visible as f64 / total
+        100.0 * visible as f64 / total,
+        (squares / total).sqrt()
     );
 }
 

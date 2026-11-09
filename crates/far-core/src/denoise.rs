@@ -66,9 +66,27 @@ impl Guide {
         self.add(base + DEPTH, primary.depth);
     }
 
+    /// The sums of a rectangle of an image `width` pixels wide, as a guide of its own.
+    pub fn crop(&self, width: usize, x0: usize, y0: usize, x1: usize, y1: usize) -> Self {
+        let mut sums = Vec::with_capacity((x1 - x0) * (y1 - y0) * FIELDS);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let base = (y * width + x) * FIELDS;
+                sums.extend((0..FIELDS).map(|k| AtomicU32::new(self.sums[base + k].load(Relaxed))));
+            }
+        }
+        Self { sums }
+    }
+
     /// Mean of the squared luminance over `count` samples.
     pub fn mean_luminance2(&self, pixel: usize, count: u32) -> f32 {
         self.get(pixel * FIELDS + LUMA2) / count as f32
+    }
+
+    /// Mean albedo and normal of a pixel's first hits.
+    pub fn albedo_normal(&self, pixel: usize, count: u32) -> ([f32; 3], [f32; 3]) {
+        let f = self.feature(pixel, count);
+        (f.albedo, f.normal)
     }
 
     fn feature(&self, pixel: usize, count: u32) -> Feature {
@@ -145,14 +163,14 @@ pub fn denoise(
     mut color: Vec<[f32; 3]>,
     variance: Vec<f32>,
     guide: &Guide,
-    count: u32,
+    counts: &[u32],
     width: usize,
     height: usize,
     cancel: &AtomicBool,
 ) -> Option<Vec<[f32; 3]>> {
     remove_fireflies(&mut color, &variance, width, height);
     let variance = smooth(&variance, width, height);
-    let features: Vec<Feature> = (0..color.len()).map(|p| guide.feature(p, count)).collect();
+    let features: Vec<Feature> = (0..color.len()).map(|p| guide.feature(p, counts[p].max(1))).collect();
     let (w, h) = (width as i32, height as i32);
     let at = |x: i32, y: i32| y.clamp(0, h - 1) as usize * width + x.clamp(0, w - 1) as usize;
     let cells = ((2 * PATCH + 1) * (2 * PATCH + 1) * 3) as f32;
@@ -219,7 +237,7 @@ mod tests {
     }
 
     fn run(color: Vec<[f32; 3]>, variance: f32, guide: &Guide) -> Vec<[f32; 3]> {
-        denoise(color, vec![variance; SIZE * SIZE], guide, 1, SIZE, SIZE, &AtomicBool::new(false)).unwrap()
+        denoise(color, vec![variance; SIZE * SIZE], guide, &[1; SIZE * SIZE], SIZE, SIZE, &AtomicBool::new(false)).unwrap()
     }
 
     fn rmse(image: &[[f32; 3]], expected: impl Fn(usize) -> f32) -> f32 {
@@ -272,6 +290,6 @@ mod tests {
     fn cancelling_returns_nothing() {
         let color = vec![[0.5; 3]; SIZE * SIZE];
         let cancel = AtomicBool::new(true);
-        assert!(denoise(color, vec![0.0; SIZE * SIZE], &flat_guide(None), 1, SIZE, SIZE, &cancel).is_none());
+        assert!(denoise(color, vec![0.0; SIZE * SIZE], &flat_guide(None), &[1; SIZE * SIZE], SIZE, SIZE, &cancel).is_none());
     }
 }

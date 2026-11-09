@@ -16,6 +16,7 @@ pub mod enhanced;
 pub mod engine;
 pub mod kdtree;
 pub mod mesh3ds;
+pub mod oidn;
 pub mod preview;
 pub mod scene;
 mod scene_file;

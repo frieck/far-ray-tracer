@@ -44,14 +44,17 @@ jobs:
           - name: macOS (Apple Silicon)
             runner: macos-latest
             target: aarch64-apple-darwin
+            oidn: macos-arm64
             bundles: app,dmg
           - name: macOS (Intel)
             runner: macos-latest
             target: x86_64-apple-darwin
+            oidn: macos-x86_64
             bundles: app,dmg
           - name: Windows
             runner: windows-latest
             target: x86_64-pc-windows-msvc
+            oidn: windows-x64
             # Only the setup program: MSI versions cannot carry a label such as "beta".
             bundles: nsis
     runs-on: ${{ matrix.runner }}
@@ -68,6 +71,10 @@ jobs:
         with:
           key: ${{ matrix.target }}
       - run: npm ci
+      # The app carries Intel Open Image Denoise for its system.
+      - name: Fetch Open Image Denoise
+        shell: bash
+        run: tools/fetch_oidn.sh ${{ matrix.oidn }}
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

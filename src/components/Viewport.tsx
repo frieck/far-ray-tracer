@@ -1,10 +1,10 @@
 import { useEffect, useState, type CSSProperties, type PointerEvent, type ReactNode, type RefObject, useRef } from "react";
 import { formatNumber, prettyName } from "../format";
 import { MODE_NAMES } from "../settings";
-import type { Mode, Pose, SceneInfo } from "../types";
+import type { Area, Mode, Pose, SceneInfo } from "../types";
 import { GlassPanel } from "./GlassPanel";
 import { ViewGizmo } from "./ViewGizmo";
-import { Image, Shell, Sparkles } from "lucide-react";
+import { Crop, Image, Shell, Sparkles, X } from "lucide-react";
 
 interface ViewportProps {
   pickingFocus: boolean;
@@ -37,7 +37,15 @@ interface ViewportProps {
   /** The large material ball, when it is shown. */
   materialStage: ReactNode | null;
   onMaterialChange: (value: boolean) => void;
+  /** The part of the image that renders, or null for all of it. */
+  region: Area | null;
+  drawingRegion: boolean;
+  onDrawingRegionChange: (value: boolean) => void;
+  onRegionChange: (region: Area | null) => void;
 }
+
+/** Smallest region, as a fraction of each side, so a click does not make an empty one. */
+const MIN_REGION = 0.02;
 
 function plural(count: number, word: string): string {
   return `${formatNumber(count)} ${word}${count === 1 ? "" : "s"}`;
@@ -49,22 +57,56 @@ export function Viewport(props: ViewportProps) {
   const comparison = showPhotonMap || showMaterial || props.pickingFocus ? null : props.comparison;
   const [divider, setDivider] = useState(0.5);
   const drag = useRef<{ x: number; y: number; panning: boolean } | null>(null);
+  // While a region is drawn: where the drag started and the rectangle so far.
+  const regionStart = useRef<{ x: number; y: number } | null>(null);
+  const [draft, setDraft] = useState<Area | null>(null);
+  const regionTool = scene !== null && !showPhotonMap && !showMaterial;
+  const shownRegion = regionTool ? draft ?? props.region : null;
+
+  const fraction = (event: PointerEvent<HTMLDivElement>) => {
+    const box = event.currentTarget.getBoundingClientRect();
+    return {
+      x: Math.min(Math.max((event.clientX - box.left) / box.width, 0), 1),
+      y: Math.min(Math.max((event.clientY - box.top) / box.height, 0), 1),
+    };
+  };
+  const areaFrom = (a: { x: number; y: number }, b: { x: number; y: number }): Area =>
+    ({ x0: Math.min(a.x, b.x), y0: Math.min(a.y, b.y), x1: Math.max(a.x, b.x), y1: Math.max(a.y, b.y) });
 
   useEffect(() => setDivider(0.5), [comparison]);
 
   const startDrag = (event: PointerEvent<HTMLDivElement>) => {
+    if (props.drawingRegion && regionTool) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      regionStart.current = fraction(event);
+      setDraft(null);
+      return;
+    }
     if (!props.navigable) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     drag.current = { x: event.clientX, y: event.clientY, panning: event.shiftKey || event.button !== 0 };
   };
 
   const endDrag = () => {
+    if (regionStart.current) {
+      regionStart.current = null;
+      if (draft && draft.x1 - draft.x0 >= MIN_REGION && draft.y1 - draft.y0 >= MIN_REGION) {
+        props.onRegionChange(draft);
+        props.onDrawingRegionChange(false);
+      }
+      setDraft(null);
+      return;
+    }
     if (!drag.current) return;
     drag.current = null;
     props.onCameraRelease();
   };
 
   const moveDivider = (event: PointerEvent<HTMLDivElement>) => {
+    if (regionStart.current) {
+      setDraft(areaFrom(regionStart.current, fraction(event)));
+      return;
+    }
     if (drag.current) {
       const { x, y, panning } = drag.current;
       drag.current = { x: event.clientX, y: event.clientY, panning };
@@ -85,6 +127,7 @@ export function Viewport(props: ViewportProps) {
           data-comparing={comparison ? true : undefined}
           data-picking-focus={props.pickingFocus || undefined}
           data-navigable={props.navigable || undefined}
+          data-drawing-region={(props.drawingRegion && regionTool) || undefined}
           onPointerDown={startDrag}
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
@@ -117,10 +160,27 @@ export function Viewport(props: ViewportProps) {
           {props.pose && !comparison && !showPhotonMap && !showMaterial && (
             <ViewGizmo pose={props.pose} onAlign={props.navigable ? props.onAlignView : null} />
           )}
+          {shownRegion && (
+            <div className="region" data-drawing={draft ? true : undefined} style={{
+              left: `${shownRegion.x0 * 100}%`, top: `${shownRegion.y0 * 100}%`,
+              width: `${(shownRegion.x1 - shownRegion.x0) * 100}%`, height: `${(shownRegion.y1 - shownRegion.y0) * 100}%`,
+            }}>
+              {!draft && (
+                <button type="button" className="icon region-clear" aria-label="Render the whole image" title="Render the whole image"
+                  onClick={(event) => { event.stopPropagation(); props.onRegionChange(null); }}
+                  onPointerDown={(event) => event.stopPropagation()}>
+                  <X size={13} aria-hidden="true" />
+                </button>
+              )}
+            </div>
+          )}
+          {props.drawingRegion && regionTool && !draft && (
+            <p className="focus-hint" role="status">Drag over the image to choose the area to render. Esc cancels.</p>
+          )}
           {props.pickingFocus && <p className="focus-hint" role="status">{props.focusHint}</p>}
           {!scene && <p className="empty">Pick a scene to watch it render.</p>}
           {props.materialStage}
-          {(hasPhotonMap || props.canShowMaterial) && (
+          {scene && (
             <div className="render-views glass" role="group" aria-label="Render view" onClick={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()} onPointerMove={(event) => event.stopPropagation()}>
               <button type="button" className="icon" aria-label="Full render" title="Full render" aria-pressed={!showPhotonMap && !showMaterial}
                 onClick={() => { onPhotonMapChange(false); props.onMaterialChange(false); }}>
@@ -138,6 +198,13 @@ export function Viewport(props: ViewportProps) {
                   <Shell size={18} aria-hidden="true" />
                 </button>
               )}
+              <span className="render-views-gap" aria-hidden="true" />
+              <button type="button" className="icon" aria-label="Render region"
+                title={props.region ? "Render region · draw a new one; × renders the whole image" : "Render region · draw the area to render"}
+                aria-pressed={props.drawingRegion || props.region !== null} disabled={!regionTool}
+                onClick={() => props.onDrawingRegionChange(!props.drawingRegion)}>
+                <Crop size={18} aria-hidden="true" />
+              </button>
             </div>
           )}
         </div>

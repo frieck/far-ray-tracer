@@ -8,7 +8,7 @@ import { Renderer, type RenderJob, type RenderView } from "./renderer";
 import { alignView, dolly, orbit, pan, retarget } from "./orbit";
 import { SceneView, type PreviewScene } from "./sceneView";
 import { activeComparison, activeMode, buildPreview, buildRequest, defaultSettings, imageSize } from "./settings";
-import type { EnvironmentConfig, MenuAction, Pose, SceneInfo, Settings, Startup } from "./types";
+import type { Area, EnvironmentConfig, MenuAction, Pose, SceneInfo, Settings, Startup } from "./types";
 
 /** Waits for a pause in slider drags before starting a new render. */
 const SETTINGS_DELAY_MS = 180;
@@ -17,12 +17,17 @@ const WHEEL_END_MS = 250;
 
 const scenePose = ({ camera: { position, target, zoom } }: SceneInfo): Pose => ({ position, target, zoom });
 
-function buildJob(settings: Settings, moving: boolean): RenderJob {
+function buildJob(settings: Settings, moving: boolean, area: Area | null): RenderJob {
   if (moving) return { main: buildPreview(settings), comparison: null, preview: true };
   const comparison = activeComparison(settings);
+  const [width, height] = imageSize(settings);
+  // Whole pixels that cover the area.
+  const region: [number, number, number, number] | null = area && [
+    Math.floor(area.x0 * width), Math.floor(area.y0 * height), Math.ceil(area.x1 * width), Math.ceil(area.y1 * height),
+  ];
   return {
-    main: buildRequest(settings, activeMode(settings), true),
-    comparison: comparison && buildRequest(settings, comparison, false),
+    main: { ...buildRequest(settings, activeMode(settings), true), region },
+    comparison: comparison && { ...buildRequest(settings, comparison, false), region },
   };
 }
 
@@ -39,6 +44,11 @@ export function App() {
   const [renderedKey, setRenderedKey] = useState<string | null>(null);
   const [awaitingImage, setAwaitingImage] = useState(false);
   const [showPhotonMap, setShowPhotonMap] = useState(false);
+  /** The part of the image to render, or null for all of it. */
+  const [region, setRegion] = useState<Area | null>(null);
+  const [drawingRegion, setDrawingRegion] = useState(false);
+  /** Set when a region is drawn without auto-render: the next job renders at once. */
+  const renderOnNextJob = useRef(false);
   const [showMaterial, setShowMaterial] = useState(false);
   const [selectedMaterial, setSelectedMaterial] = useState<number | null>(null);
   const [pickingFocus, setPickingFocus] = useState(false);
@@ -81,6 +91,8 @@ export function App() {
           setShowPhotonMap(false);
           setShowMaterial(false);
           setSelectedMaterial(null);
+          setRegion(null);
+          setDrawingRegion(false);
           setSettings((old) => old && ({
             ...old,
             environment: info.environment,
@@ -123,7 +135,8 @@ export function App() {
   const liveReady = scene !== null && liveScene === scene;
 
   // Without WebGL, a small ray traced image follows the camera instead.
-  const job = useMemo(() => settings && buildJob(settings, movingCamera && !liveReady), [settings, movingCamera, liveReady]);
+  const job = useMemo(() => settings && buildJob(settings, movingCamera && !liveReady, region),
+    [settings, movingCamera, liveReady, region]);
   const [imageWidth, imageHeight] = settings ? imageSize(settings) : [4, 3];
   const jobKey = JSON.stringify(job);
   // Without WebGL there is nothing else to show, so every change renders.
@@ -133,6 +146,14 @@ export function App() {
     if (!next.preview) setRenderedKey(JSON.stringify(next));
     void renderer.render(next);
   }, [renderer]);
+
+  useEffect(() => {
+    if (!renderOnNextJob.current || !scene || !job) return;
+    renderOnNextJob.current = false;
+    start(job);
+    // `jobKey` stands for `job`: this runs once the job holds the new region.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobKey]);
 
   useEffect(() => {
     if (!scene || !job) return;
@@ -302,13 +323,14 @@ export function App() {
           focusRequest.current += 1;
           setPickingFocus(false);
           setFocusHint("");
-        } else if (showMaterial) setShowMaterial(false);
+        } else if (drawingRegion) setDrawingRegion(false);
+        else if (showMaterial) setShowMaterial(false);
         else void renderer.stop();
       }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [renderer, pickingFocus, showMaterial]);
+  }, [renderer, pickingFocus, showMaterial, drawingRegion]);
 
   return (
     <>
@@ -326,7 +348,8 @@ export function App() {
           focusHint={focusHint}
           onPickFocus={(x, y) => void pickFocus(x, y)}
           navigable={scene !== null && settings !== null && activeMode(settings) === "enhanced"
-            && !activeComparison(settings) && !pickingFocus && !(showPhotonMap && view.hasPhotonMap) && !materialStage}
+            && !activeComparison(settings) && !pickingFocus && !(showPhotonMap && view.hasPhotonMap) && !materialStage
+            && !drawingRegion}
           onCameraDrag={(panning, dx, dy, stageHeight) => moveCamera((pose) => panning
             ? pan(pose, dx, dy, stageHeight, imageWidth / imageHeight)
             : orbit(pose, dx, dy))}
@@ -347,6 +370,18 @@ export function App() {
           hasPhotonMap={view.hasPhotonMap}
           showPhotonMap={showPhotonMap && view.hasPhotonMap}
           canShowMaterial={canShowMaterial}
+          region={region}
+          drawingRegion={drawingRegion}
+          onDrawingRegionChange={(value) => {
+            focusRequest.current += 1;
+            setPickingFocus(false);
+            setDrawingRegion(value);
+          }}
+          onRegionChange={(area) => {
+            setRegion(area);
+            // Without auto-render, a new region renders at once; that is what it was drawn for.
+            if (area && !renderAlone) renderOnNextJob.current = true;
+          }}
           materialStage={materialStage}
           onMaterialChange={(value) => {
             focusRequest.current += 1;
@@ -373,6 +408,7 @@ export function App() {
             report={view.caustics}
             pickingFocus={pickingFocus}
             onPickFocus={() => {
+              setDrawingRegion(false);
               focusRequest.current += 1;
               setPickingFocus(!pickingFocus);
               setFocusHint("Click a surface to focus. Esc cancels.");

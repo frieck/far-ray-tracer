@@ -38,6 +38,7 @@ function summarize(result: RenderResult): string {
   const parts: string[] = [];
   if (result.kd_ms !== null) parts.push(`KD-Tree ${formatTime(result.kd_ms)}`);
   parts.push(`Render ${formatTime(result.render_ms)}`, formatRays(result.rays));
+  if (result.denoiser) parts.push(result.denoiser === "oidn" ? "Denoised by Open Image Denoise" : "Denoised");
   return (result.cancelled ? "Cancelled · " : "") + parts.join(" · ");
 }
 
@@ -89,8 +90,11 @@ function paintRender(
     if (header[0] === MESSAGE_BUILDING_KD) return;
     // A late frame of another resolution does not fit this canvas.
     if (buffer.byteLength !== HEADER_SIZE + canvas.width * canvas.height * 4) return;
-    const pixels = new Uint8ClampedArray(buffer, HEADER_SIZE);
-    context.putImageData(new ImageData(pixels, canvas.width, canvas.height), 0, 0);
+    const pixels = new ImageData(new Uint8ClampedArray(buffer, HEADER_SIZE), canvas.width, canvas.height);
+    // A region render paints only its rectangle; the last image stays around it.
+    const region = request.region;
+    if (region) context.putImageData(pixels, 0, 0, region[0], region[1], region[2] - region[0], region[3] - region[1]);
+    else context.putImageData(pixels, 0, 0);
     ambientContext?.drawImage(canvas, 0, 0, ambient!.width, ambient!.height);
   };
   return invoke<RenderResult>("render_scene", { request, channel });

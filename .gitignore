@@ -10,3 +10,7 @@ __pycache__/
 .env
 .env.*
 !.env.example
+
+# Open Image Denoise, fetched by tools/fetch_oidn.sh
+src-tauri/oidn/lib/
+src-tauri/oidn/licenses/

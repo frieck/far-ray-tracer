@@ -21,7 +21,8 @@ use crate::engine::{self, Context, Image, Mode, Options, PhotonStats, Progress, 
 use crate::twister::{Twister, DEFAULT_SEED};
 use crate::vector::{Color, Vec3, EPSILON, PI};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering::Relaxed};
+use rayon::prelude::*;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering::Relaxed};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -141,6 +142,139 @@ fn reflect(d: Vec3, n: Vec3) -> Vec3 {
     d - 2.0 * d.dot(n) * n
 }
 
+/// Adaptive sampling stops no pixel before this many passes.
+const MIN_ADAPTIVE_PASSES: u32 = 16;
+
+/// Per-pixel sums that estimate how noisy each pixel still is, and which pixels are done.
+struct Adaptive {
+    threshold: f32,
+    min_passes: u32,
+    /// Sum of the luminance of each pixel's samples, and of its square.
+    sums: Vec<AtomicU32>,
+    done: Vec<AtomicBool>,
+}
+
+impl Adaptive {
+    fn new(op: &Options, fixed: bool, samples: u32, pixels: usize) -> Option<Self> {
+        let min_passes = (samples / 16).max(MIN_ADAPTIVE_PASSES);
+        (!fixed && op.noise_threshold > 0.0 && samples > min_passes).then(|| Self {
+            threshold: op.noise_threshold,
+            min_passes,
+            sums: (0..pixels * 2).map(|_| AtomicU32::new(0)).collect(),
+            done: (0..pixels).map(|_| AtomicBool::new(false)).collect(),
+        })
+    }
+
+    /// Adds a sample, in displayed values. Each pixel belongs to one thread at a time.
+    fn record(&self, pixel: usize, sample: [f32; 3]) {
+        let l = denoise::luma(sample);
+        for (k, v) in [l, l * l].into_iter().enumerate() {
+            let cell = &self.sums[pixel * 2 + k];
+            cell.store((f32::from_bits(cell.load(Relaxed)) + v).to_bits(), Relaxed);
+        }
+    }
+
+    /// Estimated error of a pixel's mean: its standard error, relative to the square root
+    /// of its brightness, as the eye sees noise more in dark areas than a plain ratio says.
+    fn error(&self, pixel: usize, count: u32) -> f32 {
+        if count < 2 {
+            return f32::INFINITY;
+        }
+        let n = count as f32;
+        let mean = f32::from_bits(self.sums[pixel * 2].load(Relaxed)) / n;
+        let square = f32::from_bits(self.sums[pixel * 2 + 1].load(Relaxed)) / n;
+        let variance = (square - mean * mean).max(0.0) * n / (n - 1.0);
+        (variance / n).sqrt() / (mean.max(0.0) + 0.01).sqrt()
+    }
+
+    /// Marks done the pixels whose whole 3×3 neighborhood is below the threshold, so a
+    /// pixel that was merely lucky in its first samples keeps going. Returns how many
+    /// pixels of the rendered area still take samples.
+    fn converge(&self, counts: &[AtomicU32], width: usize, rendered: engine::Region) -> usize {
+        let (x0, y0, x1, y1) = (rendered.x0 as usize, rendered.y0 as usize, rendered.x1 as usize, rendered.y1 as usize);
+        let errors: Vec<f32> = (y0..y1).into_par_iter().flat_map_iter(|y| (x0..x1).map(move |x| (x, y)).collect::<Vec<_>>())
+            .map(|(x, y)| {
+                let p = y * width + x;
+                if self.done[p].load(Relaxed) { 0.0 } else { self.error(p, counts[p].load(Relaxed)) }
+            })
+            .collect();
+        let (rw, rh) = (x1 - x0, y1 - y0);
+        let mut active = 0;
+        for ry in 0..rh {
+            for rx in 0..rw {
+                let p = (y0 + ry) * width + x0 + rx;
+                if self.done[p].load(Relaxed) {
+                    continue;
+                }
+                let mut worst = 0.0f32;
+                for ny in ry.saturating_sub(1)..(ry + 2).min(rh) {
+                    for nx in rx.saturating_sub(1)..(rx + 2).min(rw) {
+                        worst = worst.max(errors[ny * rw + nx]);
+                    }
+                }
+                if worst < self.threshold {
+                    self.done[p].store(true, Relaxed);
+                } else {
+                    active += 1;
+                }
+            }
+        }
+        active
+    }
+}
+
+/// Decisions of a camera sample, in order, that come from low-discrepancy sequences; later
+/// ones, deep in a path, are plain random numbers.
+const SEQUENCE_DIMENSIONS: u32 = 48;
+
+/// The first two dimensions of the Sobol sequence, as 32-bit fractions.
+fn sobol(index: u32) -> (u32, u32) {
+    let (mut y, mut v) = (0u32, 1u32 << 31);
+    let mut i = index;
+    while i != 0 {
+        if i & 1 != 0 {
+            y ^= v;
+        }
+        v ^= v >> 1;
+        i >>= 1;
+    }
+    (index.reverse_bits(), y)
+}
+
+/// Owen scrambling by hashing (Burley 2020, after Laine and Karras): a random permutation
+/// that keeps the strata of a sequence, so each pixel gets its own, equally even, points.
+fn owen(x: u32, seed: u32) -> u32 {
+    let mut x = x.reverse_bits().wrapping_add(seed);
+    x ^= x.wrapping_mul(0x6c50_b47c);
+    x ^= x.wrapping_mul(0xb82f_1e52);
+    x ^= x.wrapping_mul(0xc7af_e638);
+    x ^= x.wrapping_mul(0x8d22_f6e6);
+    x.reverse_bits()
+}
+
+fn hash(a: u32, b: u32) -> u32 {
+    let mut h = a.wrapping_mul(0x9e37_79b1) ^ b.wrapping_mul(0x85eb_ca77).rotate_left(13);
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x7feb_352d);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x846c_a68b);
+    h ^ (h >> 16)
+}
+
+fn fraction(x: u32) -> f32 {
+    (x >> 8) as f32 * (1.0 / (1u32 << 24) as f32)
+}
+
+/// Sample `index` of a pixel's sequence for one decision, `dimension`: a scrambled 2D Sobol
+/// point. Each dimension also shuffles the order of the samples, so separate decisions, such
+/// as which light and which bounce, do not move in step from pass to pass.
+fn sequence_point(index: u32, pixel: u32, dimension: u32) -> (f32, f32) {
+    let seed = hash(pixel, dimension);
+    let shuffled = owen(index, hash(seed, 0x51ed));
+    let (x, y) = sobol(shuffled);
+    (fraction(owen(x, hash(seed, 0xa5a5))), fraction(owen(y, hash(seed, 0x3c3c))))
+}
+
 /// Share of light kept at each scattering under a surface, for a surface whose overall color
 /// under many scatterings is `color` (Chiang, Kutz and Burley 2016).
 fn scattering_albedo(color: Color) -> Color {
@@ -212,16 +346,36 @@ struct Tracer<'a> {
     primary: Primary,
     /// The wavelength this path follows, once it has crossed glass that disperses.
     wavelength: Option<f32>,
+    /// Pass and pixel of the camera sample being traced: its random numbers come from
+    /// low-discrepancy sequences, so successive passes cover each decision evenly.
+    sequence: Option<(u32, u32)>,
+    /// How many numbers this camera sample has drawn from its sequences.
+    dimension: u32,
 }
 
 impl<'a> Tracer<'a> {
     fn random(&mut self) -> f32 {
+        if let Some((pass, pixel)) = self.sequence {
+            if self.dimension < SEQUENCE_DIMENSIONS {
+                let d = self.dimension;
+                self.dimension += 1;
+                return sequence_point(pass, pixel, d).0;
+            }
+        }
         self.ctx.rng.rand()
     }
 
-    /// Pair of numbers in [0, 1), stratified at the first hit.
+    /// Pair of numbers in [0, 1). A camera sample takes them from a two-dimensional
+    /// low-discrepancy sequence; other paths, such as photons, are stratified at the first hit.
     fn pair(&mut self) -> (f32, f32) {
-        let (a, b) = (self.random(), self.random());
+        if let Some((pass, pixel)) = self.sequence {
+            if self.dimension < SEQUENCE_DIMENSIONS {
+                let d = self.dimension;
+                self.dimension += 1;
+                return sequence_point(pass, pixel, d);
+            }
+        }
+        let (a, b) = (self.ctx.rng.rand(), self.ctx.rng.rand());
         if self.first_hit {
             ((self.stratum.0 + a) / self.grid, (self.stratum.1 + b) / self.grid)
         } else {
@@ -1105,6 +1259,8 @@ fn build_photon_map(scene: &Scene, kd: Option<&KdTree>, op: &Options, progress: 
             first_hit: false,
             primary: Primary::default(),
             wavelength: None,
+            sequence: None,
+            dimension: 0,
         };
         loop {
             let batch = next_batch.fetch_add(1, Relaxed) as u32;
@@ -1199,14 +1355,39 @@ fn pass_sample(radiance: f32, exposure: f32, linear_hdr: bool) -> f32 {
 }
 
 /// Filters the accumulated image and writes it over the progressive one.
-fn apply_denoiser(sum: &[AtomicU32], guide: &Guide, count: u32, linear_hdr: bool, image: &Image, progress: &Progress) {
-    let pixels = image.pixels.len();
-    let mut color = Vec::with_capacity(pixels);
-    let mut variance = Vec::with_capacity(pixels);
-    for p in 0..pixels {
+/// Filters the rendered part of the image: all of it, or a region and its ring of tiles.
+fn apply_denoiser(sum: &[AtomicU32], guide: &Guide, counts: &[AtomicU32], linear_hdr: bool, image: &Image,
+    progress: &Progress, rendered: engine::Region) {
+    let width = image.width as usize;
+    let (x0, y0, x1, y1) = (rendered.x0 as usize, rendered.y0 as usize, rendered.x1 as usize, rendered.y1 as usize);
+    let whole = x0 == 0 && y0 == 0 && x1 == width && y1 == image.height as usize;
+    let cropped = (!whole).then(|| guide.crop(width, x0, y0, x1, y1));
+    let guide = cropped.as_ref().unwrap_or(guide);
+    let indices: Vec<usize> = (y0..y1).flat_map(|y| (x0..x1).map(move |x| y * width + x)).collect();
+    let mut color = Vec::with_capacity(indices.len());
+    let mut variance = Vec::with_capacity(indices.len());
+    let pixel_counts: Vec<u32> = indices.iter().map(|&p| counts[p].load(Relaxed).max(1)).collect();
+    if crate::oidn::available() {
+        // The network takes the mean color, linear when the scene is lit by an HDR image, and
+        // the albedo and normal of the first hits, which show it where edges and textures are.
+        let mean = |q: usize, p: usize| [0, 1, 2].map(|k| f32::from_bits(sum[p * 3 + k].load(Relaxed)) / pixel_counts[q] as f32);
+        let color: Vec<[f32; 3]> = indices.iter().enumerate().map(|(q, &p)| mean(q, p)).collect();
+        let (albedo, normal): (Vec<[f32; 3]>, Vec<[f32; 3]>) =
+            (0..indices.len()).map(|q| guide.albedo_normal(q, pixel_counts[q])).unzip();
+        if let Some(result) = crate::oidn::denoise(&color, &albedo, &normal, x1 - x0, y1 - y0, linear_hdr) {
+            for (&p, c) in indices.iter().zip(result) {
+                let c = if linear_hdr { c.map(shoulder) } else { c };
+                image.pixels[p].store(0xff00_0000 | channel(c[0]) | channel(c[1]) << 8 | channel(c[2]) << 16, Relaxed);
+            }
+            *progress.denoiser.lock().unwrap() = Some(engine::Denoiser::Oidn);
+            return;
+        }
+    }
+    for (q, &p) in indices.iter().enumerate() {
+        let count = pixel_counts[q];
         let mean = [0, 1, 2].map(|k| f32::from_bits(sum[p * 3 + k].load(Relaxed)) / count as f32);
         let brightness = denoise::luma(mean);
-        let spread = (guide.mean_luminance2(p, count) - brightness * brightness).max(0.) / (count - 1) as f32;
+        let spread = (guide.mean_luminance2(q, count) - brightness * brightness).max(0.) / (count.max(2) - 1) as f32;
         // The filter works on displayed values, where the shoulder compresses the noise.
         let slope = if linear_hdr {
             (shoulder(brightness + 0.01) - shoulder(brightness)) / 0.01
@@ -1216,10 +1397,10 @@ fn apply_denoiser(sum: &[AtomicU32], guide: &Guide, count: u32, linear_hdr: bool
         color.push(if linear_hdr { mean.map(shoulder) } else { mean });
         variance.push(spread * slope * slope);
     }
-    let Some(result) = denoise::denoise(color, variance, guide, count, image.width as usize,
-        image.height as usize, &progress.cancel) else { return };
-    for (pixel, c) in image.pixels.iter().zip(result) {
-        pixel.store(0xff00_0000 | channel(c[0]) | channel(c[1]) << 8 | channel(c[2]) << 16, Relaxed);
+    let Some(result) = denoise::denoise(color, variance, guide, &pixel_counts, x1 - x0, y1 - y0, &progress.cancel) else { return };
+    *progress.denoiser.lock().unwrap() = Some(engine::Denoiser::Builtin);
+    for (&p, c) in indices.iter().zip(result) {
+        image.pixels[p].store(0xff00_0000 | channel(c[0]) | channel(c[1]) << 8 | channel(c[2]) << 16, Relaxed);
     }
 }
 
@@ -1256,10 +1437,12 @@ fn box_blur(buffer: &mut [f32], width: usize, height: usize, radius: usize, hori
 }
 
 /// Spreads the light above the threshold into a halo and screens it over the image.
-fn apply_bloom(glow: &[AtomicU32], count: u32, image: &Image) {
+/// `counts` gives each pixel's samples when they differ; otherwise every pixel took `count`.
+fn apply_bloom(glow: &[AtomicU32], counts: Option<&[AtomicU32]>, count: u32, image: &Image) {
     let (width, height) = (image.width as usize, image.height as usize);
-    let source: Vec<f32> = glow.iter()
-        .map(|v| f32::from_bits(v.load(Relaxed)) / count as f32)
+    let samples = |i: usize| counts.map_or(count, |c| c[i / 3].load(Relaxed).max(1));
+    let source: Vec<f32> = glow.iter().enumerate()
+        .map(|(i, v)| f32::from_bits(v.load(Relaxed)) / samples(i) as f32)
         .map(|v| if v.is_finite() { v } else { 0.0 })
         .collect();
     if source.iter().all(|v| *v <= 0.0) {
@@ -1301,9 +1484,19 @@ fn accumulate_channel(sum: &AtomicU32, radiance: f32, exposure: f32, count: u32,
 pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, progress: &Progress) {
     let (w, h) = (op.width, op.height);
     let (tiles_x, tiles_y) = (w.div_ceil(TILE), h.div_ceil(TILE));
-    let total_tiles = (tiles_x * tiles_y) as usize;
     let fixed = op.mode == Mode::Fixed;
     let samples = if fixed { 1 } else { op.samples.max(1) };
+    let denoising = op.denoise && !fixed && samples >= denoise::MIN_PASSES;
+    // A region renders its tiles, plus a ring of tiles around it when the denoiser runs, so
+    // its edge filters against real neighbors instead of black.
+    let (tx0, ty0, tx1, ty1) = match op.region.and_then(|r| r.within(w, h)) {
+        Some(r) => r.tiles(TILE, tiles_x, tiles_y, denoising as u32),
+        None => (0, 0, tiles_x, tiles_y),
+    };
+    let columns = tx1 - tx0;
+    let total_tiles = (columns * (ty1 - ty0)) as usize;
+    let all_tiles = tiles_x * tiles_y;
+    let rendered = engine::Region { x0: tx0 * TILE, y0: ty0 * TILE, x1: (tx1 * TILE).min(w), y1: (ty1 * TILE).min(h) };
     // The strata form the smallest square grid that holds every sample. With a count
     // that is not a perfect square, some strata simply stay unused.
     let grid = (samples as f32).sqrt().ceil() as u32;
@@ -1320,6 +1513,7 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
     let origin = view.origin;
     progress.pass_index.store(0, Relaxed);
     *progress.photon_stats.lock().unwrap() = None;
+    *progress.denoiser.lock().unwrap() = None;
     *progress.photon_preview.lock().unwrap() = None;
     progress.photon_lookups.store(0, Relaxed);
     progress.photons_gathered.store(0, Relaxed);
@@ -1359,10 +1553,13 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
     // keeps scenes with several lights from turning white.
     let exposure = op.exposure / (scene.lights.len().max(1) as f32).powf(0.35);
     let linear_hdr = !fixed && scene.environment.as_ref().is_some_and(|e| e.active());
-    let guide = (op.denoise && !fixed && samples >= denoise::MIN_PASSES)
-        .then(|| Guide::new(w as usize * h as usize));
+    let guide = denoising.then(|| Guide::new(w as usize * h as usize));
     let glow: Option<Vec<AtomicU32>> = (op.bloom && !fixed)
         .then(|| (0..w as usize * h as usize * 3).map(|_| AtomicU32::new(0)).collect());
+    let pixels = w as usize * h as usize;
+    // Samples each pixel has taken: all the same, unless adaptive sampling stops some early.
+    let counts: Vec<AtomicU32> = (0..pixels).map(|_| AtomicU32::new(0)).collect();
+    let adaptive = Adaptive::new(op, fixed, samples, pixels);
 
     for pass_index in 0..samples {
         if progress.cancel.load(Relaxed) {
@@ -1394,6 +1591,8 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
                 first_hit: false,
                 primary: Primary::default(),
                 wavelength: None,
+                sequence: None,
+                dimension: 0,
             };
             loop {
                 if progress.cancel.load(Relaxed) {
@@ -1403,14 +1602,29 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
                 if i >= total_tiles {
                     break;
                 }
-                // The seed depends on the pass and the tile, so the image does not change with the threads.
-                let id = pass_index.wrapping_mul(total_tiles as u32).wrapping_add(i as u32 + 1);
+                let (tx, ty) = (tx0 + i as u32 % columns, ty0 + i as u32 / columns);
+                // The seed depends on the pass and the tile, so the image does not change with
+                // the threads, and a region renders as it would in the whole image.
+                let id = pass_index.wrapping_mul(all_tiles).wrapping_add(ty * tiles_x + tx + 1);
                 t.ctx.rng = Twister::new(DEFAULT_SEED ^ id.wrapping_mul(0x9e37_79b9));
-                let (x0, y0) = ((i as u32 % tiles_x) * TILE, (i as u32 / tiles_x) * TILE);
+                let (x0, y0) = (tx * TILE, ty * TILE);
                 for y in y0..(y0 + TILE).min(h) {
                     for x in x0..(x0 + TILE).min(w) {
+                        let p = (y * w + x) as usize;
+                        if adaptive.as_ref().is_some_and(|a| a.done[p].load(Relaxed)) {
+                            continue;
+                        }
+                        // Each camera sample draws from its own pixel's sequences, from the start.
+                        if !fixed {
+                            t.sequence = Some((pass_index, y * w + x));
+                            t.dimension = 0;
+                        }
                         let (ox, oy) = if samples == 1 {
                             (0.0, 0.0)
+                        } else if !fixed {
+                            // The first pair of the sequence places the sample in the pixel.
+                            let (a, b) = t.pair();
+                            (tent(a), tent(b))
                         } else {
                             let (a, b) = (t.random(), t.random());
                             (tent((sx + a) / grid as f32), tent((sy + b) / grid as f32))
@@ -1427,7 +1641,7 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
                         t.primary = Primary::default();
                         t.wavelength = None;
                         let (c, _) = t.trace(&ray, 1, 0, true);
-                        let p = (y * w + x) as usize;
+                        let count = counts[p].fetch_add(1, Relaxed) + 1;
                         if let Some(guide) = &guide {
                             let sample = [c.x, c.y, c.z].map(|v| pass_sample(v, exposure, linear_hdr));
                             guide.record(p, denoise::luma(sample), &t.primary);
@@ -1451,10 +1665,13 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
                                 total.store((f32::from_bits(total.load(Relaxed)) + excess).to_bits(), Relaxed);
                             }
                         }
+                        if let Some(adaptive) = &adaptive {
+                            adaptive.record(p, [c.x, c.y, c.z].map(|v| pass_sample(v, exposure, linear_hdr)));
+                        }
                         let mut rgba = 0xff00_0000u32;
                         for (k, radiance) in [c.x, c.y, c.z].into_iter().enumerate() {
                             rgba |= accumulate_channel(&sum[p * 3 + k], radiance, exposure,
-                                pass_index + 1, linear_hdr) << (8 * k);
+                                count, linear_hdr) << (8 * k);
                         }
                         image.pixels[p].store(rgba, Relaxed);
                     }
@@ -1473,15 +1690,22 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
             }
             worker();
         });
+        // Once every pixel has converged, the remaining passes would add nothing.
+        if let Some(adaptive) = &adaptive {
+            if pass_index + 1 >= adaptive.min_passes && !progress.cancel.load(Relaxed)
+                && adaptive.converge(&counts, w as usize, rendered) == 0 {
+                break;
+            }
+        }
     }
     if let Some(guide) = &guide {
         if !progress.cancel.load(Relaxed) {
-            apply_denoiser(&sum, guide, samples, linear_hdr, image, progress);
+            apply_denoiser(&sum, guide, &counts, linear_hdr, image, progress, rendered);
         }
     }
     if let Some(glow) = &glow {
         if !progress.cancel.load(Relaxed) {
-            apply_bloom(glow, samples, image);
+            apply_bloom(glow, Some(&counts), samples, image);
         }
     }
 }
@@ -1552,7 +1776,7 @@ mod tests {
             ctx: Context::with_fixes(scene, None, 5), fixed: true,
             has_glass: false, indirect: false, bounces: Bounces::for_scene(scene), caustics: None, caustic_strength: 1.0,
             caustics_only: false, photon_lookups: 0, photons_gathered: 0,
-            stratum: (0.0, 0.0), grid: 1.0, first_hit: false, primary: Primary::default(), wavelength: None,
+            stratum: (0.0, 0.0), grid: 1.0, first_hit: false, primary: Primary::default(), wavelength: None, sequence: None, dimension: 0,
         };
         tracer.trace(&Ray { o: Vec3::new(0.0, 0.0, -5.0), d: Vec3::new(0.0, 0.0, 1.0) }, 1, 0, allow_emission).0
     }
@@ -1562,7 +1786,7 @@ mod tests {
             ctx: Context::with_fixes(scene, None, depth), fixed: false,
             has_glass: false, indirect: false, bounces: Bounces::for_scene(scene), caustics: None, caustic_strength: 1.,
             caustics_only: false, photon_lookups: 0, photons_gathered: 0,
-            stratum: (0., 0.), grid: 1., first_hit: false, primary: Primary::default(), wavelength: None,
+            stratum: (0., 0.), grid: 1., first_hit: false, primary: Primary::default(), wavelength: None, sequence: None, dimension: 0,
         }
     }
 
@@ -1762,16 +1986,16 @@ mod tests {
         let image = Image::new(64, 64);
         for pixel in image.pixels.iter() { pixel.store(0xff20_2020, Relaxed); }
         let glow: Vec<AtomicU32> = (0..64 * 64 * 3).map(|_| AtomicU32::new(0)).collect();
-        apply_bloom(&glow, 1, &image);
+        apply_bloom(&glow, None, 1, &image);
         assert!(image.pixels.iter().all(|p| p.load(Relaxed) == 0xff20_2020), "nothing above white, nothing changes");
         let center = (32 * 64 + 32) * 3;
         for k in 0..3 { glow[center + k].store(200f32.to_bits(), Relaxed); }
-        apply_bloom(&glow, 1, &image);
+        apply_bloom(&glow, None, 1, &image);
         let red = |x: usize, y: usize| image.pixels[y * 64 + x].load(Relaxed) & 0xff;
         assert!(red(32, 32) > red(34, 32) && red(34, 32) > red(40, 32) && red(40, 32) > 0x20);
         assert_eq!(red(31, 32), red(33, 32), "the halo is symmetric");
         glow[center].store(f32::NAN.to_bits(), Relaxed);
-        apply_bloom(&glow, 1, &image);
+        apply_bloom(&glow, None, 1, &image);
         assert!(red(60, 60) < 0xff, "an invalid value does not spread");
     }
 

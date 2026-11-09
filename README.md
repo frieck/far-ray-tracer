@@ -59,6 +59,7 @@ Actions and attaches them to a draft release named after the app version.
 - [Node.js](https://nodejs.org), tested with 24
 - The [Tauri system dependencies](https://tauri.app/start/prerequisites/) on Linux
 - A C++ compiler, only to run the validation against the original engine
+- Optionally, Intel Open Image Denoise for the best denoising: run `tools/fetch_oidn.sh` once
 
 ## Running the app
 
@@ -394,6 +395,19 @@ With the default camera at `(0, 0, -5)`, distance 11.7 puts the focus plane at w
 `z = 6.7`. Classic and Fixed always use the original pinhole camera. The photon map
 preview also remains a sharp point projection for inspection.
 
+### Render region
+
+To tune a material or a light without waiting for the whole image, render only part of it:
+the crop button at the bottom right of the image turns on the region tool; drag over the
+image to choose the area. It renders at once, and every later render, by hand or with
+Auto-render, covers only that area while the rest keeps the last image, dimmed. The × on
+the region's corner, or a new scene, goes back to the whole image; `Esc` cancels drawing.
+
+A region renders exactly the pixels a whole render has there: each tile keeps its own
+random seed, and with Denoise on, a ring of tiles around the region gives the filter real
+neighbors at its edge. It works in every stage. The command line takes
+`--region X0,Y0,X1,Y1`, in pixels.
+
 ### Moving the camera (Enhanced)
 
 Drag the image to orbit around the objects, Shift-drag or right-drag to pan, and scroll to
@@ -588,8 +602,18 @@ outline stays smooth. `tools/displacement_maps.py` builds it.
 
 ### Denoising (Enhanced)
 
-**Denoise** is off by default, and the app suggests it when HDR lighting is active; the
-command line uses `--denoise`. It runs once,
+**Denoise** is on by default in the app, which suggests turning it back on when it is off
+and HDR lighting is active; the command line uses `--denoise`.
+
+It uses **Intel Open Image Denoise** (OIDN), the denoiser of Blender's Cycles and of V-Ray: a
+neural network that takes each pixel's mean color and the albedo and normal of its first hits.
+The app carries OIDN 2.5.1 for its system, about 50 MB; the status bar says when it denoised
+an image. Against 2048-pass references it leaves 10% to 19% less error than the built-in filter
+below, and keeps edges and texture better. In a checkout, `tools/fetch_oidn.sh` downloads the
+official release into `src-tauri/oidn` (checked by SHA-256), where the app build and the command
+line find it; `FAR_OIDN_DIR` points the command line elsewhere.
+
+Without the library, the engine uses its own filter. It runs once,
 after the last pass, so the image sharpens up at the end of the render. Each pixel records
 the variance of its samples and the color, normal and depth of the first surface it hit.
 A non-local means filter then averages similar neighbors: a difference counts as detail
@@ -599,6 +623,25 @@ renders untouched. It costs about 1 second at 1920x1080. Classic and Fixed never
 
 On `hdri-studio.far` at 64 passes it cuts isolated bright pixels from 365 to 35. Scenes
 that are already clean gain nothing, and fine noise-like detail in reflections can soften.
+
+### Sampling (Enhanced)
+
+Each pixel's random decisions in a camera sample, where the sample falls in the pixel, which
+point of a light, which bounce, come from low-discrepancy sequences instead of independent
+random numbers: 2D Sobol points with hash-based Owen scrambling (Burley 2020), and the order
+of the samples shuffled per decision, so separate decisions do not move in step. Successive
+passes then cover each decision evenly. The first 48 decisions of a path use them; deeper
+ones, plain random numbers. At 64 passes, against a 2048-pass reference, this cuts the error
+by 34% under rectangular lights (about the gain of 2.3 times the passes) and by a few percent
+where long paths dominate, as under the surface of wax.
+
+The command line also has adaptive sampling, `--noise-threshold N`: a pixel stops once the
+estimated error of its mean, relative to the square root of its brightness, is below N in its
+whole 3×3 neighborhood, with `--samples` as the most it takes. In this program's scenes it
+saves little: the pixels that converge first, such as the background, are the cheapest ones,
+and the expensive ones, under indirect light, do not converge with a strict threshold within a
+few hundred passes; a loose one stops pixels with rare bright paths too early. So the app
+renders every pixel equally.
 
 ### Bloom (Enhanced)
 

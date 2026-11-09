@@ -88,7 +88,12 @@ export interface MenuAction {
   path: string | null;
 }
 
+/** A part of the image, as fractions of its width and height. */
+export interface Area { x0: number; y0: number; x1: number; y1: number }
+
 export interface RenderRequest {
+  /** Renders only this rectangle, in pixels: [x0, y0, x1, y1], the end excluded. */
+  region?: [number, number, number, number] | null;
   environment: EnvironmentConfig | null;
   material_overrides: MaterialOverride[];
   pose: Pose;
@@ -131,6 +136,8 @@ export interface RenderResult {
   rays: number;
   cancelled: boolean;
   caustics: CausticReport | null;
+  /** The denoiser the render used, if any. */
+  denoiser: "oidn" | "builtin" | null;
 }
 
 export interface Settings {
