@@ -38,6 +38,8 @@ Each image is an example in the app, rendered by `tools/screenshots.sh` with AgX
 Denoise.
 
 What changed in each version is in [CHANGELOG.md](CHANGELOG.md).
+How to work on the project, check changes, write the changelog and release is in
+[AGENTS.md](AGENTS.md).
 
 ## Download
 
@@ -59,17 +61,9 @@ before the first launch:
 ### Making a release
 
 `.github/workflows/release.yml` tests the engine, builds the three versions on GitHub
-Actions and attaches them to a draft release named after the app version.
-
-1. Set the new version in `package.json`, `Cargo.toml` (workspace) and
-   `src-tauri/tauri.conf.json`, and commit.
-2. Push a tag with that version; the workflow stops if they differ:
-   ```bash
-   git tag v3.0.0 && git push origin v3.0.0
-   ```
-   A labelled version, such as `3.0.0-beta.1`, becomes a pre-release. It can also be
-   started by hand from the Actions tab.
-3. When the builds finish, review the draft on the releases page and publish it.
+Actions and attaches them to a draft release named after the app version, with notes taken
+from `CHANGELOG.md`. The steps, from the changelog to publishing, are in
+[AGENTS.md](AGENTS.md#releases).
 
 #### Updates
 
