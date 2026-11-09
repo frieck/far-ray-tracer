@@ -1,5 +1,5 @@
 import {
-  Camera, Cpu, Crosshair, Download, FolderOpen, Gauge, History, Palette, Play, RotateCcw, Search, SlidersHorizontal, Square,
+  Camera, Cpu, Crosshair, Download, FolderOpen, Gauge, History, Palette, Play, RotateCcw, Save, Search, SlidersHorizontal, Square,
   Sun, X, type LucideIcon,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -56,6 +56,7 @@ interface ControlPanelProps {
   outdated: string | false;
   onCancel: () => void;
   onSave: () => void;
+  onSaveScene: () => void;
   /** The material the editor shows; null picks the first. */
   selectedMaterial: number | null;
   onSelectMaterial: (id: number) => void;
@@ -109,10 +110,16 @@ export function ControlPanel(props: ControlPanelProps) {
   return (
     <GlassPanel className="panel" aria-label="Render options">
       <div className="panel-top">
-        <button type="button" className="ghost" onClick={onOpen}>
-          <FolderOpen size={15} aria-hidden="true" />
-          Open scene…
-        </button>
+        <div className="actions">
+          <button type="button" className="ghost open-scene" onClick={onOpen}>
+            <FolderOpen size={15} aria-hidden="true" />
+            Open scene…
+          </button>
+          <button type="button" className="icon" disabled={!props.scene} aria-label="Save scene" title="Save scene (⌘S)"
+            onClick={props.onSaveScene}>
+            <Save size={16} aria-hidden="true" />
+          </button>
+        </div>
         <div className="actions">
           <button
             type="button"
@@ -123,7 +130,7 @@ export function ControlPanel(props: ControlPanelProps) {
             {rendering ? <Square size={14} aria-hidden="true" /> : <Play size={14} aria-hidden="true" />}
             {rendering ? "Cancel" : "Render"}
           </button>
-          <button type="button" className="icon" disabled={!canSave} aria-label="Save PNG" title="Save PNG" onClick={onSave}>
+          <button type="button" className="icon" disabled={!canSave} aria-label="Export image" title="Export image (⌘E)" onClick={onSave}>
             <Download size={16} aria-hidden="true" />
           </button>
         </div>
@@ -419,7 +426,7 @@ function LightTab({ props, update, enhanced }: TabContext) {
           </Choice>
         }
         advanced={report && <CausticStats report={report} />}>
-        <ScrubRow label="Photons" keywords="caustics" value={caustic.photonMillions} min={0.25} max={16} hard={[0.01, 200]} step={0.01}
+        <ScrubRow label="Photons" keywords="caustics" value={caustic.photonMillions} min={0.25} max={16} hard={[0.01, 50]} step={0.01}
           format={(value) => `${value} M`} hint="Millions of photons traced through glass and mirrors."
           onChange={(photonMillions) => update(withCaustics(settings, { photonMillions }))} />
         <ScrubRow label="Radius" keywords="caustics" value={caustic.radius} min={0.02} max={0.4} hard={[0.001, 10]} step={0.001}

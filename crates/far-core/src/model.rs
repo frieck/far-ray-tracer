@@ -89,6 +89,9 @@ pub fn is_model(path: &Path) -> bool {
     })
 }
 
+/// Most triangles a model may have: about 4 GB of memory with its KD-Tree.
+const MAX_MODEL_TRIANGLES: usize = 20_000_000;
+
 pub(crate) fn load(path: &Path) -> Result<Model, String> {
     let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let model = match extension.as_str() {
@@ -101,6 +104,10 @@ pub(crate) fn load(path: &Path) -> Result<Model, String> {
     };
     if model.triangles.is_empty() {
         return Err(format!("{}: no triangles found", path.display()));
+    }
+    if model.triangles.len() > MAX_MODEL_TRIANGLES {
+        return Err(format!("{}: {} million triangles, more than the {} million a model may have",
+            path.display(), model.triangles.len() / 1_000_000, MAX_MODEL_TRIANGLES / 1_000_000));
     }
     Ok(model)
 }

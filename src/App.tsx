@@ -8,7 +8,10 @@ import { Viewport } from "./components/Viewport";
 import { Renderer, type RenderJob, type RenderView } from "./renderer";
 import { alignView, dolly, orbit, pan, retarget } from "./orbit";
 import { SceneView, type PreviewScene } from "./sceneView";
-import { activeComparison, activeMode, buildPreview, buildRequest, defaultSettings, imageSize } from "./settings";
+import {
+  activeComparison, activeMode, buildPreview, buildRequest, defaultSettings, dofValues, imageSize, savedRenderSettings,
+  withSavedRenderSettings,
+} from "./settings";
 import type { Area, EnvironmentConfig, MenuAction, Pose, SceneInfo, Settings, Startup } from "./types";
 
 /** Waits for a pause in slider drags before starting a new render. */
@@ -95,7 +98,7 @@ export function App() {
           setRegion(null);
           setDrawingRegion(false);
           setSettings((old) => old && ({
-            ...old,
+            ...withSavedRenderSettings(old, info.render),
             environment: info.environment,
             materialOverrides: [],
             pose: scenePose(info),
@@ -292,6 +295,29 @@ export function App() {
 
   const canSave = view.hasResult && !view.rendering;
 
+  /** Saves the scene with the edits made here: over its file, or as a new one. */
+  const saveScene = useCallback(async (choose: boolean) => {
+    if (!scene || !settings) return;
+    const request = {
+      camera: {
+        ...settings.pose,
+        aperture: settings.depthOfField ? dofValues(settings).aperture : 0,
+        focus_distance: settings.focusDistance,
+        blades: settings.blades,
+        blade_rotation: settings.bladeRotation,
+      },
+      environment: settings.environment,
+      material_overrides: settings.materialOverrides,
+      render: savedRenderSettings(settings),
+    };
+    try {
+      const saved = await invoke<{ path: string; warnings: string[] } | null>("save_scene", { choose, request });
+      if (saved) publish({ status: [`Saved scene to ${saved.path}`, ...saved.warnings].join(". ") });
+    } catch (error) {
+      publish({ status: `Error: could not save the scene: ${String(error)}` });
+    }
+  }, [publish, scene, settings]);
+
   // The ball needs Enhanced mode: its materials, environment and look only exist there.
   const canShowMaterial = scene !== null && scene.materials.length > 0 && settings !== null && activeMode(settings) === "enhanced";
   const ballMaterial = canShowMaterial ? scene.materials.find((m) => m.id === selectedMaterial) ?? scene.materials[0] : null;
@@ -311,6 +337,8 @@ export function App() {
     if (action === "open") void open("choose_scene");
     else if (action === "example") void open("load_scene", { path });
     else if (action === "save" && canSave) void save();
+    else if (action === "save_scene") void saveScene(false);
+    else if (action === "save_scene_as") void saveScene(true);
     else if (action === "render" && scene) renderNow();
   };
 
@@ -432,6 +460,7 @@ export function App() {
             outdated={outdated && (view.hasResult ? "Changes are not rendered yet." : "This is a quick 3D view. Render to ray trace it.")}
             onCancel={() => void renderer.stop()}
             onSave={() => void save()}
+            onSaveScene={() => void saveScene(false)}
             selectedMaterial={selectedMaterial}
             onSelectMaterial={setSelectedMaterial}
             onExpandMaterial={() => {

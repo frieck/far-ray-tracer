@@ -614,3 +614,26 @@ fn models_bring_their_materials_and_open_on_their_own() {
     let missing = Scene::open(&meshes.join("no-such-model.glb"));
     assert!(missing.is_err());
 }
+
+#[test]
+fn every_scene_saved_elsewhere_opens_the_same() {
+    let out = std::env::temp_dir().join(format!("far-saved-scenes-{}", std::process::id()));
+    std::fs::create_dir_all(&out).unwrap();
+    for path in all_scenes() {
+        let scene = Scene::open(&path).unwrap();
+        let edits = far_core::scene_save::SceneEdits {
+            camera: scene.camera,
+            environment: scene.environment.as_ref().map(|e| e.config.clone()),
+            materials: Vec::new(),
+            render: Some(serde_json::json!({"app": 1, "exposure": 1.2})),
+        };
+        let target = out.join(path.file_name().unwrap());
+        far_core::scene_save::save(&scene, &path, &target, &edits).unwrap();
+        let saved = Scene::open(&target).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        assert!(saved.warnings.is_empty(), "{}: {:?}", path.display(), saved.warnings);
+        assert_eq!(saved.prims.len(), scene.prims.len(), "{}", path.display());
+        assert_eq!(saved.textures.len(), scene.textures.len(), "{}", path.display());
+        assert_eq!(saved.render_settings.as_ref().unwrap()["exposure"], 1.2);
+    }
+    let _ = std::fs::remove_dir_all(&out);
+}

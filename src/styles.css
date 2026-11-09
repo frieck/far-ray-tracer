@@ -158,6 +158,7 @@ button { font: inherit; color: inherit; cursor: default; }
 .panel-top { display: flex; flex-direction: column; gap: 10px; flex-shrink: 0; }
 
 .actions { display: flex; gap: 8px; }
+.actions .open-scene { flex: 1; }
 
 .primary {
   flex: 1;

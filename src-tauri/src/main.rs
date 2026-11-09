@@ -453,7 +453,7 @@ fn choose_scene(app: AppHandle, state: State<'_, AppState>) -> Result<Option<Sce
     }
     let Some(file) = dialog.blocking_pick_file() else { return Ok(None) };
     let path = file.into_path().map_err(|e| e.to_string())?;
-    open_scene(&path, &state).map(Some)
+    guarded("open the scene", || open_scene(&path, &state)).map(Some)
 }
 
 #[tauri::command(async)]
@@ -540,7 +540,10 @@ fn material_preview(
         ..Options::default()
     };
     let image = Image::new(width, height);
-    render(&ball, kd.as_ref(), &options, &image, &progress);
+    guarded("render the material preview", || {
+        render(&ball, kd.as_ref(), &options, &image, &progress);
+        Ok(())
+    })?;
     if progress.cancel.load(Relaxed) {
         return Err("Replaced by a newer preview".into());
     }
@@ -566,7 +569,7 @@ fn render_environment(config: &EnvironmentConfig, scene: &Scene, state: &AppStat
 
 #[tauri::command(async)]
 fn load_scene(path: String, state: State<'_, AppState>) -> Result<SceneInfo, String> {
-    open_scene(Path::new(&path), &state)
+    guarded("open the scene", || open_scene(Path::new(&path), &state))
 }
 
 #[tauri::command(async)]
@@ -690,6 +693,20 @@ impl Drop for RenderGuard<'_> {
     }
 }
 
+/// Runs `work`, turning a crash inside it into an error the app shows, so a bug in a file
+/// reader or the engine never closes the app.
+fn guarded<T>(what: &str, work: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).unwrap_or_else(|panic| {
+        let message = panic.downcast_ref::<String>().map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or("unknown failure");
+        Err(format!("Could not {what}: an internal error happened ({message}). Please report it with the file."))
+    })
+}
+
+/// Most photons a caustic render may trace: each one takes about 40 bytes in the map.
+const MAX_PHOTONS: u32 = 50_000_000;
+
 /// Poll the thread itself: a success-only flag would never be set after a panic.
 fn render_with_frames(
     work: impl FnOnce() + Send,
@@ -724,6 +741,9 @@ fn render_scene(
     let valid_side = 1..=MAX_IMAGE_SIDE;
     if !valid_side.contains(&request.width) || !valid_side.contains(&request.height) {
         return Err(format!("Image sides must be between 1 and {MAX_IMAGE_SIDE} pixels"));
+    }
+    if request.caustics && request.photons > MAX_PHOTONS {
+        return Err(format!("Caustics take at most {} million photons", MAX_PHOTONS / 1_000_000));
     }
     if state.rendering.swap(true, Relaxed) {
         return Err("A render is already running".into());
@@ -897,6 +917,22 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_requests_read_what_the_app_sends() {
+        let request: SaveSceneRequest = serde_json::from_str(r#"{
+            "camera": {"position": [0, 1, -5], "target": [0, 0, 0], "zoom": 1.2, "aperture": 0.6, "focus_distance": 7,
+                       "blades": 6, "blade_rotation": 0},
+            "environment": {"path": "", "sky": {"elevation": 35, "azimuth": 140, "turbidity": 3, "sun_size": 0.53,
+                            "sun_strength": 1, "time": {"hour": 15, "latitude": -27, "day": 80}},
+                            "intensity": 1, "rotation": 0, "visible": true, "enabled": true},
+            "material_overrides": [{"id": 1, "surface": null, "bump_strength": 0.5}],
+            "render": {"app": 1, "quality": 64, "toneMapping": "agx_punchy", "bounces": null}
+        }"#).unwrap();
+        assert_eq!(request.camera.blades, 6);
+        assert!(request.environment.unwrap().sky.unwrap().time.is_some());
+        assert_eq!(request.render["toneMapping"], "agx_punchy");
+    }
 
     #[test]
     fn material_overrides_read_a_surface_a_bump_strength_or_both() {

@@ -231,6 +231,33 @@ function causticValues(settings: Settings) {
   return { photons, caustic_radius: radius, caustic_strength: 1 };
 }
 
+/** Render settings saved with a scene, so it opens looking as it was saved. */
+const SAVED_SETTINGS = [
+  "quality", "customPasses", "resolution", "customWidth", "customHeight", "depth", "exposure", "toneMapping",
+  "denoise", "bloom", "indirect", "bounces", "caustics", "causticPreset", "photonMillions", "causticRadius",
+  "causticStrength", "dofPreset", "dofPasses",
+] as const satisfies readonly (keyof Settings)[];
+
+export function savedRenderSettings(settings: Settings): Record<string, unknown> {
+  return { app: 1, ...Object.fromEntries(SAVED_SETTINGS.map((key) => [key, settings[key]])) };
+}
+
+/** The settings with what a scene saved, keeping values of the wrong kind out. */
+export function withSavedRenderSettings(settings: Settings, saved: unknown): Settings {
+  if (!saved || typeof saved !== "object") return settings;
+  const values = saved as Record<string, unknown>;
+  const next: Record<string, unknown> = { ...settings };
+  for (const key of SAVED_SETTINGS) {
+    const value = values[key];
+    const current = settings[key];
+    const sameKind = key === "bounces"
+      ? value === null || (typeof value === "object" && value !== null)
+      : typeof value === typeof current || (key === "quality" && (typeof value === "number" || value === "custom"));
+    if (value !== undefined && sameKind) next[key] = value;
+  }
+  return next as unknown as Settings;
+}
+
 /** A small, quick image to follow the camera while it moves. */
 export function buildPreview(settings: Settings): RenderRequest {
   const [width, height] = imageSize(settings);

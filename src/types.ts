@@ -88,6 +88,8 @@ export interface SceneInfo {
   warnings: string[];
   /** Automatic indirect light settings for this scene's lights. */
   bounces: Bounces;
+  /** Render settings saved with the scene by the app, if any. */
+  render: unknown;
 }
 
 export interface Bounces {
@@ -103,7 +105,7 @@ export interface Startup {
 }
 
 export interface MenuAction {
-  action: "open" | "save" | "render" | "example";
+  action: "open" | "save" | "save_scene" | "save_scene_as" | "render" | "example";
   path: string | null;
 }
 

@@ -49,10 +49,9 @@ async fn find_update(app: &AppHandle) -> tauri_plugin_updater::Result<Option<tau
 }
 
 fn offer(app: &AppHandle, update: tauri_plugin_updater::Update) {
-    let notes = update.body.as_deref().map(str::trim).filter(|n| !n.is_empty())
-        .map(|n| format!("\n\n{}", truncate(n, 600))).unwrap_or_default();
+    // The release notes are Markdown written for the releases page, so the dialog leaves them out.
     let text = format!(
-        "Far Ray Tracer {} is available (you have {}). Download and install it now?{notes}",
+        "Far Ray Tracer {} is available (you have {}). Download and install it now?",
         update.version, update.current_version);
     let app = app.clone();
     app.dialog()
@@ -92,11 +91,4 @@ fn message(app: &AppHandle, kind: MessageDialogKind, title: &str, text: String) 
         dialog = dialog.parent(&window);
     }
     dialog.show(|_| {});
-}
-
-fn truncate(text: &str, max: usize) -> String {
-    match text.char_indices().nth(max) {
-        Some((end, _)) => format!("{}…", &text[..end]),
-        None => text.to_string(),
-    }
 }

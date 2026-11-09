@@ -7,6 +7,29 @@ and moves under its version when that version is released.
 
 ## [Unreleased]
 
+### Added
+
+- **Save Scene** and **Save Scene As…**: write the scene with the app's edits (camera,
+  environment, materials and render settings), which reopen as saved. Paths are rewritten when
+  it is saved to another folder.
+- A gallery of the example scenes in the README, rendered by `tools/screenshots.sh`.
+
+### Fixed
+
+- `Cmd/Ctrl+S` and the Save Scene menu items did nothing in 3.0.0-beta.3 and beta.4; they now
+  save the scene. Exporting the image as PNG is `Cmd/Ctrl+E`, as in those versions.
+- A crash while opening a scene or rendering a material preview shows an error instead of
+  closing the app.
+- Saved paths are right where folders are reached through a link (such as `/var` on macOS).
+- The update dialog shows only the new and current versions, with Later and Install.
+
+### Changed
+
+- Caustics take at most 50 million photons (about 2 GB), and a model at most 20 million
+  triangles; larger values give a clear error instead of running out of memory.
+- Damaged scenes, models, IES files, `.3ds` meshes and HDR images are tested: each fails with an
+  error, never a crash.
+
 ## [3.0.0-beta.4] - 2026-11-09
 
 ### Changed
@@ -48,6 +71,7 @@ and moves under its version when that version is released.
   - a search finds any setting.
 - Typed values may go past a field's usual range, up to the setting's real limits.
 - The render view has square corners.
+- Release notes come from this changelog, and a release tag needs its section here.
 
 ## [3.0.0-beta.2] - 2026-11-09
 

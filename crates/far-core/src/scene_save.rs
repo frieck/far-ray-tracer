@@ -133,6 +133,11 @@ fn relocate_paths(root: &mut Map<String, Value>, from: &Path, to: &Path, origina
 }
 
 fn absolute(path: &Path) -> PathBuf {
+    // Links resolved, so "../" climbs the folders the system really walks (on macOS /var is a
+    // link into /private).
+    if let Ok(real) = path.canonicalize() {
+        return real;
+    }
     let path = if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir().unwrap_or_default().join(path) };
     // Folds "a/../b" so two spellings of a folder compare equal.
     let mut out = PathBuf::new();

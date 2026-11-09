@@ -21,6 +21,24 @@ The app opens a scene and renders it at the best quality. A **Show evolution** o
 A draggable divider compares any stage with an earlier one, so the gain from fixing
 bugs and the gain from new techniques can be seen separately.
 
+| | |
+| --- | --- |
+| ![Showcase: metals, glass, displacement and caustics](docs/images/showcase.jpg) | ![Glass: tinted, frosted and dispersive](docs/images/glass.jpg) |
+| **Showcase**: GGX metals, glass, displaced cobbles, caustics | **Glass**: tinted by depth, frosted, dispersive |
+| ![Coatings: car paint, velvet and brushed metal](docs/images/coatings.jpg) | ![Subsurface: wax, jade and skin](docs/images/subsurface.jpg) |
+| **Coatings**: clear coat, sheen, brushed metal | **Subsurface**: wax, jade and skin lit from behind |
+| ![Spotlights and IES fixtures in haze](docs/images/spotlights.jpg) | ![A courtyard under the physical sun and sky](docs/images/sun-and-sky.jpg) |
+| **Spotlights**: cones and IES profiles in haze | **Sun and sky**: a physical sky at 4:30 pm |
+| ![Smoke, clouds and ground fog](docs/images/smoke.jpg) | ![Light shafts through a window](docs/images/light-shafts.jpg) |
+| **Smoke**: noise volumes and fog thinning with height | **Light shafts**: sunlight through a window |
+| ![Six-bladed bokeh](docs/images/bokeh.jpg) | ![OBJ and glTF models](docs/images/models.jpg) |
+| **Bokeh**: a six-bladed aperture | **Models**: an OBJ vase and a glTF table |
+
+Each image is an example in the app, rendered by `tools/screenshots.sh` with AgX Punchy and
+Denoise.
+
+What changed in each version is in [CHANGELOG.md](CHANGELOG.md).
+
 ## Download
 
 The [releases page](https://github.com/frieck/far-ray-tracer/releases) has the app for:
@@ -124,7 +142,17 @@ Example scenes are in **File > Open Example**, in `assets/scenes`:
 
 `2008/validation` and `debug` hold the simplest 2008 scenes, kept for the tests and the
 validation against the original but left out of the menu. Shortcuts: `Cmd/Ctrl+O` opens a
-scene, `Cmd/Ctrl+R` renders, `Cmd/Ctrl+S` saves a PNG and `Esc` cancels.
+scene, `Cmd/Ctrl+R` renders, `Cmd/Ctrl+S` saves the scene, `Cmd/Ctrl+Shift+S` saves it as a
+new file, `Cmd/Ctrl+E` exports the image as PNG and `Esc` cancels.
+
+**File > Save Scene** writes the scene with the edits made in the app: the camera, depth of
+field and bokeh, the environment (HDR or sky), material edits and the render settings
+(quality, size, exposure, tone mapping, denoise, bloom, indirect light and caustics), which
+are restored when it opens again. Everything else in the file stays as it was. A scene saved
+to another folder keeps finding its images, models and IES files: the paths are rewritten, and
+a `data_folder` field points at the folder of images and meshes. The examples and models
+opened on their own are saved as new files. Edits to the materials inside an OBJ or glTF file
+are not saved, since they live in the model file; the status bar says so.
 
 ## Command line
 
@@ -547,8 +575,17 @@ Rules for all scenes:
 
 ## Known limits
 
-- Only macOS on Apple Silicon has been tested. Windows and Linux are unverified, including
-  the translucent window.
+- Only macOS on Apple Silicon has been tested. The Windows and Intel Mac builds are
+  unverified, including Open Image Denoise on Windows and the translucent window.
+- The builds are not signed with a developer certificate: macOS and Windows ask before the
+  first launch (see the release notes).
+- Lights, objects and volumes are edited in the scene file; the app edits the camera,
+  environment, materials and render settings.
+- Memory grows with the image: about 700 MB at 4096 × 4096 with Denoise, and about 2.6 GB at
+  the largest size, 8192 × 8192. Caustics take at most 50 million photons and a model at most
+  20 million triangles.
+- Volumes with noise are slow, and caustic photons come only from rectangular and legacy
+  lights, not from spherical lights, spotlights or the environment.
 - The C++ reference reads `.far` scenes containing spheres, planes and meshes; it reports
   unsupported modern primitives and lights explicitly. Its JSON loader uses vendored
   nlohmann/json 3.12.0. It keeps its original Portuguese comments and file
