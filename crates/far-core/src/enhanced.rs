@@ -19,6 +19,7 @@ use crate::scene::{Scene, Sphere, Material, Primitive};
 use crate::kdtree::KdTree;
 use crate::engine::{self, Context, Image, Mode, Options, PhotonStats, Progress, Ray};
 use crate::tonemap::{self, shoulder, ToneMapping};
+use crate::volume;
 use crate::twister::{Twister, DEFAULT_SEED};
 use crate::vector::{Color, Vec3, EPSILON, PI};
 use std::collections::HashMap;
@@ -525,7 +526,18 @@ impl<'a> Tracer<'a> {
 
     /// How much light reaches the point. Glass lets part of the light through instead
     /// of casting a black shadow as in the original.
+    /// Light that gets from `start` to `distance` along `dir`: blocked by surfaces, tinted by
+    /// glass and dimmed by fog.
     fn visibility(&mut self, start: Vec3, dir: Vec3, distance: f32) -> Color {
+        let through = self.surface_visibility(start, dir, distance);
+        let volumes = &self.ctx.scene.volumes;
+        if self.fixed || volumes.is_empty() || through.x.max(through.y).max(through.z) <= 0.0 {
+            return through;
+        }
+        through * (-volume::optical_depth(volumes, start, dir, distance)).exp()
+    }
+
+    fn surface_visibility(&mut self, start: Vec3, dir: Vec3, distance: f32) -> Color {
         let white = Color::new(1.0, 1.0, 1.0);
         let limit = distance * (1.0 - 4.0 * EPSILON);
         let scene = self.ctx.scene;
@@ -1078,8 +1090,123 @@ impl<'a> Tracer<'a> {
     }
 
     /// Returns the color seen by the ray and the distance to the hit point.
+    /// Light arriving along `r`, through any fog on the way.
+    ///
+    /// Without fog this is the light of the surface the ray hits. With fog, light also
+    /// scatters toward the ray from the medium in front of the surface, and the surface's light
+    /// is dimmed on its way. Camera rays, and mirror and glass rays from them, estimate both
+    /// parts every time, so light shafts come out smooth; deeper rays pick one by the chance
+    /// the light gets through.
     fn trace(&mut self, r: &Ray, depth: i32, bounces: u32, allow_emission: bool) -> (Color, f32) {
+        let scene = self.ctx.scene;
+        if self.fixed || self.caustics_only || scene.volumes.is_empty() {
+            return self.trace_surface(r, depth, bounces, allow_emission, None);
+        }
         let hit = self.nearest(r, MAX_DISTANCE);
+        let mut closest = hit.map_or(MAX_DISTANCE, |(_, dist, _)| dist);
+        for light in &scene.rect_lights {
+            if let Some(dist) = light.intersect(r.o, r.d, closest) { closest = dist; }
+        }
+        for light in &scene.bulbs {
+            if let Some(dist) = light.intersect(r.o, r.d, closest) { closest = dist; }
+        }
+        let depth_to_surface = volume::optical_depth(&scene.volumes, r.o, r.d, closest);
+        if depth_to_surface <= 0.0 {
+            return self.trace_surface(r, depth, bounces, allow_emission, Some(hit));
+        }
+        let through = (-depth_to_surface).exp();
+        let (u, pick) = (self.random(), self.random());
+        if bounces == 0 {
+            // Scatters somewhere before the surface, with the density of first collisions there.
+            let target = -(1.0 - u * (1.0 - through)).max(1e-30).ln();
+            let mut acc = Color::default();
+            if let Some((t, v)) = volume::distance_at_depth(&scene.volumes, r.o, r.d, closest, target, pick) {
+                acc += self.in_scattered(r.o + r.d * t, r.d, v, depth, bounces) * (1.0 - through);
+            }
+            let (surface, dist) = self.trace_surface(r, depth, bounces, allow_emission, Some(hit));
+            return (acc + surface * through, dist);
+        }
+        let target = -(1.0 - u).max(1e-30).ln();
+        match volume::distance_at_depth(&scene.volumes, r.o, r.d, closest, target, pick) {
+            Some((t, v)) => (self.in_scattered(r.o + r.d * t, r.d, v, depth, bounces), t),
+            None => self.trace_surface(r, depth, bounces, allow_emission, Some(hit)),
+        }
+    }
+
+    /// Light a fog particle at `pos`, hit by a ray going along `d`, scatters back along the
+    /// ray: the light that reaches it directly, and with indirect light on, what one more
+    /// scattering brings.
+    fn in_scattered(&mut self, pos: Vec3, d: Vec3, index: usize, depth: i32, bounces: u32) -> Color {
+        let scene = self.ctx.scene;
+        let medium = scene.volumes[index];
+        let g = medium.anisotropy;
+        let mut acc = Color::default();
+        // Each light as a diffuse surface facing it would see it, `PI` times the program's light
+        // units, weighed by the phase function instead of the surface's response.
+        for light in &scene.lights {
+            let target = self.point_on_light(light, pos);
+            let l = target - pos;
+            let distance = l.length();
+            let l = l * (1.0 / distance);
+            let transmitted = self.visibility(pos, l, distance);
+            acc += scene.materials[light.material].color * transmitted * (PI * volume::phase(l.dot(d), g));
+        }
+        for light in &scene.rect_lights {
+            let (u, v) = self.pair();
+            let target = light.point(u, v);
+            let delta = target - pos;
+            let distance = delta.length();
+            let l = delta * (1.0 / distance);
+            let emission_cos = -light.normal.dot(l);
+            if emission_cos <= 0.0 { continue; }
+            let weight = light.area * emission_cos / (distance * distance);
+            let transmitted = self.visibility(pos, l, distance);
+            acc += scene.materials[light.proxy.material].color * transmitted * (weight * volume::phase(l.dot(d), g));
+        }
+        for light in &scene.bulbs {
+            let target = self.point_on_light(light, pos);
+            let delta = target - pos;
+            let distance = delta.length();
+            if distance <= light.radius { continue; }
+            let l = delta * (1.0 / distance);
+            let emission_cos = -((target - light.center) * light.inv_radius).dot(l);
+            if emission_cos <= 0.0 { continue; }
+            let weight = 2.0 * PI * light.sq_radius * emission_cos / (distance * distance);
+            let transmitted = self.visibility(pos, l, distance);
+            acc += scene.materials[light.material].color * transmitted * (weight * volume::phase(l.dot(d), g));
+        }
+        if let Some(environment) = scene.environment.as_ref().filter(|e| e.active()) {
+            let (u, v) = self.pair();
+            let (l, radiance, pdf) = environment.sample(u, v);
+            if pdf > 0.0 {
+                let transmitted = self.visibility(pos, l, MAX_DISTANCE);
+                acc += radiance * transmitted * (volume::phase(l.dot(d), g) / pdf);
+            }
+        }
+        if self.indirect && bounces < self.bounces.max {
+            let mut survival = 1.0;
+            let albedo = medium.albedo;
+            if bounces >= ROULETTE_AFTER {
+                survival = albedo.x.max(albedo.y).max(albedo.z).clamp(0.05, 0.95);
+                if self.random() >= survival {
+                    return acc * medium.albedo;
+                }
+            }
+            let (u, v) = self.pair();
+            let dir = volume::sample_phase(d, g, u, v);
+            let (c, _) = self.trace(&Ray { o: pos, d: dir }, depth, bounces + 1, false);
+            let limit = self.bounces.clamp;
+            acc += Color::new(c.x.min(limit), c.y.min(limit), c.z.min(limit)) * (self.bounces.strength / survival);
+        }
+        acc * medium.albedo
+    }
+
+    fn trace_surface(&mut self, r: &Ray, depth: i32, bounces: u32, allow_emission: bool,
+        found: Option<Option<(usize, f32, i32)>>) -> (Color, f32) {
+        let hit = match found {
+            Some(hit) => hit,
+            None => self.nearest(r, MAX_DISTANCE),
+        };
         let mut closest = hit.map_or(MAX_DISTANCE, |(_, dist, _)| dist);
         let mut emitter = None;
         for light in &self.ctx.scene.rect_lights {
@@ -1962,6 +2089,49 @@ mod tests {
         assert!((larger / near - 2.0).abs() < 1e-4);
         let reversed = center_radiance(&test_scene(&text.replace("[0,0.2,0]", "[0,-0.2,0]")), true).x;
         assert_eq!(reversed, 0.0);
+    }
+
+    #[test]
+    fn fog_dims_what_is_behind_it_by_its_transmittance() {
+        // A lit wall behind a slab of black smoke, which absorbs and scatters nothing back.
+        let text = r#"{"lights":[{"type":"rectangle","position":[0,0,4],"edge_u":[0.4,0,0],"edge_v":[0,-0.4,0],"intensity":3}],
+            "objects":[{"type":"plane","points":[[-10,-10,5],[10,-10,5],[10,10,5],[-10,10,5]],"material":{"specular":0}},
+            {"type":"volume","center":[0,0,0],"size":[4,4,2],"density":0.5,"color":[0,0,0]}]}"#;
+        let ray = Ray { o: Vec3::new(0.0, 0.0, -5.0), d: Vec3::new(0.0, 0.0, 1.0) };
+        let foggy = test_scene(text);
+        let clear = test_scene(&text.replace("\"density\":0.5", "\"density\":0"));
+        let seen = environment_tracer(&foggy, 1).trace(&ray, 1, 0, true).0.x;
+        let plain = environment_tracer(&clear, 1).trace(&ray, 1, 0, true).0.x;
+        assert!(plain > 0.0);
+        // The camera ray crosses 2 units of smoke; the light does not.
+        assert!((seen / plain - (-1.0f32).exp()).abs() < 1e-4, "{seen} {plain}");
+        // Fixed mode keeps the 2008 renderer, which has no fog.
+        let mut fixed = environment_tracer(&foggy, 1);
+        fixed.fixed = true;
+        let mut fixed_clear = environment_tracer(&clear, 1);
+        fixed_clear.fixed = true;
+        assert_eq!(fixed.trace(&ray, 1, 0, true).0, fixed_clear.trace(&ray, 1, 0, true).0);
+    }
+
+    #[test]
+    fn fog_scatters_a_light_beside_the_ray_toward_the_camera() {
+        // Nothing behind the fog: all the light seen comes from scattering.
+        let text = r#"{"lights":[{"type":"sphere","position":[2,0,0],"radius":0.2,"intensity":4}],
+            "objects":[{"type":"volume","center":[0,0,0],"radius":1,"density":0.02}]}"#;
+        let ray = Ray { o: Vec3::new(0.0, 0.0, -5.0), d: Vec3::new(0.0, 0.0, 1.0) };
+        let mean = |text: &str| {
+            let scene = test_scene(text);
+            let mut tracer = environment_tracer(&scene, 1);
+            (0..4000).map(|_| tracer.trace(&ray, 1, 0, false).0.x).sum::<f32>() / 4000.0
+        };
+        let thin = mean(text);
+        let thick = mean(&text.replace("\"density\":0.02", "\"density\":0.04"));
+        assert!(thin > 0.0);
+        // Thin fog scatters nearly in proportion to its density.
+        assert!(thick / thin > 1.8 && thick / thin < 2.05, "{thin} {thick}");
+        let forward = mean(&text.replace("\"density\":0.02", "\"density\":0.02,\"anisotropy\":0.8"));
+        // Strong forward scattering sends little light sideways, toward this camera.
+        assert!(forward < 0.5 * thin, "{forward} {thin}");
     }
 
     #[test]

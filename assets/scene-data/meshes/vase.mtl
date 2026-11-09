@@ -1,0 +1,6 @@
+# Glazed ceramic with painted stripes
+newmtl glaze
+Kd 1 1 1
+Ks 0.5 0.5 0.5
+Ns 400
+map_Kd vase-stripes.png

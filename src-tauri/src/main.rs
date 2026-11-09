@@ -392,7 +392,11 @@ fn startup(app: AppHandle) -> Startup {
 
 #[tauri::command(async)]
 fn choose_scene(app: AppHandle, state: State<'_, AppState>) -> Result<Option<SceneInfo>, String> {
-    let mut dialog = app.dialog().file().add_filter("Far Ray Tracer scenes", &["far"]);
+    // A model opens on its own in a small studio; see `Scene::open`.
+    let mut dialog = app.dialog().file()
+        .add_filter("Scenes and models", &["far", "obj", "gltf", "glb"])
+        .add_filter("Far Ray Tracer scenes", &["far"])
+        .add_filter("Models (OBJ, glTF)", &["obj", "gltf", "glb"]);
     if let Some(folder) = scenes_folder(&app) {
         dialog = dialog.set_directory(folder);
     }

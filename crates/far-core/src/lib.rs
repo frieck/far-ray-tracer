@@ -16,6 +16,7 @@ pub mod enhanced;
 pub mod engine;
 pub mod kdtree;
 pub mod mesh3ds;
+pub mod model;
 pub mod oidn;
 pub mod preview;
 pub mod scene;
@@ -26,6 +27,7 @@ pub mod texture;
 pub mod tonemap;
 pub mod twister;
 pub mod vector;
+pub mod volume;
 
 pub use engine::{render, tile_size, Image, Mode, Options, Progress};
 pub use enhanced::Bounces;

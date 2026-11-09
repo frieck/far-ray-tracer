@@ -1,0 +1,92 @@
+{
+ "camera": {
+  "position": [
+   0.5,
+   2.0,
+   -2.9
+  ],
+  "target": [
+   -0.1,
+   0.5,
+   0.35
+  ],
+  "zoom": 1.45
+ },
+ "environment": {
+  "path": "../../environments/studio.hdr",
+  "intensity": 0.45,
+  "rotation": 150,
+  "visible": false
+ },
+ "lights": [
+  {
+   "type": "rectangle",
+   "position": [
+    -2.6,
+    3.0,
+    -1.6
+   ],
+   "edge_u": [
+    0,
+    0,
+    1.2
+   ],
+   "edge_v": [
+    -0.7,
+    -0.6,
+    0
+   ],
+   "color": [
+    1,
+    0.94,
+    0.86
+   ],
+   "intensity": 14
+  }
+ ],
+ "objects": [
+  {
+   "type": "ground",
+   "position": [
+    0,
+    0,
+    0
+   ],
+   "material": {
+    "color": [
+     0.62,
+     0.62,
+     0.6
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.6
+    }
+   }
+  },
+  {
+   "type": "model",
+   "file": "table.glb",
+   "position": [
+    0.25,
+    0,
+    0.6
+   ],
+   "rotation": [
+    0,
+    70,
+    0
+   ]
+  },
+  {
+   "type": "model",
+   "file": "vase.obj",
+   "position": [
+    -0.95,
+    0,
+    0.0
+   ],
+   "size": 0.75
+  }
+ ]
+}

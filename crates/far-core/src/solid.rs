@@ -29,7 +29,7 @@ pub struct Solid {
     pub high: Vec3,
 }
 
-fn rotate(v: Vec3, degrees: [f32; 3]) -> Vec3 {
+pub(crate) fn rotate(v: Vec3, degrees: [f32; 3]) -> Vec3 {
     let [x, y, z] = degrees.map(|d| d * PI / 180.0);
     let v = Vec3::new(v.x, v.y * x.cos() - v.z * x.sin(), v.y * x.sin() + v.z * x.cos());
     let v = Vec3::new(v.x * y.cos() + v.z * y.sin(), v.y, -v.x * y.sin() + v.z * y.cos());

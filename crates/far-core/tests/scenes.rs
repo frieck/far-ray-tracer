@@ -589,3 +589,28 @@ fn a_region_renders_the_same_pixels_as_the_whole_image() {
         assert!(tiles * 3 < whole_tiles, "{mode:?}: {tiles} of {whole_tiles} tiles for a small region");
     }
 }
+
+#[test]
+fn models_bring_their_materials_and_open_on_their_own() {
+    let scene = Scene::open(&scene_path("models.far")).unwrap();
+    // The table's glass bowl, glowing bulb and checker top, and the vase's striped glaze.
+    assert!(scene.materials.iter().any(|m| m.glass.is_some()));
+    assert!(scene.materials.iter().any(|m| m.maps.emission.is_some()));
+    assert_eq!(scene.materials.iter().filter(|m| m.texture.is_some()).count(), 2);
+    let meshes = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scene-data/meshes");
+    for name in ["vase.obj", "table.glb"] {
+        let scene = Scene::open(&meshes.join(name)).unwrap();
+        assert!(scene.warnings.is_empty(), "{name}: {:?}", scene.warnings);
+        assert_eq!(scene.rect_lights.len(), 3);
+        // The model rests on the floor at height 0.
+        let lowest = scene.vertices.iter().map(|v| v.pos.y).fold(f32::INFINITY, f32::min);
+        assert!(lowest.abs() < 1e-4, "{name}: {lowest}");
+        let kd = KdTree::build(&scene);
+        let options = Options { mode: Mode::Enhanced, width: 48, height: 36, samples: 1, ..Options::default() };
+        let image = Image::new(options.width, options.height);
+        render(&scene, Some(&kd), &options, &image, &Progress::default());
+        assert!(image.rgba().chunks_exact(4).any(|p| p[0] > 40), "{name} renders dark");
+    }
+    let missing = Scene::open(&meshes.join("no-such-model.glb"));
+    assert!(missing.is_err());
+}

@@ -9,8 +9,8 @@ It began as a C++ program written in 2008 for a computer science final project o
 KD-Tree acceleration. This version is a Rust port with a better renderer and a new
 desktop app.
 
-The app opens a scene and renders it at the best quality. A **Show evolution** option,
-off by default, shows how the program got there, in three stages:
+The app opens a scene and renders it at the best quality. A **Show evolution** option
+(the Evolution group in the settings), off by default, shows how the program got there, in three stages:
 
 | Stage | What it is |
 | --- | --- |
@@ -83,6 +83,16 @@ npm run tauri build
 
 On macOS the result is `target/release/bundle/macos/Far Ray Tracer.app`. The same scripts
 work with Yarn.
+
+The settings panel works like a render app's property editor. The icons at its left pick a
+group: Render, Light, Camera, Image, Materials, System and Evolution. Each group holds sections
+that fold away and remember it; a feature that can be off, such as Depth of field or Caustics,
+has a check box in its section header, and settings few people change sit under the section's
+**Advanced**. Drag a number sideways to change it (Shift for fine steps), or click it to type
+a value; hovering a setting explains it. A drag stays within the usual range, but a typed
+value can go beyond it, and the field turns amber to show it. Settings with a real limit keep
+it: roughness, metallic and the layers stay in 0 to 1, IOR in 1 to 3, threads up to the cores,
+and nothing that cannot be negative goes below zero. **Search settings** finds any setting in every group.
 
 Quality sets the passes, which are samples per pixel: Draft is 16, Good is 64, High is 256
 and Custom takes any number up to 4096. Resolution offers common display sizes up to 8K,
@@ -185,7 +195,7 @@ Enhanced then adds:
   capped at 10 to keep rare paths from leaving white dots. A 2008 light does not fall
   off with distance, so a scene that has one keeps two bounces at 45%, capped at 1.5,
   to keep from blowing out.
-  All three can be set by hand: Advanced > Custom bounces in the app, or
+  All three can be set by hand: Custom in the header of **Light > Indirect light** in the app, or
   `--indirect-strength`, `--bounces` and `--indirect-clamp` (0 for no limit) on the
   command line.
 - Optional caustics: light focused by glass and mirrors, from a photon map
@@ -291,6 +301,43 @@ an infinite `ground` instead:
   and `scale_v`.
 - It has no bounds, so it stays out of the KD-Tree and every ray tests it separately,
   which costs one dot product and one division. The 3D view draws it as a large square.
+
+### Models (OBJ and glTF)
+
+Models from other 3D programs load from OBJ files, with their MTL materials, and from glTF
+2.0, as `.gltf` or `.glb`. **File > Open** opens one on its own: the model rests on a gray
+floor, lit by a key, a fill and a rim light and framed by the camera, all scaled to its size.
+The command line does the same (`far render chair.glb -o chair.png --enhanced`). In a scene,
+a `model` object places one:
+
+```json
+{ "type": "model", "file": "table.glb", "position": [0.25, 0, 0.6], "rotation": [0, 70, 0], "scale": 1 }
+```
+
+- `file` is relative to the scene file, or found in the data folder's `meshes` folder.
+- The model is turned by `rotation` (degrees around X, then Y, then Z), scaled by `scale`,
+  then moved by `position`. With `size` instead, it is scaled so its largest side measures
+  `size`, and its lowest point, centered, rests on `position`.
+- Without `material`, it keeps its own materials; a `material` replaces all of them.
+- Normals from the file shade the surface; without them, normals are smoothed up to a 60°
+  crease. Polygons are split into triangles. Triangles with no area are skipped.
+
+What each format brings:
+
+| | OBJ and MTL | glTF |
+| --- | --- | --- |
+| Color | `Kd`, `map_Kd` | base color factor and texture |
+| Roughness and metal | `Pr` and `Pm` with `map_Pr` and `map_Pm`, or `Ns` turned into roughness | metallic-roughness factors and texture (green is roughness, blue metalness) |
+| Glass | `d` or `Tr` at half or more transparent, or `illum` 4, 6, 7 or 9, with `Ni` and `Tf` | `KHR_materials_transmission` above 0.5, with `KHR_materials_ior` |
+| Light | `Ke`, `map_Ke` | emissive factor and texture, `KHR_materials_emissive_strength` |
+| Relief | `bump`/`map_Bump` height maps (`-bm` scales them), `norm` normal maps | normal texture and its scale |
+| Cutouts | `map_d` | alpha mode `MASK` or `BLEND`, from the base color's alpha |
+| Placement | | the node tree with its translations, rotations, scales and matrices; mirrored nodes keep their faces outward |
+
+Only the first set of texture coordinates is used. Lines, points, cameras, lights,
+animation and skinning in a glTF file are ignored. Textures are 8-bit images used as they
+are, as for every other material. **File > Open Example > Techniques > Models** shows a vase
+from an OBJ file and a table from a glTF file; `tools/models.py` makes both.
 - Photons for caustics are not aimed at it, so a mirror ground does not focus light.
 - Open File > Open Example > Techniques > Infinite ground shows one under an HDR sky.
 
@@ -363,7 +410,7 @@ Open **File > Open Example > Techniques > Rectangular lights** for a two-panel s
 mirror and glass spheres. Enable Caustics to inspect the resulting photon map.
 
 Depth of field is available in Enhanced mode under **Camera > Depth of field**.
-**Pick focus in image** turns the cursor into a crosshair. Click a surface to enable
+**Camera > Lens > Focus** turns the cursor into a crosshair. Click a surface to enable
 depth of field and set its focus distance; Esc cancels picking. Clicking the background
 keeps the picker active. Glass and mirrors focus on their first surface.
 A larger aperture increases defocus; focus distance is measured along the viewing
@@ -395,9 +442,9 @@ With the default camera at `(0, 0, -5)`, distance 11.7 puts the focus plane at w
 `z = 6.7`. Classic and Fixed always use the original pinhole camera. The photon map
 preview also remains a sharp point projection for inspection.
 
-**Aperture shape** sets the blades of the lens diaphragm, which outline out-of-focus
+**Shape**, under Camera > Depth of field, sets the blades of the lens diaphragm, which outline out-of-focus
 highlights: Round, or a polygon of 5, 6 or 8 blades with its corners on the round opening,
-turned by **Blade rotation**. Rotation 0 puts a flat edge at the bottom. Scene files and the
+turned by **Blade rotation** in the section's Advanced area. Rotation 0 puts a flat edge at the bottom. Scene files and the
 command line (`--blades`, `--blade-rotation`) take 0 for round or 3 to 16 blades:
 
 ```json
@@ -413,7 +460,7 @@ in.
 To tune a material or a light without waiting for the whole image, render only part of it:
 the crop button at the bottom right of the image turns on the region tool; drag over the
 image to choose the area. It renders at once, and every later render, by hand or with
-Auto-render, covers only that area while the rest keeps the last image, dimmed. The × on
+**Render after each change**, covers only that area while the rest keeps the last image, dimmed. The × on
 the region's corner, or a new scene, goes back to the whole image; `Esc` cancels drawing.
 
 A region renders exactly the pixels a whole render has there: each tile keeps its own
@@ -427,9 +474,9 @@ Drag the image to orbit around the objects, Shift-drag or right-drag to pan, and
 move closer. While the camera moves, a real-time WebGL view shows the scene's shapes and
 base colors, without textures, shadows or reflections, through the same lens as the render.
 A scene opens in this 3D view and is ray traced only when you press **Render**; turn on
-**Auto-render** to render again after every change, as soon as you let go of the camera.
-If WebGL is unavailable, Auto-render stays on and a small ray traced image follows the
-camera instead. **Camera > Zoom** changes the lens and **Reset camera** returns to the scene's view.
+**Render after each change** to render again after every change, as soon as you let go of the camera.
+If WebGL is unavailable, that option stays on and a small ray traced image follows the
+camera instead. **Camera > Lens > Zoom** changes the lens and **Reset** returns to the scene's view.
 Camera moves last for the session; to keep one, add it to the scene:
 
 ```json
@@ -673,6 +720,41 @@ keeps its level when the curve changes; shadows come out a little lighter and hi
 softer. They average linear light before the curve, as HDR-lit scenes always do, so a small
 bright source keeps its energy. The denoiser works on the same linear values.
 
+### Volumes: fog, smoke and light shafts (Enhanced)
+
+Light scatters in fog, smoke and haze, so beams through a window or between trees show as
+shafts. A scene's `fog` fills the box around its objects, the infinite ground left out, or
+the box its `bounds` give; `volume` objects fill a box (`size`, turned by `rotation`) or a
+sphere (`radius`). Where they overlap, their densities add.
+
+```json
+"fog": { "density": 0.08, "color": [0.9, 0.9, 0.9], "anisotropy": 0.5 },
+"objects": [
+  { "type": "volume", "center": [-1.4, 1.4, 4], "radius": 1, "density": 0.9, "color": [0.95, 0.75, 0.55] }
+]
+```
+
+- `density` is the chance per scene unit that light meets a particle: after `d` units, light
+  keeps `exp(-density × d)`. Rooms look hazy from about 0.02 up; 1 is thick smoke.
+- `color` is the share of that light scattered rather than absorbed: white fog, gray smoke,
+  black soot.
+- `anisotropy` is the Henyey-Greenstein g: 0 scatters evenly, positive values send light on
+  forward, as dust in sunlight does, so shafts glow brighter looking toward the light; negative
+  values send it back.
+
+Each volume is the same throughout. Along a camera ray, the renderer estimates every time
+both the light the fog scatters toward the camera, from a point picked by where light first
+meets a particle, and the surface behind, dimmed by the fog; deeper rays pick one of the two.
+At the scattering point every light is sampled with a shadow ray, so whatever blocks a light
+cuts its beam, and with indirect light on, one more direction is followed by the phase
+function. Shadow rays everywhere are dimmed by the fog they cross. Fog is costly: each sample
+traces the scattering point's light as well as the surface's.
+
+Fog needs larger lights to show beams than surfaces do, and a dark room: the beams compete
+with fog lit by light bounced around the room. **File > Open Example > Techniques > Light
+shafts** shows sunlight through a window; `tools/volumes.py` builds it. The 2008 renderer,
+Fixed mode and the photon map ignore volumes.
+
 ### Bloom (Enhanced)
 
 **Bloom** is off by default; the command line uses `--bloom`. Like light scattering in a
@@ -685,11 +767,11 @@ render look alike. Cancelled renders are left without it.
 
 ### HDR environment lighting (Enhanced)
 
-**Environment → Import HDR…** opens a Radiance `.hdr` latitude-longitude panorama.
+**Light > Environment > Import HDR…** opens a Radiance `.hdr` latitude-longitude panorama.
 Intensity changes its brightness; Rotation turns it around the vertical axis.
-**Show background** affects camera misses only: turning it off keeps lighting,
-reflections and refraction. **Environment lighting** disables the entire environment;
-**Remove environment** clears it. UI changes last for the current scene session.
+**Background** affects camera misses only: turning it off keeps lighting,
+reflections and refraction. The check box in the Environment header disables the entire environment;
+**Remove**, under its Advanced area, clears it. UI changes last for the current scene session.
 
 For persistent settings, add this top-level field to a `.far` scene:
 ```json

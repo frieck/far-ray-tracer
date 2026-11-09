@@ -7,6 +7,7 @@ authors.workspace = true
 homepage.workspace = true
 
 [dependencies]
+gltf = { version = "1.4", default-features = false, features = ["import", "utils", "names", "KHR_materials_transmission", "KHR_materials_ior", "KHR_materials_emissive_strength"] }
 image = { version = "0.25", default-features = false, features = ["bmp", "jpeg", "png", "gif", "tga", "hdr"] }
 libloading = "0.8"
 rayon = "1"

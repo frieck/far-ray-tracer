@@ -9,8 +9,8 @@ Visual gain for the effort:
 
 1. ~~Rough and colored glass, then spectral dispersion~~ (done, with every material below).
 2. ~~ACES/AgX tone mapping and shaped bokeh~~ (done).
-3. Volumes with light shafts: the largest change in atmosphere.
-4. glTF and OBJ import: opens the app to real scenes.
+3. ~~Volumes with light shafts~~ (done).
+4. ~~glTF and OBJ import~~ (done).
 
 ## Materials
 
@@ -31,7 +31,10 @@ Visual gain for the effort:
 
 ## Light and atmosphere
 
-- [ ] **Volumes**: fog, smoke and light shafts through the air. Medium to high.
+- [x] **Volumes**: fog, smoke and light shafts through the air, in boxes and spheres of even
+  density. Medium to high.
+- [ ] **Uneven volumes**: smoke and clouds from a density grid or noise, and fog that thins with
+  height. Medium.
 - [ ] **Physical sun and sky**: a sky computed from the time of day, without an HDR image.
   Medium.
 - [ ] **Spotlights and IES profiles**: a flashlight beam or a real fixture's light. Low.
@@ -64,8 +67,7 @@ Visual gain for the effort:
 
 ## Geometry and scenes
 
-- [ ] **OBJ and glTF import**: models from any 3D program; today only `.3ds` loads.
-  Medium.
+- [x] **OBJ and glTF import**: models from any 3D program, with their materials. Medium.
 - [ ] **Instancing**: many copies of an object for almost no memory. Medium.
 - [ ] **Subdivision surfaces**: smooth meshes from coarse ones. High.
 - [ ] **CSG (boolean operations)**: would carve the material ball's medallion into the

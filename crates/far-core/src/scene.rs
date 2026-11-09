@@ -293,6 +293,8 @@ pub struct Scene {
     pub displaced_sources: Vec<Primitive>,
     /// Whether some material cuts holes with an alpha map, which rays must look through.
     pub cutouts: bool,
+    /// Fog, smoke and haze, in Enhanced mode only.
+    pub volumes: Vec<crate::volume::Volume>,
     pub vertices: Vec<Vertex>,
     /// Corrected normals of each triangle corner, indexed like `prims`.
     /// Only Enhanced mode uses them; Classic mode keeps `Vertex::normal`.
@@ -362,6 +364,9 @@ impl Scene {
         if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("frt")) {
             return Err(format!("{}: the binary .frt format is no longer supported. Open the .far version of this scene.", path.display()));
         }
+        if crate::model::is_model(path) {
+            return Self::from_model(path);
+        }
         let data = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
         Self::from_far(&data, path)
     }
@@ -399,6 +404,7 @@ impl Scene {
             displaced: Vec::new(),
             displaced_sources: Vec::new(),
             cutouts: false,
+            volumes: Vec::new(),
             materials: Vec::new(),
             textures: Vec::new(),
             extends: Aabb::new(Vec3::new(-14.0, -6.0, -6.0), Vec3::new(28.0, 14.0, 36.0)),
@@ -595,7 +601,7 @@ impl Scene {
     /// Vertices at the same position count as one, so no seam shows where the
     /// `.3ds` duplicates vertices. Faces beyond the crease angle are left out, so
     /// sharp edges stay sharp.
-    fn compute_corner_normals(&mut self, first_face: usize) {
+    pub(crate) fn compute_corner_normals(&mut self, first_face: usize) {
         const COS_CREASE_ANGLE: f32 = 0.5; // 60 degrees
         let triangles: Vec<&Triangle> = self.prims[first_face..]
             .iter()
