@@ -3,7 +3,7 @@ members = ["crates/far-core", "crates/far-cli", "src-tauri"]
 resolver = "2"
 
 [workspace.package]
-version = "3.0.0-beta.3"
+version = "3.0.0-beta.4"
 edition = "2021"
 license = "MIT"
 authors = ["FARSystems"]

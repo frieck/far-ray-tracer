@@ -7,6 +7,12 @@ and moves under its version when that version is released.
 
 ## [Unreleased]
 
+## [3.0.0-beta.4] - 2026-11-09
+
+### Changed
+
+- Beta-channel update test from 3.0.0-beta.3. Version bump only; no functional changes.
+
 ## [3.0.0-beta.3] - 2026-11-09
 
 ### Added
@@ -84,7 +90,8 @@ Windows.
 - **Evolution:** compares the 2008, Fixed and Enhanced stages side by side.
 - **Example scenes:** a showcase, materials and techniques.
 
-[Unreleased]: https://github.com/frieck/far-ray-tracer/compare/v3.0.0-beta.3...HEAD
+[Unreleased]: https://github.com/frieck/far-ray-tracer/compare/v3.0.0-beta.4...HEAD
+[3.0.0-beta.4]: https://github.com/frieck/far-ray-tracer/compare/v3.0.0-beta.3...v3.0.0-beta.4
 [3.0.0-beta.3]: https://github.com/frieck/far-ray-tracer/compare/v3.0.0-beta.2...v3.0.0-beta.3
 [3.0.0-beta.2]: https://github.com/frieck/far-ray-tracer/compare/v3.0.0-beta.1...v3.0.0-beta.2
 [3.0.0-beta.1]: https://github.com/frieck/far-ray-tracer/releases/tag/v3.0.0-beta.1

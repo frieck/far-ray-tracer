@@ -1,6 +1,6 @@
 {
   "productName": "Far Ray Tracer",
-  "version": "3.0.0-beta.3",
+  "version": "3.0.0-beta.4",
   "identifier": "br.com.farsystems.far-ray-tracer",
   "build": {
     "frontendDist": "../dist",
