@@ -256,6 +256,28 @@ Open File > Open Example > Cornell box is the classic test of indirect light, bu
 panel receive only bounced light, and the blocks take a red or green tint from the walls
 beside them. Turn indirect light off to see them go dark.
 
+Open File > Open Example > Showcase puts every technique added to the 2008 program in one
+shot, built by `tools/showcase.py`:
+
+| What you see | Technique |
+| --- | --- |
+| Cobbled ground with low relief | Infinite ground; displacement traced by ray marching |
+| Stone sphere, back right | Displacement on an object, as a mesh |
+| Hammered gold sphere | Normal map |
+| Tiled blue block | Height bump map |
+| Marble pedestal, wooden cone | Color textures on analytic solids |
+| Chrome torus, green tube, cone, cylinder | Analytic solids |
+| Copper spheres, polished to rough | GGX roughness |
+| Glass sphere | Refraction with Fresnel; caustics on the ground with **Caustics** on |
+| Red wall, white sphere | Indirect light: the sphere takes the wall's tint |
+| Soft shadows, glowing blue bulb | Rectangular and spherical lights; the glow with **Bloom** on |
+| Reflections of a studio | HDR environment lighting |
+| Torus and background slightly blurred | Depth of field, focused on the glass |
+| Smooth edges | Distributed ray tracing (antialiasing) |
+
+Caustics, Bloom and Denoise are render options, not part of the scene; turn them on to see
+everything.
+
 Rectangular lights use two perpendicular vectors for their full width and height:
 
 ```json
