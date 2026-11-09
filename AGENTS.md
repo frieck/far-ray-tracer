@@ -24,6 +24,10 @@ The README explains every feature and the scene format; `TODO.md` lists what is 
 
 ## Ground rules
 
+- **Feature freeze until 3.0.0.** The 3.0 betas take fixes, performance work that does not
+  change images, documentation and tests. New features wait for after 3.0.0; note them in
+  `TODO.md`.
+
 - **Language.** Everything in the repository is in English: code, comments, docs, commit
   messages, release notes. Talk to the user in the user's language.
 - **Writing.** Plain, complete sentences. Comments say why, not what the line already says.
@@ -58,6 +62,10 @@ Before calling a change done, run what it touches:
 | 2008 renderer against the C++ original (macOS) | `npm run validate` |
 | Whole workspace compiles | `cargo check --workspace` |
 | Interface types | `npx tsc --noEmit` |
+| Every example renders and is denoised by Open Image Denoise | `tools/smoke.sh` |
+
+`.github/workflows/ci.yml` runs the tests and `tools/smoke.sh` on every push to `main`, on
+macOS (Apple Silicon and Intel) and Windows; check it after pushing (`gh run list`).
 
 Render a scene to look at the result, which tests do not judge:
 
@@ -129,7 +137,7 @@ Versions follow [Semantic Versioning](https://semver.org/). Pre-releases carry a
 2. **Version.** Set it in `Cargo.toml` (workspace), `package.json`, `package-lock.json` (both
    places near the top) and `src-tauri/tauri.conf.json`. Run `cargo check --workspace` so
    `Cargo.lock` follows.
-3. **Checks.** Run all the checks above.
+3. **Checks.** Run all the checks above, and make sure the last CI run on `main` passed.
 4. **Commit and tag.** Commit as "Release X.Y.Z", then:
    ```bash
    git push origin main
@@ -141,7 +149,9 @@ Versions follow [Semantic Versioning](https://semver.org/). Pre-releases carry a
    the changelog. Follow it with `gh run watch`.
 6. **Publish.** Check the draft (`gh release view vX.Y.Z`: three installers, the update
    bundles and `latest.json`), then publish it: `gh release edit vX.Y.Z --draft=false`. A
-   version with a label is published as a pre-release.
+   version with a label is published as a pre-release. Before publishing a release the user
+   will rely on (any 3.0 candidate and later), ask the user to run
+   [docs/TESTING.md](docs/TESTING.md) on the draft's installer.
 7. **Update channel.** Publishing starts `.github/workflows/update-channel.yml`, which copies
    the release's `latest.json` to `beta.json` on the release tagged `updater`. Stable versions
    update from the latest release; pre-releases from `beta.json`. Check that it ran.
