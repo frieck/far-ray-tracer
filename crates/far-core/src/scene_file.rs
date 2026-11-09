@@ -27,6 +27,9 @@ fn default_light_radius() -> f32 {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SceneFile {
+    /// The version of the format; see `FORMAT`. Scenes without it are read as the current one.
+    #[serde(default)]
+    format: Option<u32>,
     #[serde(default)]
     environment: Option<crate::environment::EnvironmentConfig>,
     #[serde(default)]
@@ -65,6 +68,10 @@ enum LightFile {
     Sphere(SphereLightFile),
     Area(AreaLightFile),
 }
+
+/// The version of the `.far` format this program writes. A change that older versions could not
+/// read raises it; they then refuse such scenes with a clear message instead of misreading them.
+pub const FORMAT: u32 = 3;
 
 fn default_intensity() -> f32 { 1.0 }
 
@@ -463,6 +470,9 @@ impl Scene {
     }
 
     fn from_file(file: SceneFile, path: &Path, mut preloaded: Option<crate::model::Model>) -> Result<Self, String> {
+        if let Some(format) = file.format.filter(|&f| f > FORMAT) {
+            return Err(format!("{}: written by a newer Far Ray Tracer (scene format {format}; this version reads up to {FORMAT}). Update the app to open it.", path.display()));
+        }
         let dir = match &file.data_folder {
             Some(folder) => Some(path.parent().unwrap_or(Path::new(".")).join(folder)).filter(|d| d.is_dir()),
             None => find_data_folder(path),
@@ -739,6 +749,15 @@ impl Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scenes_from_a_newer_format_are_refused_clearly() {
+        let open = |text: &str| crate::Scene::from_far(text.as_bytes(), Path::new("test.far"));
+        assert!(open(r#"{"format": 3, "lights": [], "objects": []}"#).is_ok());
+        assert!(open(r#"{"lights": [], "objects": []}"#).is_ok());
+        let error = open(r#"{"format": 4, "lights": [], "objects": []}"#).err().unwrap();
+        assert!(error.contains("newer Far Ray Tracer"), "{error}");
+    }
 
     #[test]
     fn spotlights_skies_and_uneven_volumes_load_from_scene_files() {

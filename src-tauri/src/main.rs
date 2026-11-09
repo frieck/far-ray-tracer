@@ -63,6 +63,10 @@ struct AppState {
     progress: Arc<Progress>,
     rendering: AtomicBool,
     last_image: Mutex<Option<FinishedImage>>,
+    /// The scene has edits not saved, as the interface last said.
+    unsaved: AtomicBool,
+    /// Quitting was confirmed, so the exit request goes through.
+    quitting: AtomicBool,
     /// The folder of example scenes, bundled or in the checkout; they are saved elsewhere.
     examples: Mutex<Option<PathBuf>>,
     /// The studio environment that lights material previews, loaded on first use.
@@ -632,6 +636,37 @@ struct SavedScene {
     warnings: Vec<String>,
 }
 
+/// The interface tells whether the scene has unsaved edits, so quitting can ask first.
+#[tauri::command]
+fn set_unsaved(unsaved: bool, state: State<'_, AppState>) {
+    state.unsaved.store(unsaved, Relaxed);
+}
+
+/// Quits once the interface has dealt with unsaved edits.
+#[tauri::command]
+fn quit(app: AppHandle, state: State<'_, AppState>) {
+    state.quitting.store(true, Relaxed);
+    app.exit(0);
+}
+
+/// Asks what to do with a scene's unsaved edits: "save", "discard" or "cancel".
+#[tauri::command(async)]
+fn ask_unsaved(name: String, app: AppHandle) -> &'static str {
+    use tauri_plugin_dialog::{MessageDialogButtons, MessageDialogKind, MessageDialogResult};
+    let answer = app.dialog().message("Your edits to the camera, environment, materials or render settings will be lost if you don't save them.")
+        .title(format!("Save changes to “{name}”?"))
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::YesNoCancelCustom("Save".into(), "Don't Save".into(), "Cancel".into()))
+        .blocking_show_with_result();
+    match answer {
+        MessageDialogResult::Yes => "save",
+        MessageDialogResult::No => "discard",
+        MessageDialogResult::Custom(label) if label == "Save" => "save",
+        MessageDialogResult::Custom(label) if label == "Don't Save" => "discard",
+        _ => "cancel",
+    }
+}
+
 /// Saves the open scene with the app's edits: over its file, or to a file the user picks when
 /// `choose` is set or the scene has no file it can write.
 #[tauri::command(async)]
@@ -904,14 +939,28 @@ fn main() {
             cancel,
             save_image,
             save_scene,
+            ask_unsaved,
+            set_unsaved,
+            quit,
             render_scene,
             pick_focus,
             scene_geometry,
             material_preview,
             material_ball_pose
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to start Far Ray Tracer");
+        .build(tauri::generate_context!())
+        .expect("failed to start Far Ray Tracer")
+        .run(|app, event| {
+            // Quitting from the menu skips the window's close request; with unsaved edits the
+            // interface asks first and quits itself if the user agrees.
+            if let tauri::RunEvent::ExitRequested { api, code: None, .. } = event {
+                let state = app.state::<AppState>();
+                if state.unsaved.load(Relaxed) && !state.quitting.load(Relaxed) {
+                    api.prevent_exit();
+                    let _ = app.emit("quit-requested", ());
+                }
+            }
+        });
 }
 
 #[cfg(test)]

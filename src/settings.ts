@@ -258,6 +258,22 @@ export function withSavedRenderSettings(settings: Settings, saved: unknown): Set
   return next as unknown as Settings;
 }
 
+/** What Save Scene writes: the scene's edits made in the app. */
+export function sceneSaveRequest(settings: Settings) {
+  return {
+    camera: {
+      ...settings.pose,
+      aperture: settings.depthOfField ? dofValues(settings).aperture : 0,
+      focus_distance: settings.focusDistance,
+      blades: settings.blades,
+      blade_rotation: settings.bladeRotation,
+    },
+    environment: settings.environment,
+    material_overrides: settings.materialOverrides,
+    render: savedRenderSettings(settings),
+  };
+}
+
 /** A small, quick image to follow the camera while it moves. */
 export function buildPreview(settings: Settings): RenderRequest {
   const [width, height] = imageSize(settings);

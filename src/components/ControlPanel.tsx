@@ -57,6 +57,8 @@ interface ControlPanelProps {
   onCancel: () => void;
   onSave: () => void;
   onSaveScene: () => void;
+  /** The scene has edits not yet saved. */
+  unsaved: boolean;
   /** The material the editor shows; null picks the first. */
   selectedMaterial: number | null;
   onSelectMaterial: (id: number) => void;
@@ -115,8 +117,9 @@ export function ControlPanel(props: ControlPanelProps) {
             <FolderOpen size={15} aria-hidden="true" />
             Open scene…
           </button>
-          <button type="button" className="icon" disabled={!props.scene} aria-label="Save scene" title="Save scene (⌘S)"
-            onClick={props.onSaveScene}>
+          <button type="button" className="icon" disabled={!props.scene} data-unsaved={props.unsaved || undefined}
+            aria-label={props.unsaved ? "Save scene, which has unsaved edits" : "Save scene"}
+            title={props.unsaved ? "Save scene (⌘S) · unsaved edits" : "Save scene (⌘S)"} onClick={props.onSaveScene}>
             <Save size={16} aria-hidden="true" />
           </button>
         </div>

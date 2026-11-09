@@ -36,6 +36,7 @@ pub fn save(scene: &Scene, original: &Path, target: &Path, edits: &SceneEdits) -
     if from != to {
         relocate_paths(root, &from, &to, original, target);
     }
+    root.insert("format".into(), json!(crate::scene_file::FORMAT));
     root.insert("camera".into(), serde_json::to_value(edits.camera).map_err(|e| e.to_string())?);
     match &edits.environment {
         None => { root.remove("environment"); }
@@ -215,6 +216,7 @@ mod tests {
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
         assert_eq!(saved["bounds"][1][0], 9);
         assert_eq!(saved["camera"]["zoom"], 2.0);
+        assert_eq!(saved["format"], crate::scene_file::FORMAT);
         assert!(saved["environment"]["sky"].is_object());
         assert_eq!(saved["objects"][0]["material"]["bump"]["strength"], 0.5);
         assert_eq!(saved["objects"][1]["material"]["surface"]["preset"], "metal");

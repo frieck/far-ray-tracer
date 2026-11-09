@@ -22,7 +22,7 @@ pub mod oidn;
 pub mod preview;
 pub mod scene;
 pub mod sky;
-mod scene_file;
+pub mod scene_file;
 pub mod scene_save;
 pub mod solid;
 pub mod spectral;

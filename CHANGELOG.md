@@ -13,6 +13,10 @@ and moves under its version when that version is released.
   environment, materials and render settings), which reopen as saved. Paths are rewritten when
   it is saved to another folder.
 - A gallery of the example scenes in the README, rendered by `tools/screenshots.sh`.
+- A warning before unsaved edits are lost, when opening another scene, closing the window or
+  quitting: Save, Don't Save or Cancel. The save button shows a dot while there are edits.
+- Scene files carry a format version (`"format": 3`); a newer format than the app knows is
+  refused with a message to update.
 
 ### Changed
 

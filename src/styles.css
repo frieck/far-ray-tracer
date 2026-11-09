@@ -159,6 +159,8 @@ button { font: inherit; color: inherit; cursor: default; }
 
 .actions { display: flex; gap: 8px; }
 .actions .open-scene { flex: 1; }
+.icon[data-unsaved] { position: relative; }
+.icon[data-unsaved]::after { content: ""; position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
 
 .primary {
   flex: 1;

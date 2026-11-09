@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AboutDialog } from "./components/AboutDialog";
 import { ControlPanel } from "./components/ControlPanel";
@@ -9,7 +10,7 @@ import { Renderer, type RenderJob, type RenderView } from "./renderer";
 import { alignView, dolly, orbit, pan, retarget } from "./orbit";
 import { SceneView, type PreviewScene } from "./sceneView";
 import {
-  activeComparison, activeMode, buildPreview, buildRequest, defaultSettings, dofValues, imageSize, savedRenderSettings,
+  activeComparison, activeMode, buildPreview, buildRequest, defaultSettings, imageSize, sceneSaveRequest,
   withSavedRenderSettings,
 } from "./settings";
 import type { Area, EnvironmentConfig, MenuAction, Pose, SceneInfo, Settings, Startup } from "./types";
@@ -58,6 +59,12 @@ export function App() {
   const [pickingFocus, setPickingFocus] = useState(false);
   const [focusHint, setFocusHint] = useState("");
   const focusRequest = useRef(0);
+  /** What Save Scene would write when the scene was opened or last saved. */
+  const savedState = useRef<string | null>(null);
+  const snapshotPending = useRef(false);
+  const [, setSavedVersion] = useState(0);
+  const unsavedRef = useRef(false);
+  const keepGoingRef = useRef<() => Promise<boolean>>(async () => true);
   const environmentRequest = useRef(0);
   const [loadingEnvironment, setLoadingEnvironment] = useState(false);
   const [movingCamera, setMovingCamera] = useState(false);
@@ -82,6 +89,7 @@ export function App() {
 
   const open = useCallback(
     async (command: string, args?: Record<string, unknown>) => {
+      if (!(await keepGoingRef.current())) return;
       focusRequest.current += 1;
       setPickingFocus(false);
       setFocusHint("");
@@ -114,6 +122,8 @@ export function App() {
           setRenderedKey(null);
           setAwaitingImage(true);
           publish({ painted: false });
+          savedState.current = null;
+          snapshotPending.current = true;
           setScene(info);
         }
       } catch (error) {
@@ -295,28 +305,68 @@ export function App() {
 
   const canSave = view.hasResult && !view.rendering;
 
-  /** Saves the scene with the edits made here: over its file, or as a new one. */
+  /** Saves the scene with the edits made here: over its file, or as a new one. True if saved. */
   const saveScene = useCallback(async (choose: boolean) => {
-    if (!scene || !settings) return;
-    const request = {
-      camera: {
-        ...settings.pose,
-        aperture: settings.depthOfField ? dofValues(settings).aperture : 0,
-        focus_distance: settings.focusDistance,
-        blades: settings.blades,
-        blade_rotation: settings.bladeRotation,
-      },
-      environment: settings.environment,
-      material_overrides: settings.materialOverrides,
-      render: savedRenderSettings(settings),
-    };
+    if (!scene || !settings) return false;
+    const request = sceneSaveRequest(settings);
     try {
       const saved = await invoke<{ path: string; warnings: string[] } | null>("save_scene", { choose, request });
-      if (saved) publish({ status: [`Saved scene to ${saved.path}`, ...saved.warnings].join(". ") });
+      if (!saved) return false;
+      savedState.current = JSON.stringify(request);
+      setSavedVersion((v) => v + 1);
+      publish({ status: [`Saved scene to ${saved.path}`, ...saved.warnings].join(". ") });
+      return true;
     } catch (error) {
       publish({ status: `Error: could not save the scene: ${String(error)}` });
+      return false;
     }
   }, [publish, scene, settings]);
+
+  // Edits not yet saved: what Save Scene would write differs from what was opened or saved.
+  const current = scene && settings ? JSON.stringify(sceneSaveRequest(settings)) : null;
+  const unsaved = current !== null && savedState.current !== null && current !== savedState.current;
+  unsavedRef.current = unsaved;
+  // The state of a newly opened scene, once its settings are in place, is the saved one.
+  useEffect(() => {
+    if (snapshotPending.current && current !== null) {
+      savedState.current = current;
+      snapshotPending.current = false;
+      setSavedVersion((v) => v + 1);
+    }
+  }, [current]);
+
+  /** Asks what to do with unsaved edits before they would be lost; false keeps them and stops. */
+  const keepGoing = useCallback(async () => {
+    if (!unsavedRef.current || !scene) return true;
+    const answer = await invoke<"save" | "discard" | "cancel">("ask_unsaved", { name: scene.name });
+    if (answer === "cancel") return false;
+    if (answer === "save") return saveScene(false);
+    return true;
+  }, [scene, saveScene]);
+  keepGoingRef.current = keepGoing;
+
+  useEffect(() => {
+    void invoke("set_unsaved", { unsaved });
+  }, [unsaved]);
+
+  useEffect(() => {
+    const stop = listen("quit-requested", async () => {
+      if (await keepGoingRef.current()) await invoke("quit");
+    });
+    return () => void stop.then((unlisten) => unlisten());
+  }, []);
+
+  useEffect(() => {
+    const window = getCurrentWindow();
+    const stop = window.onCloseRequested(async (event) => {
+      if (!unsavedRef.current) return;
+      event.preventDefault();
+      // Quitting rather than closing the window: the app has one window, and closing it
+      // while edits are unsaved would otherwise be held back again.
+      if (await keepGoingRef.current()) await invoke("quit");
+    });
+    return () => void stop.then((unlisten) => unlisten());
+  }, []);
 
   // The ball needs Enhanced mode: its materials, environment and look only exist there.
   const canShowMaterial = scene !== null && scene.materials.length > 0 && settings !== null && activeMode(settings) === "enhanced";
@@ -461,6 +511,7 @@ export function App() {
             onCancel={() => void renderer.stop()}
             onSave={() => void save()}
             onSaveScene={() => void saveScene(false)}
+            unsaved={unsaved}
             selectedMaterial={selectedMaterial}
             onSelectMaterial={setSelectedMaterial}
             onExpandMaterial={() => {

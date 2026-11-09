@@ -341,6 +341,10 @@ The app and command line use one format: `.far`, readable JSON.
 }
 ```
 
+A scene may start with `"format": 3`, the version of the format; the app writes it when it
+saves. A scene without it is read as the current version. A version of the app that meets a
+newer format than it knows refuses the scene and says to update, rather than misreading it.
+
 - Solids are centered on `center` with Y as their axis. `rotation` is in degrees around X,
   then Y, then Z.
 - `material` is optional and accepts `color`, `diffuse`, `specular`, `reflection`,
