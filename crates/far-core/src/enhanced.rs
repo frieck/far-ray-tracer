@@ -140,6 +140,15 @@ fn base(n: Vec3) -> (Vec3, Vec3) {
     )
 }
 
+/// The share of bulb `index`'s light that leaves along unit `direction`: 1 for a bare bulb,
+/// less outside a spotlight's cone or an IES fixture's beam.
+fn bulb_factor(scene: &Scene, index: usize, direction: Vec3) -> f32 {
+    match scene.bulb_profiles.get(index) {
+        Some(Some(profile)) => profile.factor(direction),
+        _ => 1.0,
+    }
+}
+
 fn reflect(d: Vec3, n: Vec3) -> Vec3 {
     d - 2.0 * d.dot(n) * n
 }
@@ -661,7 +670,7 @@ impl<'a> Tracer<'a> {
             let light_pdf = distance * distance / (light.area * emission_cos);
             self.shade_area_light(&mut acc, a, d, depth, l, dot, radiance, Some(light_pdf), photons_carry);
         }
-        for light in &scene.bulbs {
+        for (index, light) in scene.bulbs.iter().enumerate() {
             let target = self.point_on_light(light, a.pos);
             let delta = target - a.pos;
             let distance = delta.length();
@@ -669,6 +678,8 @@ impl<'a> Tracer<'a> {
             let l = delta * (1.0 / distance);
             let dot = l.dot(a.original);
             if dot <= 0.0 { continue; }
+            let aimed = bulb_factor(scene, index, -l);
+            if aimed <= 0.0 { continue; }
             // Fixed lights from the center, as a disc of the bulb's radius seen head-on.
             let (weight, light_pdf) = if self.fixed {
                 (light.sq_radius / (distance * distance), None)
@@ -685,7 +696,7 @@ impl<'a> Tracer<'a> {
             let shadow_length = shadow.length();
             let reach = if self.fixed { shadow_length - light.radius } else { shadow_length };
             let transmitted = self.visibility(start, shadow * (1.0 / shadow_length), reach);
-            let radiance = scene.materials[light.material].color * transmitted * weight;
+            let radiance = scene.materials[light.material].color * transmitted * (weight * aimed);
             self.shade_area_light(&mut acc, a, d, depth, l, dot, radiance, light_pdf, photons_carry);
         }
         if !self.fixed {
@@ -1163,7 +1174,7 @@ impl<'a> Tracer<'a> {
             let transmitted = self.visibility(pos, l, distance);
             acc += scene.materials[light.proxy.material].color * transmitted * (weight * volume::phase(l.dot(d), g));
         }
-        for light in &scene.bulbs {
+        for (index, light) in scene.bulbs.iter().enumerate() {
             let target = self.point_on_light(light, pos);
             let delta = target - pos;
             let distance = delta.length();
@@ -1171,7 +1182,9 @@ impl<'a> Tracer<'a> {
             let l = delta * (1.0 / distance);
             let emission_cos = -((target - light.center) * light.inv_radius).dot(l);
             if emission_cos <= 0.0 { continue; }
-            let weight = 2.0 * PI * light.sq_radius * emission_cos / (distance * distance);
+            let aimed = bulb_factor(scene, index, -l);
+            if aimed <= 0.0 { continue; }
+            let weight = 2.0 * PI * light.sq_radius * emission_cos * aimed / (distance * distance);
             let transmitted = self.visibility(pos, l, distance);
             acc += scene.materials[light.material].color * transmitted * (weight * volume::phase(l.dot(d), g));
         }
@@ -1216,17 +1229,21 @@ impl<'a> Tracer<'a> {
             }
         }
         let mut bulb = None;
-        for light in &self.ctx.scene.bulbs {
+        for (index, light) in self.ctx.scene.bulbs.iter().enumerate() {
             if let Some(dist) = light.intersect(r.o, r.d, closest) {
                 closest = dist;
-                bulb = Some(light);
+                bulb = Some((index, light));
                 emitter = None;
             }
         }
-        if let Some(light) = bulb {
-            // Like panels, but a sphere emits from every side.
+        if let Some((index, light)) = bulb {
+            // Like panels, but a sphere emits from every side, as its profile lets it.
             let emits = allow_emission && !self.caustics_only && !self.photons_carry(bounces);
-            let color = if emits { self.ctx.scene.materials[light.material].color } else { Color::default() };
+            let color = if emits {
+                self.ctx.scene.materials[light.material].color * bulb_factor(self.ctx.scene, index, -r.d)
+            } else {
+                Color::default()
+            };
             return (color, closest);
         }
         if let Some(light) = emitter {

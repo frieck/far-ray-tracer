@@ -140,6 +140,12 @@ export const MIN_IMAGE_SIDE = 16;
 export const MAX_IMAGE_SIDE = 8192;
 const PREVIEW_SIDE = 480;
 
+/** The engine's default sky: mid-afternoon sun on a clear day. */
+export const DEFAULT_SKY: import("./types").SkyConfig = {
+  elevation: 35, azimuth: 140, turbidity: 3, sun_size: 0.53, sun_strength: 1, time: null,
+};
+export const DEFAULT_SUN_TIME: import("./types").SunTime = { hour: 15, latitude: -27, day: 80 };
+
 export function defaultSettings(cores: number): Settings {
   return {
     environment: null,

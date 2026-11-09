@@ -1,0 +1,231 @@
+{
+ "camera": {
+  "position": [
+   -1.5,
+   1.6,
+   -5.5
+  ],
+  "target": [
+   0.8,
+   1.2,
+   3
+  ],
+  "zoom": 0.85
+ },
+ "environment": {
+  "sky": {
+   "turbidity": 3,
+   "time": {
+    "hour": 16.5,
+    "latitude": -23.5,
+    "day": 80
+   }
+  },
+  "intensity": 1,
+  "rotation": 0,
+  "visible": true
+ },
+ "lights": [],
+ "objects": [
+  {
+   "type": "ground",
+   "position": [
+    0,
+    0,
+    0
+   ],
+   "material": {
+    "color": [
+     0.55,
+     0.5,
+     0.45
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.7
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -4.5,
+    1.6,
+    3
+   ],
+   "size": [
+    0.4,
+    3.2,
+    9
+   ],
+   "material": {
+    "color": [
+     0.82,
+     0.72,
+     0.6
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.8
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    0,
+    1.6,
+    7.3
+   ],
+   "size": [
+    9.4,
+    3.2,
+    0.4
+   ],
+   "material": {
+    "color": [
+     0.82,
+     0.72,
+     0.6
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.8
+    }
+   }
+  },
+  {
+   "type": "cylinder",
+   "center": [
+    3.4,
+    1.6,
+    0.5
+   ],
+   "radius": 0.22,
+   "height": 3.2,
+   "material": {
+    "color": [
+     0.9,
+     0.88,
+     0.84
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.6
+    }
+   }
+  },
+  {
+   "type": "cylinder",
+   "center": [
+    3.4,
+    1.6,
+    2.5
+   ],
+   "radius": 0.22,
+   "height": 3.2,
+   "material": {
+    "color": [
+     0.9,
+     0.88,
+     0.84
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.6
+    }
+   }
+  },
+  {
+   "type": "cylinder",
+   "center": [
+    3.4,
+    1.6,
+    4.5
+   ],
+   "radius": 0.22,
+   "height": 3.2,
+   "material": {
+    "color": [
+     0.9,
+     0.88,
+     0.84
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.6
+    }
+   }
+  },
+  {
+   "type": "cylinder",
+   "center": [
+    3.4,
+    1.6,
+    6.5
+   ],
+   "radius": 0.22,
+   "height": 3.2,
+   "material": {
+    "color": [
+     0.9,
+     0.88,
+     0.84
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.6
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0,
+    0.7,
+    3
+   ],
+   "radius": 0.7,
+   "material": {
+    "color": [
+     0.95,
+     0.95,
+     0.97
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.05
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -1.8,
+    0.4,
+    1.2
+   ],
+   "size": [
+    0.8,
+    0.8,
+    0.8
+   ],
+   "rotation": [
+    0,
+    25,
+    0
+   ],
+   "material": {
+    "color": [
+     0.15,
+     0.35,
+     0.7
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.4
+    }
+   }
+  }
+ ]
+}

@@ -1,5 +1,24 @@
+/** A time and place that sets the sun's position; see crates/far-core/src/sky.rs. */
+export interface SunTime {
+  hour: number;
+  latitude: number;
+  day: number;
+}
+
+/** A physical sky and sun computed by the engine, in place of an HDR image. */
+export interface SkyConfig {
+  elevation: number;
+  azimuth: number;
+  turbidity: number;
+  sun_size: number;
+  sun_strength: number;
+  time: SunTime | null;
+}
+
 export interface EnvironmentConfig {
+  /** An HDR image; empty when `sky` computes the environment. */
   path: string;
+  sky?: SkyConfig | null;
   intensity: number;
   rotation: number;
   visible: boolean;

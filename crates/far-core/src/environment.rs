@@ -6,7 +6,10 @@ use std::{path::Path, sync::Arc};
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct EnvironmentConfig {
+    /// An HDR image; empty when `sky` computes the environment instead.
     pub path: String,
+    /// A physical sky and sun in place of an image.
+    pub sky: Option<crate::sky::SkyConfig>,
     pub intensity: f32,
     /// Rotation around the vertical (+Y) axis, in degrees.
     pub rotation: f32,
@@ -15,17 +18,29 @@ pub struct EnvironmentConfig {
 }
 impl Default for EnvironmentConfig {
     fn default() -> Self {
-        Self { path: String::new(), intensity: 1., rotation: 0., visible: true, enabled: true }
+        Self { path: String::new(), sky: None, intensity: 1., rotation: 0., visible: true, enabled: true }
     }
 }
 impl EnvironmentConfig {
     pub fn validate(&self) -> Result<(), String> {
-        if self.path.is_empty() { return Err("Choose an HDR environment file".into()); }
+        match &self.sky {
+            Some(sky) => sky.validate()?,
+            None if self.path.is_empty() => return Err("Choose an HDR environment file".into()),
+            None => {}
+        }
         if !self.intensity.is_finite() || !(0.0..=100.0).contains(&self.intensity)
             || !self.rotation.is_finite() {
             return Err("Environment needs intensity in [0,100] and a finite rotation".into());
         }
         Ok(())
+    }
+
+    /// What the map depends on: two configs with the same key share one map.
+    pub fn map_key(&self) -> String {
+        match &self.sky {
+            Some(sky) => format!("sky:{}", serde_json::to_string(sky).unwrap_or_default()),
+            None => self.path.clone(),
+        }
     }
 }
 
@@ -37,7 +52,10 @@ pub struct Environment {
 impl Environment {
     pub fn load(config: EnvironmentConfig) -> Result<Self, String> {
         config.validate()?;
-        let map = Arc::new(EnvironmentMap::load(Path::new(&config.path))?);
+        let map = Arc::new(match &config.sky {
+            Some(sky) => crate::sky::render(sky)?,
+            None => EnvironmentMap::load(Path::new(&config.path))?,
+        });
         Ok(Self { config, map })
     }
     pub fn active(&self) -> bool { self.config.enabled && self.config.intensity > 0. }

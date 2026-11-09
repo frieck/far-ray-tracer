@@ -20,8 +20,12 @@ import {
   RESOLUTION_GROUPS,
   withEvolution,
   withMode,
+  DEFAULT_SKY,
+  DEFAULT_SUN_TIME,
 } from "../settings";
-import type { Bounces, DofPreset, CausticPreset, CausticReport, Comparison, Mode, Quality, Resolution, Settings, ToneMapping } from "../types";
+import type {
+  Bounces, DofPreset, CausticPreset, CausticReport, Comparison, Mode, Quality, Resolution, Settings, SkyConfig, SunTime, ToneMapping,
+} from "../types";
 import { MaterialEditor } from "./MaterialEditor";
 import { CausticStats } from "./CausticStats";
 import { GlassPanel } from "./GlassPanel";
@@ -251,6 +255,14 @@ function RenderTab({ props, update, enhanced }: TabContext) {
   );
 }
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** A day of the year as a date, in a year without February 29. */
+function dayLabel(day: number): string {
+  const date = new Date(Date.UTC(2025, 0, Math.round(day)));
+  return `${MONTHS[date.getUTCMonth()]} ${date.getUTCDate()}`;
+}
+
 function bounceSummary(auto: Bounces): string {
   return auto.strength >= 1
     ? "Automatic: full path tracing, physically correct."
@@ -271,6 +283,9 @@ function LightTab({ props, update, enhanced }: TabContext) {
   const environment = settings.environment;
   const setEnvironment = (change: Partial<NonNullable<typeof environment>>) =>
     environment && update({ environment: { ...environment, ...change } });
+  const sky = environment?.sky ?? null;
+  const setSky = (change: Partial<SkyConfig>) => sky && setEnvironment({ sky: { ...sky, ...change } });
+  const setTime = (change: Partial<SunTime>) => sky?.time && setSky({ time: { ...sky.time, ...change } });
   const caustic = causticSettings(settings);
   return (
     <>
@@ -307,30 +322,86 @@ function LightTab({ props, update, enhanced }: TabContext) {
       <Section id="environment" title="Environment"
         enabled={environment ? { checked: environment.enabled, onChange: (enabled) => setEnvironment({ enabled }) } : undefined}
         extra={
-          <button type="button" className="prop-mini" disabled={!props.canRender || props.loadingEnvironment}
-            onClick={props.onImportEnvironment}>
-            {props.loadingEnvironment ? "Loading…" : environment ? "Replace…" : "Import HDR…"}
-          </button>
+          <Choice<"none" | "hdr" | "sky"> small label="Environment source" value={!environment ? "none" : sky ? "sky" : "hdr"}
+            disabled={props.loadingEnvironment}
+            onChange={(source) => {
+              if (source === "none") update({ environment: null });
+              else if (source === "sky") update({ environment: {
+                path: "", sky: { ...DEFAULT_SKY }, intensity: 1, rotation: 0, visible: true, enabled: true } });
+              else props.onImportEnvironment();
+            }}>
+            <option value="none">None</option>
+            <option value="hdr">{props.loadingEnvironment ? "Loading…" : environment && !sky ? "HDR image" : "HDR image…"}</option>
+            <option value="sky">Physical sky</option>
+          </Choice>
         }
         advanced={environment && (
-          <ButtonRow label="Image">
-            <button type="button" className="prop-mini" onClick={() => update({ environment: null })}>Remove</button>
-          </ButtonRow>
+          <>
+            {sky && (
+              <>
+                <ScrubRow label="Sun size" keywords="sun soft shadows" value={sky.sun_size} min={0.2} max={5} hard={[0.05, 20]}
+                  step={0.01} format={(value) => `${value.toFixed(2)}°`} hint="The sun's apparent diameter; 0.53° is the real sun. Larger softens shadows."
+                  onChange={(sun_size) => setSky({ sun_size })} />
+                <ScrubRow label="Sun strength" keywords="sun" value={sky.sun_strength} min={0} max={3} hard={[0, 100]} step={0.05}
+                  hint="Multiplies the sun's light and leaves the sky as it is." onChange={(sun_strength) => setSky({ sun_strength })} />
+              </>
+            )}
+            {!sky && (
+              <ButtonRow label="Image">
+                <button type="button" className="prop-mini" onClick={props.onImportEnvironment}>Replace…</button>
+              </ButtonRow>
+            )}
+          </>
         )}>
         {environment ? (
           <>
-            <Row label="File" keywords="hdr">
-              <span className="prop-value-text" title={environment.path}>{environment.path.split(/[\\/]/).pop()}</span>
-            </Row>
-            <ScrubRow label="Intensity" keywords="hdr" value={environment.intensity} min={0} max={10} step={0.05}
+            {sky ? (
+              <>
+                <ChoiceRow<"angles" | "time"> label="Sun from" keywords="sun sky" value={sky.time ? "time" : "angles"}
+                  onChange={(mode) => setSky({ time: mode === "time" ? { ...DEFAULT_SUN_TIME } : null })}>
+                  <option value="angles">Angles</option>
+                  <option value="time">Time of day</option>
+                </ChoiceRow>
+                {sky.time ? (
+                  <>
+                    <ScrubRow label="Hour" keywords="time sun" value={sky.time.hour} min={5} max={20} hard={[0, 24]} step={0.05}
+                      format={(value) => `${Math.floor(value)}:${String(Math.round((value % 1) * 60) % 60).padStart(2, "0")}`}
+                      hint="Local solar time: 12:00 is noon." onChange={(hour) => setTime({ hour })} />
+                    <ScrubRow label="Latitude" keywords="sun place" value={sky.time.latitude} min={-60} max={60} hard={[-90, 90]} step={0.5}
+                      format={(value) => `${Math.abs(value).toFixed(1)}° ${value < 0 ? "S" : "N"}`}
+                      hint="North of the equator is positive. North is +Z in the scene." onChange={(latitude) => setTime({ latitude })} />
+                    <ScrubRow label="Day of year" keywords="season date" value={sky.time.day} min={1} max={365} step={1} strict
+                      format={dayLabel} onChange={(day) => setTime({ day })} />
+                  </>
+                ) : (
+                  <>
+                    <ScrubRow label="Sun elevation" keywords="sun height" value={sky.elevation} min={-10} max={90} step={0.5} strict
+                      format={(value) => `${value.toFixed(1)}°`} hint="Height above the horizon. Below 0 the sun has set."
+                      onChange={(elevation) => setSky({ elevation })} />
+                    <ScrubRow label="Sun direction" keywords="sun azimuth" value={sky.azimuth} min={0} max={360} hard={[-36000, 36000]} step={1}
+                      format={(value) => `${value.toFixed(0)}°`} hint="0° toward +Z, 90° toward +X."
+                      onChange={(azimuth) => setSky({ azimuth: ((azimuth % 360) + 360) % 360 })} />
+                  </>
+                )}
+                <ScrubRow label="Haze" keywords="turbidity sky" value={sky.turbidity} min={2} max={10} hard={[1.7, 12]} step={0.1}
+                  hint="Turbidity: 2 is a very clear sky, 3 a clear day, 6 hazy, 10 smog." onChange={(turbidity) => setSky({ turbidity })} />
+              </>
+            ) : (
+              <Row label="File" keywords="hdr">
+                <span className="prop-value-text" title={environment.path}>{environment.path.split(/[\\/]/).pop()}</span>
+              </Row>
+            )}
+            <ScrubRow label="Intensity" keywords="hdr sky" value={environment.intensity} min={0} max={10} step={0.05}
               disabled={!environment.enabled} onChange={(intensity) => setEnvironment({ intensity })} />
-            <ScrubRow label="Rotation" keywords="hdr" value={((environment.rotation % 360) + 360) % 360} min={0} max={360} hard={[-36000, 36000]} step={1}
-              disabled={!environment.enabled} format={(value) => `${value}°`} onChange={(rotation) => setEnvironment({ rotation })} />
+            {!sky && (
+              <ScrubRow label="Rotation" keywords="hdr" value={((environment.rotation % 360) + 360) % 360} min={0} max={360} hard={[-36000, 36000]} step={1}
+                disabled={!environment.enabled} format={(value) => `${value}°`} onChange={(rotation) => setEnvironment({ rotation })} />
+            )}
             <CheckRow label="Background" hint="Hiding the background keeps lighting and reflections."
               checked={environment.visible} disabled={!environment.enabled} onChange={(visible) => setEnvironment({ visible })} />
           </>
         ) : (
-          <Hint>An HDR image lights the scene from all around, as a real place would.</Hint>
+          <Hint>Light the scene from all around: an HDR image of a real place, or a physical sky with the sun.</Hint>
         )}
       </Section>
 

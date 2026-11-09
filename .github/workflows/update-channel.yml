@@ -1,0 +1,60 @@
+# Points the app's updater at a release once it is published.
+#
+# The app reads one of two manifests:
+# - Stable versions read latest.json from the latest release (releases/latest/download/latest.json).
+#   GitHub never counts a pre-release as latest, so this follows stable releases only.
+# - Pre-release versions, such as 3.0.0-beta.2, read beta.json from the release tagged
+#   "updater". This workflow copies each published release's latest.json there, stable or
+#   not, so beta users get the next beta and then the stable version.
+#
+# Run it by hand from the Actions tab, with a tag, to point the channel at an earlier release.
+name: Update channel
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish to the update channel, for example v3.0.0-beta.3
+        required: true
+
+permissions:
+  contents: write
+
+concurrency: update-channel
+
+jobs:
+  channel:
+    name: Publish the update manifest
+    if: github.event_name == 'workflow_dispatch' || github.event.release.tag_name != 'updater'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Fetch latest.json from the release
+        run: |
+          if ! gh release download "$TAG" --pattern latest.json --output latest.json; then
+            echo "::warning::Release $TAG has no latest.json (built before the updater?); nothing to publish."
+            exit 0
+          fi
+          # Links written while the release was a draft can name a temporary tag; use the real one.
+          sed -E "s#/releases/download/untagged-[^/]+/#/releases/download/$TAG/#g" latest.json > fixed.json
+          if ! cmp -s latest.json fixed.json; then
+            cp fixed.json latest.json
+            gh release upload "$TAG" latest.json --clobber
+          fi
+          jq -e '.version and .platforms' latest.json > /dev/null
+          cp latest.json beta.json
+      - name: Publish beta.json to the updater release
+        if: hashFiles('beta.json') != ''
+        run: |
+          if ! gh release view updater > /dev/null 2>&1; then
+            gh release create updater --prerelease --latest=false \
+              --title "Update channel" \
+              --notes "Holds beta.json, which beta versions of the app read to find updates. Do not delete it."
+          fi
+          gh release upload updater beta.json --clobber
+          echo "Beta channel now offers $(jq -r .version beta.json)."

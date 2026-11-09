@@ -273,6 +273,17 @@ impl Primitive {
     }
 }
 
+/// The part of a scene file a material was read from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MaterialSource {
+    /// Not from an editable place, such as a light.
+    None,
+    /// The `material` of `objects[i]`.
+    Object(usize),
+    /// One of the materials inside the model file of `objects[i]`.
+    ModelPart(usize),
+}
+
 #[derive(Clone)]
 pub struct Scene {
     pub environment: Option<crate::environment::Environment>,
@@ -284,6 +295,15 @@ pub struct Scene {
     /// Physical spherical emitters: visible, with inverse-square falloff.
     /// Classic mode treats them as legacy point lights.
     pub bulbs: Vec<Sphere>,
+    /// For each bulb, its spotlight cone or IES distribution; None shines evenly all around.
+    pub bulb_profiles: Vec<Option<crate::light_profile::Profile>>,
+    /// The scene file as read, which saving edits and writes back. None for `.3ds`-era scenes
+    /// built another way.
+    pub source: Option<std::sync::Arc<serde_json::Value>>,
+    /// Where each material came from in `source`, indexed like `materials`.
+    pub material_sources: Vec<MaterialSource>,
+    /// The app's render settings saved with the scene, as they were written.
+    pub render_settings: Option<serde_json::Value>,
     /// Indices in `prims` of the infinite planes, which the KD-Tree leaves out.
     pub grounds: Vec<usize>,
     /// For each primitive, where a displaced triangle lies on the shape it came from. Empty
@@ -360,6 +380,19 @@ fn locate_in(dir: &Path, folders: [&str; 2], name: &str) -> Option<PathBuf> {
 }
 
 impl Scene {
+    /// Marks the materials added since `before` as read from `source`; earlier ones not yet
+    /// marked stay unmarked.
+    pub(crate) fn note_sources(&mut self, before: usize, source: MaterialSource) {
+        let marked = self.material_sources.len();
+        if marked < before {
+            self.material_sources.resize(before, MaterialSource::None);
+        }
+        let from = self.material_sources.len();
+        if from < self.materials.len() {
+            self.material_sources.resize(self.materials.len(), source);
+        }
+    }
+
     pub fn open(path: &Path) -> Result<Self, String> {
         if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("frt")) {
             return Err(format!("{}: the binary .frt format is no longer supported. Open the .far version of this scene.", path.display()));
@@ -398,6 +431,10 @@ impl Scene {
             lights: Vec::new(),
             rect_lights: Vec::new(),
             bulbs: Vec::new(),
+            bulb_profiles: Vec::new(),
+            source: None,
+            material_sources: Vec::new(),
+            render_settings: None,
             grounds: Vec::new(),
             vertices: Vec::new(),
             corner_normals: Vec::new(),

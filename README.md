@@ -53,6 +53,20 @@ Actions and attaches them to a draft release named after the app version.
    started by hand from the Actions tab.
 3. When the builds finish, review the draft on the releases page and publish it.
 
+#### Updates
+
+The app checks for a newer release at startup and from **Check for Updates…** (the app menu
+on macOS, Help elsewhere), asks before installing it and offers to restart. Stable versions
+follow the latest release's `latest.json`; pre-release versions follow `beta.json` on the
+release tagged `updater`, which `.github/workflows/update-channel.yml` refreshes each time a
+release is published, so beta users get the next beta and then the stable version.
+
+Updates are signed. The release workflow needs two repository secrets, made once with
+`npx tauri signer generate -w ~/.tauri/far-ray-tracer.key` and kept out of the repository:
+`TAURI_SIGNING_PRIVATE_KEY` (the key file) and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. The
+public key is in `src-tauri/tauri.conf.json`; a release signed with another key is refused.
+Local builds skip the update bundles; `src-tauri/tauri.release.conf.json` turns them on in CI.
+
 ## Requirements
 
 - [Rust](https://rustup.rs), tested with 1.92
@@ -105,7 +119,7 @@ Example scenes are in **File > Open Example**, in `assets/scenes`:
 | --- | --- | --- |
 | (top) | `assets/scenes` | Showcase, Cornell box, Christmas |
 | Materials | `materials` | Glass, Coatings, Subsurface, Maps, GGX materials, Bump maps, Displacement |
-| Techniques | `techniques` | Infinite ground, HDRI studio, Depth of field, Rectangular lights, Primitives |
+| Techniques | `techniques` | Infinite ground, HDRI studio, Sun and sky, Depth of field, Bokeh, Rectangular lights, Spotlights, Light shafts, Smoke, Models, Primitives |
 | From 2008 | `2008` | The final project's own scenes, including Rhino, Knot show and the thesis test scenes A and B |
 
 `2008/validation` and `debug` hold the simplest 2008 scenes, kept for the tests and the
@@ -405,6 +419,30 @@ the scene with inverse-square falloff and soft shadows, and use multiple importa
 sampling with GGX reflections, like panels. Fixed lights from the center for hard shadows;
 Classic treats each one as a legacy point light. They do not emit caustic photons yet.
 Open `assets/scenes/christmas.far` for a scene lit by strings of them.
+
+#### Spotlights and IES profiles
+
+A spherical light becomes a spotlight with a cone, or a real fixture with an IES file:
+
+```json
+{ "type": "sphere", "position": [-3.5, 5.2, -0.5], "radius": 0.06, "color": [1, 0.9, 0.75], "intensity": 9000,
+  "direction": [0.55, -1, 0.45], "spot_angle": 24, "spot_blend": 0.05 },
+{ "type": "sphere", "position": [1.4, 5.6, 1.6], "radius": 0.05, "intensity": 14000,
+  "ies": "../../scene-data/ies/narrow-downlight.ies" }
+```
+
+- `direction` is where it points, straight down by default.
+- `spot_angle` is the cone's full opening in degrees; `spot_blend` the share of it that fades
+  at the edge, from 0 (a hard edge) to 1; 0.15 by default.
+- `ies` is an IESNA LM-63 file with type C photometry, relative to the scene: the measured
+  light of a fixture, as lighting makers publish them. Its 0° vertical angle is `direction`.
+  The brightest direction keeps the light's intensity, and others follow the file's table;
+  horizontal symmetry (one angle, a quadrant or a half) is filled in.
+
+A cone and a file can be combined. The profile dims the light where it shines, in its beam in
+fog and on the bulb itself as the camera sees it. **File > Open Example > Techniques >
+Spotlights** shows hard and soft spots and two IES fixtures in haze; `tools/atmosphere.py`
+builds it, with made-up IES files in `assets/scene-data/ies`.
 
 Open **File > Open Example > Techniques > Rectangular lights** for a two-panel studio scene with
 mirror and glass spheres. Enable Caustics to inspect the resulting photon map.
@@ -742,7 +780,27 @@ sphere (`radius`). Where they overlap, their densities add.
   forward, as dust in sunlight does, so shafts glow brighter looking toward the light; negative
   values send it back.
 
-Each volume is the same throughout. Along a camera ray, the renderer estimates every time
+A volume can vary instead of being the same throughout:
+
+```json
+"fog": { "density": 0.1, "falloff": 0.5, "bounds": [[-30, 0, -10], [30, 6, 40]] },
+{ "type": "volume", "center": [2.4, 4, 4], "size": [2.4, 4.4, 2.4], "density": 7, "color": [0.55, 0.55, 0.56],
+  "falloff": 2.5, "noise": { "scale": 0.45, "octaves": 5, "coverage": 0.5, "seed": 3 } }
+```
+
+- `falloff` thins it with height, as ground fog and haze do: the density falls by e every that
+  many units above the volume's bottom.
+- `noise` shapes it like smoke or cloud from fractal noise: puffs about `scale` units across,
+  `octaves` levels of detail (1 to 8), `coverage` the share of space they fill, and `seed` a
+  different pattern. Noise fades out toward the edges of its box or sphere, so the shape never
+  shows.
+
+An even volume and one that only thins with height are integrated exactly; noise is
+integrated by stepping along the ray, a few steps per puff, which makes it slower.
+**File > Open Example > Techniques > Smoke** shows a chimney's smoke, clouds and ground fog
+under a low sun.
+
+Along a camera ray, the renderer estimates every time
 both the light the fog scatters toward the camera, from a point picked by where light first
 meets a particle, and the surface behind, dimmed by the fog; deeper rays pick one of the two.
 At the scattering point every light is sampled with a shadow ray, so whatever blocks a light
@@ -767,11 +825,12 @@ render look alike. Cancelled renders are left without it.
 
 ### HDR environment lighting (Enhanced)
 
-**Light > Environment > Import HDR…** opens a Radiance `.hdr` latitude-longitude panorama.
-Intensity changes its brightness; Rotation turns it around the vertical axis.
+The menu in the header of **Light > Environment** picks the source: None, **HDR image**,
+which opens a Radiance `.hdr` latitude-longitude panorama, or **Physical sky** (below).
+Intensity changes its brightness; Rotation turns an image around the vertical axis.
 **Background** affects camera misses only: turning it off keeps lighting,
-reflections and refraction. The check box in the Environment header disables the entire environment;
-**Remove**, under its Advanced area, clears it. UI changes last for the current scene session.
+reflections and refraction. The check box in the Environment header disables the entire
+environment, and None removes it. UI changes last for the current scene session.
 
 For persistent settings, add this top-level field to a `.far` scene:
 ```json
@@ -805,3 +864,29 @@ and the historical C++ reference rejects them explicitly.
 Environment lighting does not emit caustic photons in this version: photon mapping
 still uses local sphere and rectangle lights. Hiding the background produces black,
 not a transparent PNG.
+
+#### Physical sun and sky
+
+Instead of an image, the environment can be a sky computed from the sun's position: the
+Preetham, Shirley and Smits daylight model for the sky's brightness and color, and the sun as
+a disk of its true size whose light reddens and dims through the air, more so near the
+horizon. Below the horizon the sky fades through twilight.
+
+```json
+"environment": { "sky": { "elevation": 35, "azimuth": 140, "turbidity": 3 }, "intensity": 1 }
+"environment": { "sky": { "time": { "hour": 16.5, "latitude": -23.5, "day": 80 } } }
+```
+
+- `elevation` and `azimuth` place the sun in degrees: azimuth 0 is toward +Z, 90 toward +X.
+- Or `time` sets them from the local solar `hour`, the `latitude` (north positive) and the
+  `day` of the year, with north toward +Z and east toward +X.
+- `turbidity` is the haze, from 2 (very clear) through 3 (a clear day) to 10 (smog).
+- `sun_size` is the sun's diameter in degrees, 0.53 by default; larger softens shadows.
+  `sun_strength` scales the sun without the sky.
+
+In the app, **Physical sky** in the Environment menu shows the same settings, with **Sun
+from** choosing angles or a time of day. The sky is drawn into an environment map, so it
+lights, reflects and shows in the background exactly like an HDR image, sampled by
+importance; the sun's disk is scaled so it sends the sun's light at any map resolution. A
+white matte surface facing the sun at noon shows about 1. **File > Open Example > Techniques
+> Sun and sky** shows a courtyard late in the afternoon.

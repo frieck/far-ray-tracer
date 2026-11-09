@@ -38,6 +38,13 @@ struct SceneFile {
     fog: Option<MediumFile>,
     lights: Vec<LightFile>,
     objects: Vec<ObjectFile>,
+    /// The folder with the scene's images and meshes, relative to the scene, when it is not
+    /// found above the scene (a scene saved somewhere else keeps its textures this way).
+    #[serde(default)]
+    data_folder: Option<String>,
+    /// The app's render settings, saved with the scene; the engine does not read them.
+    #[serde(default)]
+    render: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -61,6 +68,8 @@ enum LightFile {
 
 fn default_intensity() -> f32 { 1.0 }
 
+fn default_spot_blend() -> f32 { 0.15 }
+
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum AreaLightFile {
@@ -80,6 +89,18 @@ enum AreaLightFile {
         color: Point,
         #[serde(default = "default_intensity")]
         intensity: f32,
+        /// Where a spotlight or an IES fixture points; straight down by default.
+        #[serde(default)]
+        direction: Option<Point>,
+        /// A spotlight's full cone, in degrees.
+        #[serde(default)]
+        spot_angle: Option<f32>,
+        /// The share of the cone that fades at its edge, from 0 to 1.
+        #[serde(default = "default_spot_blend")]
+        spot_blend: f32,
+        /// An IES file, relative to the scene, with the fixture's measured light distribution.
+        #[serde(default)]
+        ies: Option<String>,
     },
 }
 
@@ -117,7 +138,30 @@ struct MediumFile {
     color: Point,
     #[serde(default)]
     anisotropy: f32,
+    /// Thins with height: the density falls by e every this many units above the bottom.
+    #[serde(default)]
+    falloff: Option<f32>,
+    /// Billows like smoke or cloud.
+    #[serde(default)]
+    noise: Option<NoiseFile>,
 }
+
+/// `{"scale": 0.5, "octaves": 4, "coverage": 0.5, "seed": 0}`; see `volume::Noise`.
+#[derive(Deserialize, Clone, Copy)]
+#[serde(deny_unknown_fields)]
+struct NoiseFile {
+    scale: f32,
+    #[serde(default = "default_octaves")]
+    octaves: u32,
+    #[serde(default = "default_coverage")]
+    coverage: f32,
+    #[serde(default)]
+    seed: u32,
+}
+
+fn default_octaves() -> u32 { 4 }
+
+fn default_coverage() -> f32 { 0.5 }
 
 impl MediumFile {
     fn volume(&self, shape: crate::volume::Shape) -> Result<crate::volume::Volume, String> {
@@ -125,7 +169,17 @@ impl MediumFile {
             || !(-0.95..=0.95).contains(&self.anisotropy) {
             return Err("A volume needs a density of zero or more, a color in [0, 1] and an anisotropy from -0.95 to 0.95".into());
         }
-        Ok(crate::volume::Volume { shape, density: self.density, albedo: vector(self.color), anisotropy: self.anisotropy })
+        if self.falloff.is_some_and(|f| !(f > 0.0 && f.is_finite())) {
+            return Err("A volume's falloff must be a positive height".into());
+        }
+        if self.noise.is_some_and(|n| !(n.scale > 0.0 && n.scale.is_finite()) || !(1..=8).contains(&n.octaves)
+            || !(0.0..=1.0).contains(&n.coverage)) {
+            return Err("Volume noise needs a positive scale, 1 to 8 octaves and a coverage from 0 to 1".into());
+        }
+        let mut volume = crate::volume::Volume::even(shape, self.density, vector(self.color), self.anisotropy);
+        volume.falloff = self.falloff.map(|scale| (volume.bottom(), scale));
+        volume.noise = self.noise.map(|n| crate::volume::Noise { scale: n.scale, octaves: n.octaves, coverage: n.coverage, seed: n.seed });
+        Ok(volume)
     }
 }
 
@@ -307,6 +361,10 @@ enum ObjectFile {
         color: Point,
         #[serde(default)]
         anisotropy: f32,
+        #[serde(default)]
+        falloff: Option<f32>,
+        #[serde(default)]
+        noise: Option<NoiseFile>,
     },
     /// An OBJ or glTF model; see `model::Placement`. Without `material` it keeps its own.
     Model {
@@ -349,9 +407,13 @@ fn require_positive(values: &[f32], what: &str) -> Result<(), String> {
 
 impl Scene {
     pub(crate) fn from_far(data: &[u8], path: &Path) -> Result<Self, String> {
-        let file: SceneFile =
+        let source: serde_json::Value =
             serde_json::from_slice(data).map_err(|e| format!("{}: {e}", path.display()))?;
-        Self::from_file(file, path, None)
+        let file: SceneFile =
+            serde_json::from_value(source.clone()).map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut scene = Self::from_file(file, path, None)?;
+        scene.source = Some(std::sync::Arc::new(source));
+        Ok(scene)
     }
 
     /// A model opened on its own, in a small studio: resting on a gray floor, lit by a key, a
@@ -394,32 +456,47 @@ impl Scene {
                 {"type": "model", "file": name, "size": side},
             ],
         });
-        let file: SceneFile = serde_json::from_value(json).map_err(|e| e.to_string())?;
-        Self::from_file(file, path, Some(model))
+        let file: SceneFile = serde_json::from_value(json.clone()).map_err(|e| e.to_string())?;
+        let mut scene = Self::from_file(file, path, Some(model))?;
+        scene.source = Some(std::sync::Arc::new(json));
+        Ok(scene)
     }
 
     fn from_file(file: SceneFile, path: &Path, mut preloaded: Option<crate::model::Model>) -> Result<Self, String> {
-        let dir = find_data_folder(path);
+        let dir = match &file.data_folder {
+            Some(folder) => Some(path.parent().unwrap_or(Path::new(".")).join(folder)).filter(|d| d.is_dir()),
+            None => find_data_folder(path),
+        };
         file.camera.validate()?;
         let mut scene = Scene::empty();
         scene.camera = file.camera;
+        scene.render_settings = file.render.clone();
         if let Some(mut config) = file.environment {
-            let map_path = path.parent().unwrap_or(Path::new(".")).join(&config.path);
-            config.path = map_path.to_string_lossy().into_owned();
+            if config.sky.is_none() {
+                let map_path = path.parent().unwrap_or(Path::new(".")).join(&config.path);
+                config.path = map_path.to_string_lossy().into_owned();
+            }
             scene.environment = Some(crate::environment::Environment::load(config)?);
         }
         let mut cache = HashMap::new();
 
         let (mut meshes, mut planes, mut others) = (Vec::new(), Vec::new(), Vec::new());
-        for object in file.objects {
+        for (index, object) in file.objects.into_iter().enumerate() {
             match object {
-                ObjectFile::Mesh { .. } | ObjectFile::Model { .. } => meshes.push(object),
-                ObjectFile::Plane { .. } => planes.push(object),
-                _ => others.push(object),
+                ObjectFile::Mesh { .. } | ObjectFile::Model { .. } => meshes.push((index, object)),
+                ObjectFile::Plane { .. } => planes.push((index, object)),
+                _ => others.push((index, object)),
             }
         }
 
-        for object in meshes {
+        for (index, object) in meshes {
+            let before = scene.materials.len();
+            let source = if matches!(object, ObjectFile::Model { .. }) {
+                crate::scene::MaterialSource::ModelPart(index)
+            } else {
+                crate::scene::MaterialSource::Object(index)
+            };
+            scene.note_sources(before, crate::scene::MaterialSource::None);
             match object {
                 ObjectFile::Mesh { file, position, size, material } => {
                     let material = scene.add_material(material.into(), dir.as_deref(), &mut cache);
@@ -437,16 +514,23 @@ impl Scene {
                         Some(Err(e)) => { scene.warnings.push(format!("Skipped model {e}")); continue; }
                         None => { scene.warnings.push(format!("Skipped model {file}: file not found")); continue; }
                     };
+                    // A material set on the model itself is the object's; the model's own are parts.
                     let material = material.map(|m| scene.add_material(m.into(), dir.as_deref(), &mut cache));
+                    scene.note_sources(before, crate::scene::MaterialSource::Object(index));
                     let place = crate::model::Placement { position: vector(position), rotation, scale, size };
+                    let parts = scene.materials.len();
                     scene.add_model(model, place, material, dir.as_deref(), &mut cache, &file);
+                    scene.note_sources(parts, source);
                 }
                 _ => {}
             }
+            scene.note_sources(before, source);
         }
-        for object in planes {
+        for (index, object) in planes {
             let ObjectFile::Plane { points, material } = object else { continue };
+            let before = scene.materials.len();
             let material = scene.add_material(material.into(), dir.as_deref(), &mut cache);
+            scene.note_sources(before, crate::scene::MaterialSource::Object(index));
             let base = scene.vertices.len() as u32;
             scene.vertices.extend(points.map(|p| Vertex::new(vector(p))));
             for ids in [[base, base + 1, base + 3], [base + 1, base + 2, base + 3]] {
@@ -455,8 +539,10 @@ impl Scene {
                 scene.prims.push(Primitive::Triangle(t));
             }
         }
-        for object in others {
+        for (index, object) in others {
+            let before = scene.materials.len();
             scene.add_analytic(object, dir.as_deref(), &mut cache)?;
+            scene.note_sources(before, crate::scene::MaterialSource::Object(index));
         }
         for light in file.lights {
             match light {
@@ -485,7 +571,7 @@ impl Scene {
                         edge_u: u, edge_v: v, normal, area: width * height,
                     });
                 }
-                LightFile::Area(AreaLightFile::Sphere { position, radius, color, intensity }) => {
+                LightFile::Area(AreaLightFile::Sphere { position, radius, color, intensity, direction, spot_angle, spot_blend, ies }) => {
                     require_positive(&[radius], "A spherical light")?;
                     if !radius.is_finite() || !intensity.is_finite() || intensity < 0.0 || color.iter().any(|c| *c < 0.0) {
                         return Err("Light intensity and color must be nonnegative".into());
@@ -493,6 +579,21 @@ impl Scene {
                     let material = MaterialFile { color: (vector(color) * intensity).array(), ..MaterialFile::default() };
                     let material = scene.add_material(material.into(), dir.as_deref(), &mut cache);
                     scene.bulbs.push(Sphere::new(vector(position), radius, material));
+                    let ies = match ies {
+                        Some(file) => {
+                            let at = path.parent().unwrap_or(Path::new(".")).join(&file);
+                            let text = std::fs::read(&at).map_err(|e| format!("{}: {e}", at.display()))?;
+                            let parsed = crate::light_profile::Ies::parse(&String::from_utf8_lossy(&text))
+                                .map_err(|e| format!("{}: {e}", at.display()))?;
+                            Some(std::sync::Arc::new(parsed))
+                        }
+                        None => None,
+                    };
+                    let profile = (spot_angle.is_some() || ies.is_some() || direction.is_some())
+                        .then(|| crate::light_profile::Profile::new(
+                            vector(direction.unwrap_or([0.0, -1.0, 0.0])), spot_angle, spot_blend, ies))
+                        .transpose()?;
+                    scene.bulb_profiles.push(profile);
                 }
             }
         }
@@ -523,8 +624,8 @@ impl Scene {
         dir: Option<&Path>,
         cache: &mut HashMap<String, Option<usize>>,
     ) -> Result<(), String> {
-        if let ObjectFile::Volume { center, size, radius, rotation, density, color, anisotropy } = object {
-            let medium = MediumFile { bounds: None, density, color, anisotropy };
+        if let ObjectFile::Volume { center, size, radius, rotation, density, color, anisotropy, falloff, noise } = object {
+            let medium = MediumFile { bounds: None, density, color, anisotropy, falloff, noise };
             let center = vector(center);
             let shape = match (size, radius) {
                 (Some(size), None) => {
@@ -638,6 +739,28 @@ impl Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spotlights_skies_and_uneven_volumes_load_from_scene_files() {
+        let open = |text: &str| crate::Scene::from_far(text.as_bytes(), Path::new("test.far"));
+        let scene = open(r#"{"environment":{"sky":{"elevation":20,"turbidity":4}},
+            "lights":[{"type":"sphere","position":[0,3,0],"radius":0.1,"intensity":10,"direction":[0,-1,0],"spot_angle":40}],
+            "objects":[{"type":"volume","center":[0,1,0],"size":[2,2,2],"density":1,"falloff":0.5,"noise":{"scale":0.3}}]}"#).unwrap();
+        let profile = scene.bulb_profiles[0].as_ref().unwrap();
+        assert_eq!(profile.factor(Vec3::new(0.0, -1.0, 0.0)), 1.0);
+        assert_eq!(profile.factor(Vec3::new(1.0, 0.0, 0.0)), 0.0);
+        assert!(scene.environment.as_ref().unwrap().config.sky.is_some());
+        let volume = scene.volumes[0];
+        assert_eq!(volume.falloff, Some((0.0, 0.5)));
+        assert_eq!(volume.noise.unwrap().octaves, 4);
+        // A bare bulb has no profile, and bad values are refused.
+        let bare = open(r#"{"lights":[{"type":"sphere","position":[0,3,0],"radius":0.1}],"objects":[]}"#).unwrap();
+        assert!(bare.bulb_profiles[0].is_none());
+        assert!(open(r#"{"lights":[{"type":"sphere","position":[0,3,0],"radius":0.1,"spot_angle":0}],"objects":[]}"#).is_err());
+        assert!(open(r#"{"lights":[{"type":"sphere","position":[0,3,0],"radius":0.1,"ies":"missing.ies"}],"objects":[]}"#).is_err());
+        assert!(open(r#"{"environment":{"sky":{"turbidity":50}},"lights":[],"objects":[]}"#).is_err());
+        assert!(open(r#"{"lights":[],"objects":[{"type":"volume","center":[0,0,0],"radius":1,"density":1,"falloff":-1}]}"#).is_err());
+    }
 
     #[test]
     fn fog_fills_the_objects_and_volumes_check_their_values() {

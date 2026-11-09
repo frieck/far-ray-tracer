@@ -3,7 +3,8 @@
 #
 # Start it by pushing a tag that matches the version (git tag v3.0.0 && git push origin v3.0.0),
 # or by hand from the Actions tab. A labelled version such as v3.0.0-beta.1 becomes a
-# pre-release. Review the draft release, then publish it.
+# pre-release. Review the draft release, then publish it; update-channel.yml then points the
+# app's updater at it.
 name: Release
 
 on:
@@ -26,6 +27,14 @@ jobs:
           version="v$(node -p "require('./src-tauri/tauri.conf.json').version")"
           if [ "$GITHUB_REF_NAME" != "$version" ]; then
             echo "::error::Tag $GITHUB_REF_NAME does not match the app version $version"
+            exit 1
+          fi
+      # Each release lists its changes in CHANGELOG.md, which become the release notes.
+      - name: Check the changelog has this version
+        if: github.ref_type == 'tag'
+        run: |
+          if ! grep -q "^## \[${GITHUB_REF_NAME#v}\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section for ${GITHUB_REF_NAME#v}; move Unreleased under it"
             exit 1
           fi
       - uses: dtolnay/rust-toolchain@stable
@@ -75,9 +84,22 @@ jobs:
       - name: Fetch Open Image Denoise
         shell: bash
         run: tools/fetch_oidn.sh ${{ matrix.oidn }}
+      - name: Release notes from the changelog
+        id: notes
+        shell: bash
+        run: |
+          version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          {
+            echo "text<<END_OF_NOTES"
+            awk -v head="## [$version]" 'index($0, head) == 1 { on = 1; next } on && /^## \[/ { exit } on' CHANGELOG.md
+            echo "END_OF_NOTES"
+          } >> "$GITHUB_OUTPUT"
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the update bundles; the app only installs updates signed with this key.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: v__VERSION__
           releaseName: Far Ray Tracer v__VERSION__
@@ -85,7 +107,9 @@ jobs:
           # A version with a label, such as 3.0.0-beta.1, is marked as a pre-release.
           prerelease: ${{ contains(github.ref_name, '-') }}
           releaseBody: |
-            Desktop app for macOS and Windows.
+            ${{ steps.notes.outputs.text }}
+
+            ## Download
 
             | System | Download |
             | --- | --- |
@@ -98,4 +122,8 @@ jobs:
               If macOS says the app is damaged, run
               `xattr -dr com.apple.quarantine "/Applications/Far Ray Tracer.app"` in Terminal.
             - **Windows**: on the SmartScreen notice, choose More info > Run anyway.
-          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+          # Each job adds its system to the release's latest.json, which the app reads to update.
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
+          # tauri.release.conf.json turns on the signed update bundles, so local builds need no key.
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config src-tauri/tauri.release.conf.json

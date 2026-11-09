@@ -33,11 +33,11 @@ Visual gain for the effort:
 
 - [x] **Volumes**: fog, smoke and light shafts through the air, in boxes and spheres of even
   density. Medium to high.
-- [ ] **Uneven volumes**: smoke and clouds from a density grid or noise, and fog that thins with
+- [x] **Uneven volumes**: smoke and clouds from a density grid or noise, and fog that thins with
   height. Medium.
-- [ ] **Physical sun and sky**: a sky computed from the time of day, without an HDR image.
+- [x] **Physical sun and sky**: a sky computed from the time of day, without an HDR image.
   Medium.
-- [ ] **Spotlights and IES profiles**: a flashlight beam or a real fixture's light. Low.
+- [x] **Spotlights and IES profiles**: a flashlight beam or a real fixture's light. Low.
 
 ## Camera and image
 

@@ -1,6 +1,6 @@
 {
   "productName": "Far Ray Tracer",
-  "version": "3.0.0-beta.2",
+  "version": "3.0.0-beta.3",
   "identifier": "br.com.farsystems.far-ray-tracer",
   "build": {
     "frontendDist": "../dist",
@@ -57,6 +57,17 @@
     "macOS": {
       "signingIdentity": "-",
       "minimumSystemVersion": "11.0"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQzMzg1Qzk2RDFDQTk1RDAKUldUUWxjclJsbHc0US9pQ0plTGt4d3FtWUhEVzdQQi8wOXhLNDlGWU5JTlVFZEZsUE9Yb01HSW4K",
+      "endpoints": [
+        "https://github.com/frieck/far-ray-tracer/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

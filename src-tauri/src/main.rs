@@ -19,6 +19,8 @@ use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
+mod updater;
+
 const FRAME_INTERVAL: Duration = Duration::from_millis(33);
 /// Larger images go out less often, so sending them stays a small part of the work.
 const PIXELS_PER_FRAME_INTERVAL: u32 = 1_000_000;
@@ -29,11 +31,20 @@ const MESSAGE_PHOTON_MAP: u32 = 2;
 const HEADER_SIZE: usize = 24;
 const MENU_OPEN: &str = "open";
 const MENU_SAVE: &str = "save";
+const MENU_SAVE_SCENE: &str = "save_scene";
+const MENU_SAVE_SCENE_AS: &str = "save_scene_as";
 const MENU_RENDER: &str = "render";
 const MENU_EXAMPLE: &str = "example:";
+const MENU_ABOUT: &str = "about";
+const REPOSITORY_URL: &str = "https://github.com/frieck/far-ray-tracer";
 
 struct OpenScene {
     scene: Scene,
+    /// The file the scene was read from, which the paths inside it are relative to.
+    path: PathBuf,
+    /// Where Save writes: the file itself, or where it was last saved. None until it is
+    /// saved, when the file cannot be written in place (a bundled example or a model).
+    save_to: Mutex<Option<PathBuf>>,
     /// Built on first use: Classic mode needs the original tree, the others the corrected one.
     kd_classic: OnceLock<KdTree>,
     kd: OnceLock<KdTree>,
@@ -52,6 +63,8 @@ struct AppState {
     progress: Arc<Progress>,
     rendering: AtomicBool,
     last_image: Mutex<Option<FinishedImage>>,
+    /// The folder of example scenes, bundled or in the checkout; they are saved elsewhere.
+    examples: Mutex<Option<PathBuf>>,
     /// The studio environment that lights material previews, loaded on first use.
     studio: OnceLock<Option<Environment>>,
     /// The material preview being rendered, so a newer one can cancel it.
@@ -104,6 +117,8 @@ struct SceneInfo {
     warnings: Vec<String>,
     /// The automatic indirect light settings for this scene's lights.
     bounces: BounceInfo,
+    /// The app's render settings saved with the scene, if any.
+    render: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -232,8 +247,12 @@ fn open_scene(path: &Path, state: &AppState) -> Result<SceneInfo, String> {
             let auto = far_core::Bounces::for_scene(&scene);
             BounceInfo { strength: auto.strength, max: auto.max, clamp: auto.clamp }
         },
+        render: scene.render_settings.clone(),
     };
-    *state.scene.lock().unwrap() = Some(Arc::new(OpenScene { scene, kd_classic: OnceLock::new(), kd: OnceLock::new() }));
+    let save_to = writable_in_place(path, app_resources(state)).then(|| path.to_path_buf());
+    *state.scene.lock().unwrap() = Some(Arc::new(OpenScene {
+        scene, path: path.to_path_buf(), save_to: Mutex::new(save_to), kd_classic: OnceLock::new(), kd: OnceLock::new(),
+    }));
     Ok(info)
 }
 
@@ -331,12 +350,18 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     }
 
     let open = MenuItemBuilder::with_id(MENU_OPEN, "Open Scene…").accelerator("CmdOrCtrl+O").build(app)?;
-    let save = MenuItemBuilder::with_id(MENU_SAVE, "Save PNG…").accelerator("CmdOrCtrl+S").build(app)?;
+    let save_scene = MenuItemBuilder::with_id(MENU_SAVE_SCENE, "Save Scene").accelerator("CmdOrCtrl+S").build(app)?;
+    let save_scene_as = MenuItemBuilder::with_id(MENU_SAVE_SCENE_AS, "Save Scene As…").accelerator("CmdOrCtrl+Shift+S").build(app)?;
+    let save = MenuItemBuilder::with_id(MENU_SAVE, "Export Image…").accelerator("CmdOrCtrl+E").build(app)?;
     let render = MenuItemBuilder::with_id(MENU_RENDER, "Render").accelerator("CmdOrCtrl+R").build(app)?;
+    let about = MenuItemBuilder::with_id(MENU_ABOUT, "About Far Ray Tracer").build(app)?;
+    let check_updates = MenuItemBuilder::with_id(updater::MENU_CHECK_UPDATES, "Check for Updates…").build(app)?;
 
-    let application = SubmenuBuilder::new(app, "Far Ray Tracer")
-        .about(None)
-        .separator()
+    // macOS keeps About in the application menu; elsewhere it goes under Help.
+    let application = SubmenuBuilder::new(app, "Far Ray Tracer");
+    #[cfg(target_os = "macos")]
+    let application = application.item(&about).item(&check_updates).separator();
+    let application = application
         .services()
         .separator()
         .hide()
@@ -349,6 +374,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .item(&open)
         .item(&examples.build()?)
         .separator()
+        .item(&save_scene)
+        .item(&save_scene_as)
         .item(&save)
         .separator()
         .close_window()
@@ -365,13 +392,25 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let render_menu = SubmenuBuilder::new(app, "Render").item(&render).build()?;
     let view = SubmenuBuilder::new(app, "View").fullscreen().build()?;
     let window = SubmenuBuilder::new(app, "Window").minimize().maximize().build()?;
-    MenuBuilder::new(app).items(&[&application, &file, &edit, &render_menu, &view, &window]).build()
+    let menu = MenuBuilder::new(app).items(&[&application, &file, &edit, &render_menu, &view, &window]);
+    #[cfg(not(target_os = "macos"))]
+    let menu = menu.item(&SubmenuBuilder::new(app, "Help").item(&check_updates).separator().item(&about).build()?);
+    menu.build()
 }
 
 fn on_menu(app: &AppHandle, id: &str) {
+    if id == updater::MENU_CHECK_UPDATES {
+        return updater::check(app, false);
+    }
+    if id == MENU_ABOUT {
+        let _ = app.emit("show-about", ());
+        return;
+    }
     let action = match id {
         MENU_OPEN => MenuAction { action: "open", path: None },
         MENU_SAVE => MenuAction { action: "save", path: None },
+        MENU_SAVE_SCENE => MenuAction { action: "save_scene", path: None },
+        MENU_SAVE_SCENE_AS => MenuAction { action: "save_scene_as", path: None },
         MENU_RENDER => MenuAction { action: "render", path: None },
         _ => match id.strip_prefix(MENU_EXAMPLE) {
             Some(path) => MenuAction { action: "example", path: Some(path.to_string()) },
@@ -379,6 +418,18 @@ fn on_menu(app: &AppHandle, id: &str) {
         },
     };
     let _ = app.emit("menu-action", action);
+}
+
+/// Opens the project's GitHub page in the default browser.
+#[tauri::command]
+fn open_repository() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let mut command = std::process::Command::new("open");
+    #[cfg(target_os = "windows")]
+    let mut command = std::process::Command::new("explorer");
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let mut command = std::process::Command::new("xdg-open");
+    command.arg(REPOSITORY_URL).spawn().map(|_| ()).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -414,7 +465,7 @@ fn choose_environment(app: AppHandle, state: State<'_, AppState>) -> Result<Opti
     let config = EnvironmentConfig { path: path.to_string_lossy().into_owned(), ..EnvironmentConfig::default() };
     // Decode and build the sampling table once; slider edits reuse the shared map.
     let environment = Environment::load(config.clone())?;
-    *state.environment_cache.lock().unwrap() = Some((config.path.clone(), environment.map));
+    *state.environment_cache.lock().unwrap() = Some((config.map_key(), environment.map));
     Ok(Some(config))
 }
 
@@ -499,17 +550,17 @@ fn material_preview(
 fn render_environment(config: &EnvironmentConfig, scene: &Scene, state: &AppState) -> Result<Environment, String> {
     config.validate()?;
     if let Some(environment) = &scene.environment {
-        if environment.config.path == config.path {
+        if environment.config.map_key() == config.map_key() {
             return Ok(Environment { config: config.clone(), map: environment.map.clone() });
         }
     }
     if let Some((path, map)) = state.environment_cache.lock().unwrap().as_ref() {
-        if path == &config.path {
+        if path == &config.map_key() {
             return Ok(Environment { config: config.clone(), map: map.clone() });
         }
     }
     let environment = Environment::load(config.clone())?;
-    *state.environment_cache.lock().unwrap() = Some((config.path.clone(), environment.map.clone()));
+    *state.environment_cache.lock().unwrap() = Some((config.map_key(), environment.map.clone()));
     Ok(environment)
 }
 
@@ -547,6 +598,75 @@ fn save_image(name: String, app: AppHandle, state: State<'_, AppState>) -> Resul
     image::save_buffer(&path, &rgb, image.width, image.height, image::ColorType::Rgb8)
         .map_err(|e| e.to_string())?;
     Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+/// The folder of example scenes, set at startup.
+fn app_resources(state: &AppState) -> Option<PathBuf> {
+    state.examples.lock().unwrap().clone()
+}
+
+/// A scene can be saved over itself when it is a `.far` file that is not one of the examples.
+fn writable_in_place(path: &Path, examples: Option<PathBuf>) -> bool {
+    let far = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("far"));
+    let example = examples.and_then(|e| e.canonicalize().ok())
+        .is_some_and(|e| path.canonicalize().is_ok_and(|p| p.starts_with(e)));
+    far && !example && !std::fs::metadata(path).is_ok_and(|m| m.permissions().readonly())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SaveSceneRequest {
+    camera: far_core::Camera,
+    environment: Option<EnvironmentConfig>,
+    #[serde(default)]
+    material_overrides: Vec<MaterialOverride>,
+    render: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct SavedScene {
+    path: String,
+    warnings: Vec<String>,
+}
+
+/// Saves the open scene with the app's edits: over its file, or to a file the user picks when
+/// `choose` is set or the scene has no file it can write.
+#[tauri::command(async)]
+fn save_scene(choose: bool, request: SaveSceneRequest, app: AppHandle, state: State<'_, AppState>) -> Result<Option<SavedScene>, String> {
+    let open = state.scene.lock().unwrap().clone().ok_or("No scene is open")?;
+    request.camera.validate()?;
+    if let Some(environment) = &request.environment {
+        environment.validate()?;
+    }
+    let current = open.save_to.lock().unwrap().clone();
+    let target = match current.filter(|_| !choose) {
+        Some(path) => path,
+        None => {
+            let name = open.path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "scene".into());
+            let mut dialog = app.dialog().file().add_filter("Far Ray Tracer scene", &["far"]).set_file_name(format!("{name}.far"));
+            // Examples live inside the app; start somewhere the user can write.
+            if !writable_in_place(&open.path, app_resources(&state)) {
+                if let Ok(documents) = app.path().document_dir() {
+                    dialog = dialog.set_directory(documents);
+                }
+            }
+            let Some(file) = dialog.blocking_save_file() else { return Ok(None) };
+            let mut path = file.into_path().map_err(|e| e.to_string())?;
+            if path.extension().is_none() {
+                path.set_extension("far");
+            }
+            path
+        }
+    };
+    let edits = far_core::scene_save::SceneEdits {
+        camera: request.camera,
+        environment: request.environment,
+        materials: request.material_overrides.iter().map(|m| (m.id, m.surface.clone(), m.bump_strength)).collect(),
+        render: Some(request.render),
+    };
+    let warnings = far_core::scene_save::save(&open.scene, &open.path, &target, &edits)?;
+    *open.save_to.lock().unwrap() = Some(target.clone());
+    Ok(Some(SavedScene { path: target.to_string_lossy().into_owned(), warnings }))
 }
 
 fn message(fields: [u32; 6], pixels: Option<&Image>) -> Response {
@@ -741,21 +861,29 @@ fn render_scene(
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::default())
         .setup(|app| {
+            *app.state::<AppState>().examples.lock().unwrap() = scenes_folder(app.handle());
             load_denoiser(app.handle());
             let menu = build_menu(app.handle())?;
             app.set_menu(menu)?;
+            // Development builds have no signed release to compare against.
+            if !cfg!(debug_assertions) {
+                updater::check(app.handle(), true);
+            }
             Ok(())
         })
         .on_menu_event(|app, event| on_menu(app, event.id().as_ref()))
         .invoke_handler(tauri::generate_handler![
             startup,
+            open_repository,
             choose_scene,
             choose_environment,
             load_scene,
             cancel,
             save_image,
+            save_scene,
             render_scene,
             pick_focus,
             scene_geometry,

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AboutDialog } from "./components/AboutDialog";
 import { ControlPanel } from "./components/ControlPanel";
 import { MaterialStage } from "./components/MaterialStage";
 import { Viewport } from "./components/Viewport";
@@ -440,6 +441,7 @@ export function App() {
           />
         )}
       </div>
+      <AboutDialog />
     </>
   );
 }
