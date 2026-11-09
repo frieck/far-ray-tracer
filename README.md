@@ -21,6 +21,38 @@ off by default, shows how the program got there, in three stages:
 A draggable divider compares any stage with an earlier one, so the gain from fixing
 bugs and the gain from new techniques can be seen separately.
 
+## Download
+
+The [releases page](https://github.com/frieck/far-ray-tracer/releases) has the app for:
+
+| System | File |
+| --- | --- |
+| macOS, Apple Silicon (M1 and later) | `…_aarch64.dmg` |
+| macOS, Intel | `…_x64.dmg` |
+| Windows 10 and 11 | `…_x64-setup.exe` |
+
+The builds are not signed with an Apple or Microsoft certificate, so each system asks
+before the first launch:
+- **macOS**: open the app once, then choose System Settings > Privacy & Security >
+  Open Anyway. If macOS says the app is damaged, run
+  `xattr -dr com.apple.quarantine "/Applications/Far Ray Tracer.app"` in Terminal.
+- **Windows**: on the SmartScreen notice, choose More info > Run anyway.
+
+### Making a release
+
+`.github/workflows/release.yml` tests the engine, builds the three versions on GitHub
+Actions and attaches them to a draft release named after the app version.
+
+1. Set the new version in `package.json`, `Cargo.toml` (workspace) and
+   `src-tauri/tauri.conf.json`, and commit.
+2. Push a tag with that version; the workflow stops if they differ:
+   ```bash
+   git tag v3.0.0 && git push origin v3.0.0
+   ```
+   A labelled version, such as `3.0.0-beta.1`, becomes a pre-release. It can also be
+   started by hand from the Actions tab.
+3. When the builds finish, review the draft on the releases page and publish it.
+
 ## Requirements
 
 - [Rust](https://rustup.rs), tested with 1.92

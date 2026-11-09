@@ -1,0 +1,94 @@
+# Builds the desktop app for macOS (Apple Silicon and Intel) and Windows, and attaches the
+# installers to a draft GitHub release named after the app version, for example v3.0.0.
+#
+# Start it by pushing a tag that matches the version (git tag v3.0.0 && git push origin v3.0.0),
+# or by hand from the Actions tab. A labelled version such as v3.0.0-beta.1 becomes a
+# pre-release. Review the draft release, then publish it.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Test the engine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the tag matches the app version
+        if: github.ref_type == 'tag'
+        run: |
+          version="v$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          if [ "$GITHUB_REF_NAME" != "$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match the app version $version"
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The app crate needs the desktop libraries of each system; the engine and the command
+      # line hold the rendering and run anywhere.
+      - run: cargo test --release -p far-core -p far-cli
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple Silicon)
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - name: macOS (Intel)
+            runner: macos-latest
+            target: x86_64-apple-darwin
+            bundles: app,dmg
+          - name: Windows
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            # Only the setup program: MSI versions cannot carry a label such as "beta".
+            bundles: nsis
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - run: npm ci
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: Far Ray Tracer v__VERSION__
+          releaseDraft: true
+          # A version with a label, such as 3.0.0-beta.1, is marked as a pre-release.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          releaseBody: |
+            Desktop app for macOS and Windows.
+
+            | System | Download |
+            | --- | --- |
+            | macOS, Apple Silicon (M1 and later) | `Far.Ray.Tracer_*_aarch64.dmg` |
+            | macOS, Intel | `Far.Ray.Tracer_*_x64.dmg` |
+            | Windows 10 and 11 | `Far.Ray.Tracer_*_x64-setup.exe` |
+
+            These builds are not signed, so each system asks before the first launch:
+            - **macOS**: open the app once, then System Settings > Privacy & Security > Open Anyway.
+              If macOS says the app is damaged, run
+              `xattr -dr com.apple.quarantine "/Applications/Far Ray Tracer.app"` in Terminal.
+            - **Windows**: on the SmartScreen notice, choose More info > Run anyway.
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}

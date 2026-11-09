@@ -1,6 +1,6 @@
 {
   "productName": "Far Ray Tracer",
-  "version": "3.0.0",
+  "version": "3.0.0-beta.1",
   "identifier": "br.com.farsystems.far-ray-tracer",
   "build": {
     "frontendDist": "../dist",
@@ -52,6 +52,10 @@
       "../assets": "assets"
     },
     "publisher": "FARSystems",
-    "copyright": "Copyright (c) 2026 FARSystems"
+    "copyright": "Copyright (c) 2026 FARSystems",
+    "macOS": {
+      "signingIdentity": "-",
+      "minimumSystemVersion": "11.0"
+    }
   }
 }
