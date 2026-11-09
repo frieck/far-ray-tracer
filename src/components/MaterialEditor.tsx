@@ -2,8 +2,7 @@ import { Maximize2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { drawPreview, renderMaterialBall } from "../materialPreview";
 import type { BumpInfo, MaterialOverride, MaterialPreset, SceneMaterial, SurfaceMaterial } from "../types";
-import { Select } from "./Select";
-import { Slider } from "./Slider";
+import { Choice, ColorRow, Hint, Row, ScrubRow, Section } from "./props";
 
 const PRESETS: Record<Exclude<MaterialPreset, "custom">, { roughness: number; metallic: number; ior: number }> = {
   metal: { roughness: 0.2, metallic: 1, ior: 1.5 },
@@ -27,8 +26,6 @@ const PREVIEW_PASSES = [
 /** Final previews already rendered, by scene, material and edit. */
 const previewCache = new Map<string, ImageData>();
 const MAX_CACHED_PREVIEWS = 64;
-
-const hex = (rgb: number[]) => "#" + rgb.map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, "0")).join("");
 
 /** Whether a surface uses any layer beyond plain GGX, which no preset has. */
 const layered = (s: SurfaceMaterial) =>
@@ -135,45 +132,45 @@ export function MaterialEditor({ materials, overrides, scenePath, selected, onSe
   };
 
   return (
-    <div className="group">
-      <Select label="Object material" value={String(material.id)} onChange={(id) => onSelect(Number(id))}>
-        {materials.map((m) => <option key={m.id} value={String(m.id)}>{m.label}</option>)}
-      </Select>
-      <MaterialPreview id={material.id} edit={edit ?? null} scenePath={scenePath} onExpand={onExpand} />
-      <Select<MaterialPreset | "original"> label="Material preset" value={edit?.surface ? current.preset : "original"} onChange={(preset) => {
-        if (preset === "original") store({ surface: null, bump_strength: bumpStrength });
-        else if (preset === "custom") apply({ ...current, color, preset: "custom" });
-        else apply({ ...PRESETS[preset], preset, color });
-      }}>
-        <option value="original">Original{material.surface ? ` (${PRESET_NAMES[material.surface.preset]})` : ""}</option>
-        <option value="metal">Metal</option>
-        <option value="plastic">Plastic</option>
-        <option value="ceramic">Ceramic</option>
-        <option value="glass">Glass</option>
-        <option value="custom">Custom</option>
-      </Select>
-      <label className="field-row"><span>Base color</span>
-        <input type="color" aria-label="Material base color" value={hex(color)} onChange={(e) => {
-          const value = e.target.value;
-          change({ color: [1, 3, 5].map((i) => parseInt(value.slice(i, i + 2), 16) / 255) as [number, number, number] });
-        }} />
-      </label>
-      <Slider label="Roughness" value={current.roughness} min={0} max={1} step={0.01}
-        format={(v) => v.toFixed(2)} onChange={(roughness) => change({ roughness })} />
-      <Slider label="Metallic" value={current.metallic} min={0} max={1} step={0.01} disabled={glass}
-        format={(v) => v.toFixed(2)} onChange={(metallic) => change({ metallic })} />
-      <Slider label="IOR" value={current.ior} min={1} max={3} step={0.01} disabled={current.metallic === 1}
-        format={(v) => v.toFixed(2)} onChange={(ior) => change({ ior })} />
+    <>
+      <Section id="material-object" title="Object">
+        <Row label="Material" keywords="object">
+          <Choice label="Object material" value={String(material.id)} onChange={(id) => onSelect(Number(id))}>
+            {materials.map((m) => <option key={m.id} value={String(m.id)}>{m.label}</option>)}
+          </Choice>
+        </Row>
+        <MaterialPreview id={material.id} edit={edit ?? null} scenePath={scenePath} onExpand={onExpand} />
+      </Section>
+      <Section id="material-surface" title="Surface" extra={
+        <Choice<MaterialPreset | "original"> small label="Material preset" value={edit?.surface ? current.preset : "original"}
+          onChange={(preset) => {
+            if (preset === "original") store({ surface: null, bump_strength: bumpStrength });
+            else if (preset === "custom") apply({ ...current, color, preset: "custom" });
+            else apply({ ...PRESETS[preset], preset, color });
+          }}>
+          <option value="original">Original{material.surface ? ` (${PRESET_NAMES[material.surface.preset]})` : ""}</option>
+          <option value="metal">Metal</option>
+          <option value="plastic">Plastic</option>
+          <option value="ceramic">Ceramic</option>
+          <option value="glass">Glass</option>
+          <option value="custom">Custom</option>
+        </Choice>
+      }>
+        <ColorRow label="Base color" value={color} onChange={(value) => change({ color: value })} />
+        <ScrubRow label="Roughness" value={current.roughness} min={0} max={1} step={0.01} strict
+          hint={glass ? "Frosts the glass." : "Spreads reflections."} onChange={(roughness) => change({ roughness })} />
+        <ScrubRow label="Metallic" value={current.metallic} min={0} max={1} step={0.01} strict disabled={glass}
+          onChange={(metallic) => change({ metallic })} />
+        <ScrubRow label="IOR" keywords="index of refraction" value={current.ior} min={1} max={3} step={0.01} strict
+          disabled={current.metallic === 1} onChange={(ior) => change({ ior })} />
+        <Hint>Edits last for this session; Original restores the scene material.</Hint>
+      </Section>
       {glass ? <GlassControls surface={current} onChange={change} /> : <LayerControls surface={current} onChange={change} />}
       {material.bump && (
         <BumpControl bump={material.bump} strength={bumpStrength}
           onChange={(strength) => store({ surface: edit?.surface ?? null, bump_strength: strength })} />
       )}
-      <p className="note">
-        {glass ? "Glass: roughness frosts it." : "GGX reflection. Higher roughness spreads reflections."}{" "}
-        Edits last for this session; Original restores the scene material.
-      </p>
-    </div>
+    </>
   );
 }
 
@@ -188,18 +185,16 @@ function BumpControl({ bump, strength, onChange }: {
   // A height is a depth in scene units, so its range follows the scene's own value.
   const max = height ? Math.max(0.2, bump.strength * 4) : 3;
   return (
-    <>
-      <Slider label={height ? "Bump depth" : "Normal map strength"} value={value} min={0} max={max}
-        step={height ? max / 200 : 0.05} format={(v) => (height ? v.toFixed(3) : v.toFixed(2))}
+    <Section id="material-bump" title={height ? "Bump map" : "Normal map"}>
+      <ScrubRow label={height ? "Depth" : "Strength"} keywords="bump normal" value={value} min={0} max={max}
+        step={height ? 0.001 : 0.05}
+        hint={height ? "Depth of the relief, in scene units. 0 turns it off." : "1 uses the map as drawn. 0 turns it off."}
         onChange={(next) => onChange(next === bump.strength ? null : next)} />
-      <p className="note">
-        {height ? "Height map: depth of the relief, in scene units." : "Normal map: 1 uses the map as drawn."} 0 turns it off.
-      </p>
-    </>
+    </Section>
   );
 }
 
-/** Past the end of a slider: the setting is off. */
+/** Past the end of a field: the setting is off. */
 const OFF_TINT = 5.05;
 
 /** Tint depth and dispersion of glass. */
@@ -209,22 +204,20 @@ function GlassControls({ surface, onChange }: { surface: SurfaceMaterial; onChan
   // Dispersion from 0, none, to 1, Abbe number 5, far stronger than any real glass.
   const dispersion = abbe === null ? 0 : (100 - abbe) / 95;
   return (
-    <>
-      <Slider label="Tint depth" value={depth ?? OFF_TINT} min={0.05} max={OFF_TINT} step={0.05}
+    <Section id="material-glass" title="Glass">
+      <ScrubRow label="Tint depth" keywords="absorption" value={depth ?? OFF_TINT} min={0.05} max={OFF_TINT} step={0.05} strict
         format={(v) => (v >= OFF_TINT ? "Off" : v.toFixed(2))}
+        hint="How far light travels keeping the glass color; thicker glass is darker."
         onChange={(v) => onChange({ absorption_depth: v >= OFF_TINT ? null : v })} />
-      <Slider label="Dispersion" value={dispersion} min={0} max={1} step={0.01}
+      <ScrubRow label="Dispersion" keywords="abbe rainbow" value={dispersion} min={0} max={1} step={0.01} strict
         format={(v) => (v <= 0 ? "Off" : `Abbe ${Math.round(100 - 95 * v)}`)}
+        hint="Splits light into a spectrum, best seen in caustics."
         onChange={(v) => onChange({ abbe: v <= 0 ? null : 100 - 95 * v })} />
-      <p className="note">
-        Tint depth: how far light travels keeping the glass color; thicker glass is darker. Dispersion splits light
-        into a spectrum, best seen in caustics.
-      </p>
-    </>
+    </Section>
   );
 }
 
-/** Clear coat, sheen, anisotropy and subsurface of a GGX surface. */
+/** Clear coat, sheen, anisotropy and subsurface of a GGX surface, folded until needed. */
 function LayerControls({ surface, onChange }: { surface: SurfaceMaterial; onChange: (v: Partial<SurfaceMaterial>) => void }) {
   const clearcoat = surface.clearcoat ?? 0;
   const sheen = surface.sheen ?? 0;
@@ -233,33 +226,27 @@ function LayerControls({ surface, onChange }: { surface: SurfaceMaterial; onChan
   const sheenColor = surface.sheen_color ?? [1, 1, 1];
   return (
     <>
-      <h2>Coat and sheen</h2>
-      <Slider label="Clear coat" value={clearcoat} min={0} max={1} step={0.01} format={(v) => v.toFixed(2)}
-        onChange={(v) => onChange({ clearcoat: v })} />
-      <Slider label="Coat roughness" value={surface.clearcoat_roughness ?? 0.03} min={0} max={1} step={0.01}
-        disabled={clearcoat === 0} format={(v) => v.toFixed(2)} onChange={(v) => onChange({ clearcoat_roughness: v })} />
-      <Slider label="Sheen" value={sheen} min={0} max={1} step={0.01} format={(v) => v.toFixed(2)}
-        onChange={(v) => onChange({ sheen: v })} />
-      <label className="field-row"><span>Sheen color</span>
-        <input type="color" aria-label="Sheen color" value={hex(sheenColor)} disabled={sheen === 0} onChange={(e) => {
-          const value = e.target.value;
-          onChange({ sheen_color: [1, 3, 5].map((i) => parseInt(value.slice(i, i + 2), 16) / 255) as [number, number, number] });
-        }} />
-      </label>
-      <h2>Grain</h2>
-      <Slider label="Anisotropy" value={anisotropy} min={-1} max={1} step={0.02} format={(v) => v.toFixed(2)}
-        onChange={(v) => onChange({ anisotropy: v })} />
-      <Slider label="Grain rotation" value={surface.anisotropy_rotation ?? 0} min={0} max={180} step={1}
-        disabled={anisotropy === 0} format={(v) => `${v}°`} onChange={(v) => onChange({ anisotropy_rotation: v })} />
-      <h2>Subsurface</h2>
-      <Slider label="Subsurface" value={subsurface} min={0} max={1} step={0.01} format={(v) => v.toFixed(2)}
-        onChange={(v) => onChange({ subsurface: v })} />
-      <Slider label="Scatter distance" value={surface.subsurface_radius ?? 0.1} min={0.01} max={1} step={0.01}
-        disabled={subsurface === 0} format={(v) => v.toFixed(2)} onChange={(v) => onChange({ subsurface_radius: v })} />
-      <p className="note">
-        Clear coat varnishes the surface; sheen gives cloth its soft edges; anisotropy stretches highlights along
-        the texture direction, as on brushed metal; subsurface lets light travel inside, as in wax or skin.
-      </p>
+      <Section id="material-coat" title="Coat and sheen" defaultOpen={false}>
+        <ScrubRow label="Clear coat" keywords="varnish" value={clearcoat} min={0} max={1} step={0.01} strict
+          hint="A varnish layer over the surface." onChange={(v) => onChange({ clearcoat: v })} />
+        <ScrubRow label="Coat roughness" value={surface.clearcoat_roughness ?? 0.03} min={0} max={1} step={0.01} strict
+          disabled={clearcoat === 0} onChange={(v) => onChange({ clearcoat_roughness: v })} />
+        <ScrubRow label="Sheen" keywords="velvet cloth" value={sheen} min={0} max={1} step={0.01} strict
+          hint="Soft light at the edges, as on cloth." onChange={(v) => onChange({ sheen: v })} />
+        <ColorRow label="Sheen color" value={sheenColor} disabled={sheen === 0} onChange={(value) => onChange({ sheen_color: value })} />
+      </Section>
+      <Section id="material-grain" title="Grain" defaultOpen={false}>
+        <ScrubRow label="Anisotropy" keywords="brushed metal" value={anisotropy} min={-1} max={1} step={0.02} strict
+          hint="Stretches highlights along the texture direction, as on brushed metal." onChange={(v) => onChange({ anisotropy: v })} />
+        <ScrubRow label="Grain rotation" value={surface.anisotropy_rotation ?? 0} min={0} max={180} hard={[-360, 360]} step={1}
+          disabled={anisotropy === 0} format={(v) => `${v}°`} onChange={(v) => onChange({ anisotropy_rotation: v })} />
+      </Section>
+      <Section id="material-subsurface" title="Subsurface" defaultOpen={false}>
+        <ScrubRow label="Amount" keywords="subsurface wax skin" value={subsurface} min={0} max={1} step={0.01} strict
+          hint="Lets light travel inside, as in wax or skin." onChange={(v) => onChange({ subsurface: v })} />
+        <ScrubRow label="Scatter distance" value={surface.subsurface_radius ?? 0.1} min={0.01} max={1} hard={[0.001, 100]} step={0.001}
+          disabled={subsurface === 0} onChange={(v) => onChange({ subsurface_radius: v })} />
+      </Section>
     </>
   );
 }

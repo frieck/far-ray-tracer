@@ -1,5 +1,8 @@
-import { Camera, Cpu, Crosshair, Download, FolderOpen, Gauge, Palette, Play, RotateCcw, SlidersHorizontal, Square, Sun, type LucideIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+  Camera, Cpu, Crosshair, Download, FolderOpen, Gauge, History, Palette, Play, RotateCcw, Search, SlidersHorizontal, Square,
+  Sun, X, type LucideIcon,
+} from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   activeMode,
   causticSettings,
@@ -19,15 +22,12 @@ import {
   withMode,
 } from "../settings";
 import type { Bounces, DofPreset, CausticPreset, CausticReport, Comparison, Mode, Quality, Resolution, Settings, ToneMapping } from "../types";
-import { EnvironmentPanel } from "./EnvironmentPanel";
 import { MaterialEditor } from "./MaterialEditor";
 import { CausticStats } from "./CausticStats";
 import { GlassPanel } from "./GlassPanel";
 import { NumberField } from "./NumberField";
 import { Segmented } from "./Segmented";
-import { Select } from "./Select";
-import { Slider } from "./Slider";
-import { Toggle } from "./Toggle";
+import { ButtonRow, CheckBox, CheckRow, Choice, ChoiceRow, Hint, Row, ScrubRow, SearchContext, Section } from "./props";
 
 interface ControlPanelProps {
   loadingEnvironment: boolean;
@@ -58,60 +58,10 @@ interface ControlPanelProps {
   onExpandMaterial: () => void;
 }
 
-/** Most rebound limit the slider shows as a number; one step past it means no limit. */
+/** Most rebound limit the field shows as a number; one step past it means no limit. */
 const MAX_REBOUND_LIMIT = 50;
 
-function bounceSummary(auto: Bounces): string {
-  return auto.strength >= 1
-    ? "Automatic: full path tracing, physically correct."
-    : "Automatic: this scene has a 2008 light, which does not fall off with distance, so its bounces are weaker and fewer.";
-}
-
-function BounceControls({ bounces, auto, onChange }: { bounces: Bounces | null; auto: Bounces; onChange: (bounces: Bounces | null) => void }) {
-  const current = bounces ?? auto;
-  const edit = (change: Partial<Bounces>) => {
-    const next = { ...current, ...change };
-    const automatic = next.strength === auto.strength && next.max === auto.max && next.clamp === auto.clamp;
-    onChange(automatic ? null : next);
-  };
-  return (
-    <>
-      <Select<"auto" | "custom">
-        label="Bounce settings"
-        value={bounces ? "custom" : "auto"}
-        onChange={(value) => onChange(value === "custom" ? { ...auto } : null)}
-      >
-        <option value="auto">Automatic</option>
-        <option value="custom">Custom</option>
-      </Select>
-      <Slider
-        label="Bounce strength"
-        value={current.strength}
-        min={0}
-        max={1.5}
-        step={0.05}
-        format={(value) => value.toFixed(2)}
-        onChange={(strength) => edit({ strength })}
-      />
-      <Slider label="Bounces" value={current.max} min={0} max={64} step={1} onChange={(max) => edit({ max })} />
-      <Slider
-        label="Rebound limit"
-        value={current.clamp === 0 ? MAX_REBOUND_LIMIT + 1 : current.clamp}
-        min={1}
-        max={MAX_REBOUND_LIMIT + 1}
-        step={0.5}
-        format={(value) => (value > MAX_REBOUND_LIMIT ? "None" : value.toFixed(1))}
-        onChange={(value) => edit({ clamp: value > MAX_REBOUND_LIMIT ? 0 : value })}
-      />
-      <p className="note">
-        {bounces ? "Strength 1 is physically correct." : bounceSummary(auto)} From the third bounce, Russian roulette ends
-        dim paths early, so many bounces cost little. A lower rebound limit removes white dots but darkens bright bounces.
-      </p>
-    </>
-  );
-}
-
-type Tab = "render" | "light" | "camera" | "image" | "materials" | "system";
+type Tab = "render" | "light" | "camera" | "image" | "materials" | "system" | "evolution";
 
 const TABS: { id: Tab; label: string; icon: LucideIcon; enhancedOnly: boolean }[] = [
   { id: "render", label: "Render", icon: Gauge, enhancedOnly: false },
@@ -120,6 +70,7 @@ const TABS: { id: Tab; label: string; icon: LucideIcon; enhancedOnly: boolean }[
   { id: "image", label: "Image", icon: SlidersHorizontal, enhancedOnly: true },
   { id: "materials", label: "Materials", icon: Palette, enhancedOnly: true },
   { id: "system", label: "System", icon: Cpu, enhancedOnly: false },
+  { id: "evolution", label: "Evolution", icon: History, enhancedOnly: false },
 ];
 
 const TAB_KEY = "far.controlTab";
@@ -134,15 +85,14 @@ function savedTab(): Tab {
 }
 
 export function ControlPanel(props: ControlPanelProps) {
-  const { settings, cores, rendering, canRender, canSave, report, onChange, onOpen, onRender, onCancel, onSave } = props;
+  const { settings, rendering, canRender, canSave, onChange, onOpen, onRender, onCancel, onSave } = props;
   const [chosenTab, setChosenTab] = useState<Tab>(savedTab);
+  const [query, setQuery] = useState("");
   const update = (patch: Partial<Settings>) => onChange({ ...settings, ...patch });
-  const mode = activeMode(settings);
-  const enhanced = mode === "enhanced";
+  const enhanced = activeMode(settings) === "enhanced";
   const tab = !enhanced && TABS.find((t) => t.id === chosenTab)?.enhancedOnly ? "render" : chosenTab;
-  const current = TABS.find((t) => t.id === tab)!;
-  const dof = dofValues(settings);
-  const caustic = causticSettings(settings);
+  const searching = query.trim() !== "";
+  const context: TabContext = { props, update, enhanced };
 
   useEffect(() => {
     try {
@@ -159,7 +109,6 @@ export function ControlPanel(props: ControlPanelProps) {
           <FolderOpen size={15} aria-hidden="true" />
           Open scene…
         </button>
-
         <div className="actions">
           <button
             type="button"
@@ -174,11 +123,15 @@ export function ControlPanel(props: ControlPanelProps) {
             <Download size={16} aria-hidden="true" />
           </button>
         </div>
-        <Toggle label="Auto-render" checked={props.autoRender || !props.webgl} disabled={!props.webgl}
-          onChange={props.onAutoRenderChange} />
-        {props.outdated && <p className="note">{props.outdated}</p>}
+        <CheckBox label="Auto-render" checked={props.autoRender || !props.webgl} disabled={!props.webgl}
+          onChange={props.onAutoRenderChange}>
+          <span className="prop-check-text">Render after each change</span>
+        </CheckBox>
+        {props.outdated && <p className="prop-hint">{props.outdated}</p>}
+      </div>
 
-        <div className="tabs" role="tablist" aria-label="Settings">
+      <div className="panel-main">
+        <nav className="rail" role="tablist" aria-label="Settings" aria-orientation="vertical">
           {TABS.map(({ id, label, icon: Icon, enhancedOnly }) => {
             const disabled = enhancedOnly && !enhanced;
             return (
@@ -188,347 +141,369 @@ export function ControlPanel(props: ControlPanelProps) {
                 role="tab"
                 id={`tab-${id}`}
                 aria-controls="tab-body"
-                aria-selected={tab === id}
+                aria-selected={!searching && tab === id}
                 aria-label={label}
                 title={disabled ? `${label} · only in the Enhanced stage` : label}
                 disabled={disabled}
-                onClick={() => setChosenTab(id)}
+                onClick={() => {
+                  setChosenTab(id);
+                  setQuery("");
+                }}
               >
                 <Icon size={16} aria-hidden="true" />
               </button>
             );
           })}
-        </div>
-      </div>
+        </nav>
 
-      <div className="tab-body" id="tab-body" role="tabpanel" aria-labelledby={`tab-${tab}`}>
-        <h1 className="tab-title">{current.label}</h1>
-
-        {tab === "render" && (
-          <>
-          <div className="group">
-            <h2>Quality</h2>
-            <Select<string>
-              label="Quality"
-              value={String(settings.quality)}
-              disabled={!enhanced}
-              onChange={(value) => update(value === "custom"
-                ? { quality: "custom", customPasses: qualityPasses(settings) }
-                : { quality: Number(value) as Quality })}
-            >
-              {QUALITY_PRESETS.map((preset) => (
-                <option key={preset.value} value={preset.value}>{preset.label}</option>
-              ))}
-              <option value="custom">Custom</option>
-            </Select>
-            <label className="field-row">
-              <span>Passes</span>
-              <NumberField
-                label="Passes"
-                value={qualityPasses(settings)}
-                min={1}
-                max={MAX_PASSES}
-                disabled={!enhanced}
-                onChange={(passes) => update(withPasses(passes))}
-              />
-            </label>
-            <Slider
-              label="Ray depth"
-              value={settings.depth}
-              min={1}
-              max={8}
-              step={1}
-              onChange={(depth) => update({ depth })}
-            />
-            <p className="note">Reflection and refraction depth. At 1, reflection and refraction bounces are disabled.</p>
-          </div>
-
-          <div className="group">
-            <h2>Resolution</h2>
-            <Select<Resolution>
-              label="Resolution"
-              value={settings.resolution}
-              onChange={(resolution) => update({ resolution })}
-            >
-              {RESOLUTION_GROUPS.map((group) => (
-                <optgroup key={group.label} label={group.label}>
-                  {group.options.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-              <option value="custom">Custom…</option>
-            </Select>
-            {settings.resolution === "custom" && (
-              <div className="size-fields">
-                <NumberField
-                  label="Width in pixels"
-                  value={settings.customWidth}
-                  min={MIN_IMAGE_SIDE}
-                  max={MAX_IMAGE_SIDE}
-                  onChange={(customWidth) => update({ customWidth })}
-                />
-                <span aria-hidden="true">×</span>
-                <NumberField
-                  label="Height in pixels"
-                  value={settings.customHeight}
-                  min={MIN_IMAGE_SIDE}
-                  max={MAX_IMAGE_SIDE}
-                  onChange={(customHeight) => update({ customHeight })}
-                />
-              </div>
+        <div className="tab-body" id="tab-body" role="tabpanel" aria-labelledby={`tab-${tab}`} data-searching={searching || undefined}>
+          <div className="prop-search">
+            <Search size={13} aria-hidden="true" />
+            <input type="search" placeholder="Search settings" aria-label="Search settings" value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Escape") setQuery(""); }} />
+            {searching && (
+              <button type="button" aria-label="Clear search" onClick={() => setQuery("")}><X size={12} aria-hidden="true" /></button>
             )}
           </div>
-
-          </>
-        )}
-
-        {tab === "light" && (
-          <>
-            <div className="group">
-              <Toggle
-                label="Indirect light"
-                checked={settings.indirect}
-                onChange={(indirect) => update({ indirect })}
-              />
-              {settings.indirect && props.scene && (
-                <BounceControls
-                  bounces={settings.bounces}
-                  auto={props.scene.bounces}
-                  onChange={(bounces) => update({ bounces })}
-                />
-              )}
-            </div>
-
-            <EnvironmentPanel environment={settings.environment} loading={props.loadingEnvironment}
-              disabled={!canRender} onImport={props.onImportEnvironment}
-              onChange={(environment) => update({ environment })} />
-
-          <div className="group">
-            <Toggle
-              label="Caustics"
-              checked={settings.caustics}
-              disabled={!enhanced}
-              onChange={(caustics) => update({ caustics })}
-            />
-            {settings.caustics && enhanced && (
-              <div className="stack">
-                <Select<CausticPreset>
-                  label="Caustic preset"
-                  value={settings.causticPreset}
-                  onChange={(causticPreset) => update(causticPreset === "custom"
-                    ? { ...withCaustics(settings, {}), causticPreset }
-                    : { causticPreset })}
-                >
-                  <option value="soft">Soft</option>
-                  <option value="balanced">Balanced</option>
-                  <option value="sharp">Sharp</option>
-                  <option value="custom">Custom</option>
-                </Select>
-                <Slider
-                  label="Photons"
-                  value={caustic.photonMillions}
-                  min={0.25}
-                  max={16}
-                  step={0.25}
-                  format={(value) => `${value} million`}
-                  onChange={(photonMillions) => update(withCaustics(settings, { photonMillions }))}
-                />
-                <Slider
-                  label="Radius"
-                  value={caustic.radius}
-                  min={0.02}
-                  max={0.4}
-                  step={0.01}
-                  format={(value) => value.toFixed(2)}
-                  onChange={(radius) => update(withCaustics(settings, { radius }))}
-                />
-                <Slider
-                  label="Strength"
-                  value={caustic.strength}
-                  min={0}
-                  max={3}
-                  step={0.05}
-                  format={(value) => value.toFixed(2)}
-                  onChange={(strength) => update(withCaustics(settings, { strength }))}
-                />
-                {report && <CausticStats report={report} />}
-              </div>
+          <SearchContext.Provider value={query}>
+            {searching ? (
+              TABS.filter((t) => t.id !== "materials" && !(t.enhancedOnly && !enhanced)).map((t) => (
+                <div key={t.id} className="search-group">
+                  <h2 className="search-group-title">{t.label}</h2>
+                  {tabContent(t.id, context)}
+                </div>
+              ))
+            ) : (
+              <>
+                <h1 className="tab-title">{TABS.find((t) => t.id === tab)!.label}</h1>
+                {tabContent(tab, context)}
+              </>
             )}
-          </div>
-
-          </>
-        )}
-
-        {tab === "camera" && (
-        <div className="group">
-          <h2>Camera</h2>
-          {enhanced && <p className="note">Drag the image to orbit. Shift-drag to pan, scroll to move closer.</p>}
-          <Slider label="Zoom" value={settings.pose.zoom} min={0.25} max={Math.max(4, settings.pose.zoom)} step={0.05}
-            disabled={!enhanced} format={(value) => `${value.toFixed(2)}×`}
-            onChange={(zoom) => update({ pose: { ...settings.pose, zoom } })} />
-          <button type="button" className="ghost" disabled={!enhanced || !canRender} onClick={props.onResetCamera}>
-            <RotateCcw size={15} aria-hidden="true" />
-            Reset camera
-          </button>
-          <button type="button" className="ghost" disabled={!enhanced || !canRender} aria-pressed={props.pickingFocus} onClick={props.onPickFocus}>
-            <Crosshair size={15} aria-hidden="true" />
-            {props.pickingFocus ? "Cancel focus picker" : "Pick focus in image"}
-          </button>
-          <Toggle label="Depth of field" checked={settings.depthOfField} disabled={!enhanced}
-            onChange={(depthOfField) => update({ depthOfField })} />
-          {settings.depthOfField && enhanced && (
-            <div className="stack">
-              <Select<DofPreset>
-                label="Depth of field preset" value={settings.dofPreset}
-                onChange={(dofPreset) => update(dofPreset === "custom" ? { ...withDof(settings, {}), dofPreset } : { dofPreset })}
-              >
-                <option value="subtle">Subtle</option>
-                <option value="portrait">Portrait</option>
-                <option value="strong">Strong</option>
-                <option value="custom">Custom</option>
-              </Select>
-              <Slider label="Aperture" value={dof.aperture} min={0.01} max={Math.max(2, dof.aperture)} step={0.01}
-                format={(value) => value.toFixed(2)} onChange={(aperture) => update(withDof(settings, { aperture }))} />
-              <label className="field-row">
-                <span>Minimum passes</span>
-                <NumberField label="Depth of field minimum passes" value={dof.passes} min={1} max={MAX_PASSES}
-                  onChange={(passes) => update(withDof(settings, { passes }))} />
-              </label>
-              <p className="note">Renders {effectivePasses(settings)} passes, the higher of Quality and this minimum.</p>
-              <Slider label="Focus distance" value={settings.focusDistance} min={0.1} max={Math.max(50, settings.focusDistance)} step={0.1}
-                format={(value) => value.toFixed(1)} onChange={(focusDistance) => update({ focusDistance })} />
-              <div className="field-row choice">
-                <span>Aperture shape</span>
-                <Select<string>
-                  label="Aperture shape" value={String(settings.blades)}
-                  onChange={(blades) => update({ blades: Number(blades) })}
-                >
-                  <option value="0">Round</option>
-                  <option value="5">5 blades</option>
-                  <option value="6">6 blades</option>
-                  <option value="8">8 blades</option>
-                  {![0, 5, 6, 8].includes(settings.blades) && <option value={settings.blades}>{settings.blades} blades</option>}
-                </Select>
-              </div>
-              {settings.blades > 0 && (
-                <Slider label="Blade rotation" value={settings.bladeRotation} min={0} max={360 / settings.blades} step={1}
-                  format={(value) => `${value.toFixed(0)}°`} onChange={(bladeRotation) => update({ bladeRotation })} />
-              )}
-              <p className="note">Larger apertures soften the foreground and background, and the shape outlines out-of-focus highlights. Distances are in scene units, measured from the camera.</p>
-            </div>
-          )}
+            {searching && <p className="prop-hint search-empty">No settings match “{query.trim()}”.</p>}
+          </SearchContext.Provider>
         </div>
-
-        )}
-
-        {tab === "image" && (
-        <div className="group">
-          <Slider
-            label="Exposure"
-            value={settings.exposure}
-            min={0.5}
-            max={2}
-            step={0.05}
-            disabled={!enhanced}
-            format={(value) => value.toFixed(2)}
-            onChange={(exposure) => update({ exposure })}
-          />
-          <div className="field-row choice">
-            <span>Tone mapping</span>
-            <Select<ToneMapping>
-              label="Tone mapping" value={settings.toneMapping} disabled={!enhanced}
-              onChange={(toneMapping) => update({ toneMapping })}
-            >
-              <option value="standard">Standard</option>
-              <option value="agx">AgX</option>
-              <option value="agx_punchy">AgX Punchy</option>
-              <option value="aces">ACES</option>
-            </Select>
-          </div>
-          {enhanced && settings.toneMapping !== "standard" && (
-            <p className="note">Film curves hold bright light and turn it toward white, as a camera does. Shadows come out a little lighter.</p>
-          )}
-          <Toggle
-            label="Denoise"
-            checked={settings.denoise}
-            disabled={!enhanced}
-            onChange={(denoise) => update({ denoise })}
-          />
-          {enhanced && !settings.denoise && settings.environment?.enabled && settings.environment.intensity > 0 && (
-            <p className="note">HDR lighting renders grainier. Turn on Denoise for a cleaner image.</p>
-          )}
-          <Toggle
-            label="Bloom"
-            checked={settings.bloom}
-            disabled={!enhanced}
-            onChange={(bloom) => update({ bloom })}
-          />
-        </div>
-
-        )}
-
-        {tab === "materials" && (props.scene ? (
-          <MaterialEditor key={props.scene.path} materials={props.scene.materials} overrides={settings.materialOverrides}
-            scenePath={props.scene.path} selected={props.selectedMaterial} onSelect={props.onSelectMaterial}
-            onExpand={props.onExpandMaterial}
-            onChange={(materialOverrides) => update({ materialOverrides })} />
-        ) : (
-          <p className="note">Open a scene to edit its materials.</p>
-        ))}
-
-        {tab === "system" && (
-          <div className="group">
-            <Slider
-              label="Threads"
-              value={settings.threads}
-              min={1}
-              max={cores}
-              step={1}
-              onChange={(threads) => update({ threads })}
-            />
-            <Toggle label="KD-Tree" checked={settings.useKd} onChange={(useKd) => update({ useKd })} />
-            <p className="note">The KD-Tree skips objects a ray cannot hit. Turn it off only to compare speed.</p>
-          </div>
-        )}
-      </div>
-
-      <div className="group evolution">
-        <Toggle
-          label="Show evolution"
-          checked={settings.evolution}
-          onChange={(evolution) => onChange(withEvolution(settings, evolution))}
-        />
-        {settings.evolution && (
-          <div className="stack">
-            <Segmented<Mode>
-              label="Stage"
-              value={settings.mode}
-              options={[
-                { value: "classic", label: "2008" },
-                { value: "fixed", label: "Fixed" },
-                { value: "enhanced", label: "Enhanced" },
-              ]}
-              onChange={(next) => onChange(withMode(settings, next))}
-            />
-            <p className="note">{MODE_NOTES[settings.mode]}</p>
-            <h2>Compare with</h2>
-            <Segmented<Comparison>
-              label="Compare with"
-              value={settings.comparison}
-              disabled={settings.mode === "classic"}
-              options={[
-                { value: "off", label: "Off" },
-                { value: "classic", label: "2008" },
-                { value: "fixed", label: "Fixed", disabled: settings.mode !== "enhanced" },
-              ]}
-              onChange={(comparison) => update({ comparison })}
-            />
-          </div>
-        )}
       </div>
     </GlassPanel>
+  );
+}
+
+interface TabContext {
+  props: ControlPanelProps;
+  update: (patch: Partial<Settings>) => void;
+  enhanced: boolean;
+}
+
+function tabContent(tab: Tab, context: TabContext): ReactNode {
+  switch (tab) {
+    case "render": return <RenderTab {...context} />;
+    case "light": return <LightTab {...context} />;
+    case "camera": return <CameraTab {...context} />;
+    case "image": return <ImageTab {...context} />;
+    case "materials": return <MaterialsTab {...context} />;
+    case "system": return <SystemTab {...context} />;
+    case "evolution": return <EvolutionTab {...context} />;
+  }
+}
+
+function RenderTab({ props, update, enhanced }: TabContext) {
+  const { settings } = props;
+  return (
+    <>
+      <Section id="sampling" title="Sampling" extra={
+        <Choice<string> small label="Quality" value={String(settings.quality)} disabled={!enhanced}
+          onChange={(value) => update(value === "custom"
+            ? { quality: "custom", customPasses: qualityPasses(settings) }
+            : { quality: Number(value) as Quality })}>
+          {QUALITY_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}
+          <option value="custom">Custom</option>
+        </Choice>
+      }>
+        <ScrubRow label="Passes" keywords="samples quality" value={qualityPasses(settings)} min={1} max={MAX_PASSES} hard={[1, 65536]} step={1} log
+          disabled={!enhanced} hint="Samples per pixel. More passes, less noise."
+          onChange={(passes) => update(withPasses(passes))} />
+        <ScrubRow label="Ray depth" keywords="reflection refraction" value={settings.depth} min={1} max={8} hard={[1, 64]} step={1}
+          hint="Reflection and refraction depth. At 1, reflection and refraction bounces are disabled."
+          onChange={(depth) => update({ depth })} />
+      </Section>
+      <Section id="resolution" title="Resolution">
+        <ChoiceRow<Resolution> label="Size" value={settings.resolution} onChange={(resolution) => update({ resolution })}>
+          {RESOLUTION_GROUPS.map((group) => (
+            <optgroup key={group.label} label={group.label}>
+              {group.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </optgroup>
+          ))}
+          <option value="custom">Custom…</option>
+        </ChoiceRow>
+        {settings.resolution === "custom" && (
+          <Row label="Pixels" keywords="width height">
+            <div className="size-fields">
+              <NumberField label="Width in pixels" value={settings.customWidth} min={MIN_IMAGE_SIDE} max={MAX_IMAGE_SIDE}
+                onChange={(customWidth) => update({ customWidth })} />
+              <span aria-hidden="true">×</span>
+              <NumberField label="Height in pixels" value={settings.customHeight} min={MIN_IMAGE_SIDE} max={MAX_IMAGE_SIDE}
+                onChange={(customHeight) => update({ customHeight })} />
+            </div>
+          </Row>
+        )}
+      </Section>
+    </>
+  );
+}
+
+function bounceSummary(auto: Bounces): string {
+  return auto.strength >= 1
+    ? "Automatic: full path tracing, physically correct."
+    : "Automatic: this scene has a 2008 light, which does not fall off with distance, so its bounces are weaker and fewer.";
+}
+
+function LightTab({ props, update, enhanced }: TabContext) {
+  const { settings, scene, report } = props;
+  const auto = scene?.bounces;
+  const bounces = settings.bounces;
+  const current = bounces ?? auto;
+  const editBounces = (change: Partial<Bounces>) => {
+    if (!auto || !current) return;
+    const next = { ...current, ...change };
+    const automatic = next.strength === auto.strength && next.max === auto.max && next.clamp === auto.clamp;
+    update({ bounces: automatic ? null : next });
+  };
+  const environment = settings.environment;
+  const setEnvironment = (change: Partial<NonNullable<typeof environment>>) =>
+    environment && update({ environment: { ...environment, ...change } });
+  const caustic = causticSettings(settings);
+  return (
+    <>
+      <Section id="indirect" title="Indirect light"
+        enabled={{ checked: settings.indirect, onChange: (indirect) => update({ indirect }) }}
+        extra={auto && (
+          <Choice<"auto" | "custom"> small label="Bounce settings" value={bounces ? "custom" : "auto"}
+            onChange={(value) => update({ bounces: value === "custom" ? { ...auto } : null })}>
+            <option value="auto">Automatic</option>
+            <option value="custom">Custom</option>
+          </Choice>
+        )}
+        advanced={current && (
+          <ScrubRow label="Rebound limit" keywords="clamp fireflies"
+            value={current.clamp === 0 ? MAX_REBOUND_LIMIT + 1 : current.clamp} min={1} max={MAX_REBOUND_LIMIT + 1} step={0.5} strict
+            format={(value) => (value > MAX_REBOUND_LIMIT ? "None" : value.toFixed(1))}
+            hint="Most light one rebound may bring back. Lower removes white dots but darkens bright bounces."
+            onChange={(value) => editBounces({ clamp: value > MAX_REBOUND_LIMIT ? 0 : value })} />
+        )}>
+        {current ? (
+          <>
+            <ScrubRow label="Strength" keywords="bounce" value={current.strength} min={0} max={1.5} hard={[0, 10]} step={0.05}
+              hint="1 is physically correct." onChange={(strength) => editBounces({ strength })} />
+            <ScrubRow label="Bounces" value={current.max} min={0} max={64} hard={[0, 1024]} step={1}
+              hint="From the third bounce, Russian roulette ends dim paths early, so many bounces cost little."
+              onChange={(max) => editBounces({ max })} />
+            {auto && !bounces && <Hint>{bounceSummary(auto)}</Hint>}
+          </>
+        ) : (
+          <Hint>Open a scene to set its bounces.</Hint>
+        )}
+      </Section>
+
+      <Section id="environment" title="Environment"
+        enabled={environment ? { checked: environment.enabled, onChange: (enabled) => setEnvironment({ enabled }) } : undefined}
+        extra={
+          <button type="button" className="prop-mini" disabled={!props.canRender || props.loadingEnvironment}
+            onClick={props.onImportEnvironment}>
+            {props.loadingEnvironment ? "Loading…" : environment ? "Replace…" : "Import HDR…"}
+          </button>
+        }
+        advanced={environment && (
+          <ButtonRow label="Image">
+            <button type="button" className="prop-mini" onClick={() => update({ environment: null })}>Remove</button>
+          </ButtonRow>
+        )}>
+        {environment ? (
+          <>
+            <Row label="File" keywords="hdr">
+              <span className="prop-value-text" title={environment.path}>{environment.path.split(/[\\/]/).pop()}</span>
+            </Row>
+            <ScrubRow label="Intensity" keywords="hdr" value={environment.intensity} min={0} max={10} step={0.05}
+              disabled={!environment.enabled} onChange={(intensity) => setEnvironment({ intensity })} />
+            <ScrubRow label="Rotation" keywords="hdr" value={((environment.rotation % 360) + 360) % 360} min={0} max={360} hard={[-36000, 36000]} step={1}
+              disabled={!environment.enabled} format={(value) => `${value}°`} onChange={(rotation) => setEnvironment({ rotation })} />
+            <CheckRow label="Background" hint="Hiding the background keeps lighting and reflections."
+              checked={environment.visible} disabled={!environment.enabled} onChange={(visible) => setEnvironment({ visible })} />
+          </>
+        ) : (
+          <Hint>An HDR image lights the scene from all around, as a real place would.</Hint>
+        )}
+      </Section>
+
+      <Section id="caustics" title="Caustics"
+        enabled={{ checked: settings.caustics, onChange: (caustics) => update({ caustics }), disabled: !enhanced }}
+        extra={
+          <Choice<CausticPreset> small label="Caustic preset" value={settings.causticPreset}
+            onChange={(causticPreset) => update(causticPreset === "custom"
+              ? { ...withCaustics(settings, {}), causticPreset }
+              : { causticPreset })}>
+            <option value="soft">Soft</option>
+            <option value="balanced">Balanced</option>
+            <option value="sharp">Sharp</option>
+            <option value="custom">Custom</option>
+          </Choice>
+        }
+        advanced={report && <CausticStats report={report} />}>
+        <ScrubRow label="Photons" keywords="caustics" value={caustic.photonMillions} min={0.25} max={16} hard={[0.01, 200]} step={0.01}
+          format={(value) => `${value} M`} hint="Millions of photons traced through glass and mirrors."
+          onChange={(photonMillions) => update(withCaustics(settings, { photonMillions }))} />
+        <ScrubRow label="Radius" keywords="caustics" value={caustic.radius} min={0.02} max={0.4} hard={[0.001, 10]} step={0.001}
+          hint="Smaller is sharper but noisier." onChange={(radius) => update(withCaustics(settings, { radius }))} />
+        <ScrubRow label="Strength" keywords="caustics" value={caustic.strength} min={0} max={3} step={0.05}
+          onChange={(strength) => update(withCaustics(settings, { strength }))} />
+      </Section>
+    </>
+  );
+}
+
+function CameraTab({ props, update, enhanced }: TabContext) {
+  const { settings } = props;
+  const dof = dofValues(settings);
+  return (
+    <>
+      <Section id="lens" title="Lens">
+        <ScrubRow label="Zoom" value={settings.pose.zoom} min={0.25} max={4} hard={[0.01, 100]} step={0.01} disabled={!enhanced}
+          format={(value) => `${value.toFixed(2)}×`} hint="Drag the image to orbit. Shift-drag to pan, scroll to move closer."
+          onChange={(zoom) => update({ pose: { ...settings.pose, zoom } })} />
+        <ButtonRow label="View">
+          <button type="button" className="prop-mini" disabled={!enhanced || !props.canRender} onClick={props.onResetCamera}
+            title="Back to the scene's camera">
+            <RotateCcw size={12} aria-hidden="true" />
+            Reset
+          </button>
+          <button type="button" className="prop-mini" disabled={!enhanced || !props.canRender} aria-pressed={props.pickingFocus}
+            onClick={props.onPickFocus} title="Click a surface in the image to focus on it">
+            <Crosshair size={12} aria-hidden="true" />
+            {props.pickingFocus ? "Cancel" : "Focus"}
+          </button>
+        </ButtonRow>
+      </Section>
+      <Section id="dof" title="Depth of field"
+        enabled={{ checked: settings.depthOfField, onChange: (depthOfField) => update({ depthOfField }), disabled: !enhanced }}
+        extra={
+          <Choice<DofPreset> small label="Depth of field preset" value={settings.dofPreset}
+            onChange={(dofPreset) => update(dofPreset === "custom" ? { ...withDof(settings, {}), dofPreset } : { dofPreset })}>
+            <option value="subtle">Subtle</option>
+            <option value="portrait">Portrait</option>
+            <option value="strong">Strong</option>
+            <option value="custom">Custom</option>
+          </Choice>
+        }
+        advanced={
+          <>
+            {settings.blades > 0 && (
+              <ScrubRow label="Blade rotation" keywords="bokeh" value={settings.bladeRotation} min={0} max={360 / settings.blades} hard={[-360, 360]} step={1}
+                format={(value) => `${value.toFixed(0)}°`} onChange={(bladeRotation) => update({ bladeRotation })} />
+            )}
+            <ScrubRow label="Min. passes" keywords="depth of field passes" value={dof.passes} min={1} max={MAX_PASSES} hard={[1, 65536]} step={1} log
+              hint={`Renders ${effectivePasses(settings)} passes, the higher of Quality and this minimum.`}
+              onChange={(passes) => update(withDof(settings, { passes }))} />
+          </>
+        }>
+        <ScrubRow label="Focus distance" keywords="focus" value={settings.focusDistance} min={0.1} max={50} hard={[0.01, 1e6]} step={0.01}
+          hint="Scene units, measured from the camera." onChange={(focusDistance) => update({ focusDistance })} />
+        <ScrubRow label="Aperture" keywords="blur" value={dof.aperture} min={0.01} max={2} hard={[0.001, 1000]} step={0.001}
+          hint="Lens diameter in scene units. Larger softens the foreground and background more."
+          onChange={(aperture) => update(withDof(settings, { aperture }))} />
+        <ChoiceRow<string> label="Shape" hint="Outline of out-of-focus highlights (bokeh)." value={String(settings.blades)}
+          onChange={(blades) => update({ blades: Number(blades) })}>
+          <option value="0">Round</option>
+          <option value="5">5 blades</option>
+          <option value="6">6 blades</option>
+          <option value="8">8 blades</option>
+          {![0, 5, 6, 8].includes(settings.blades) && <option value={settings.blades}>{settings.blades} blades</option>}
+        </ChoiceRow>
+      </Section>
+    </>
+  );
+}
+
+function ImageTab({ props, update, enhanced }: TabContext) {
+  const { settings } = props;
+  return (
+    <>
+      <Section id="color" title="Color">
+        <ScrubRow label="Exposure" keywords="brightness" value={settings.exposure} min={0.5} max={2} hard={[0.01, 1000]} step={0.01}
+          disabled={!enhanced} onChange={(exposure) => update({ exposure })} />
+        <ChoiceRow<ToneMapping> label="Tone mapping" keywords="agx aces film" value={settings.toneMapping} disabled={!enhanced}
+          hint="Film curves hold bright light and turn it toward white, as a camera does."
+          onChange={(toneMapping) => update({ toneMapping })}>
+          <option value="standard">Standard</option>
+          <option value="agx">AgX</option>
+          <option value="agx_punchy">AgX Punchy</option>
+          <option value="aces">ACES</option>
+        </ChoiceRow>
+      </Section>
+      <Section id="post" title="Post-processing">
+        <CheckRow label="Denoise" hint="Removes noise with Open Image Denoise, or the built-in filter."
+          checked={settings.denoise} disabled={!enhanced} onChange={(denoise) => update({ denoise })} />
+        <CheckRow label="Bloom" hint="Spreads very bright light into a soft halo."
+          checked={settings.bloom} disabled={!enhanced} onChange={(bloom) => update({ bloom })} />
+        {enhanced && !settings.denoise && settings.environment?.enabled && settings.environment.intensity > 0 && (
+          <Hint tone="warning">HDR lighting renders grainier. Turn on Denoise for a cleaner image.</Hint>
+        )}
+      </Section>
+    </>
+  );
+}
+
+function MaterialsTab({ props, update }: TabContext) {
+  const { settings, scene } = props;
+  if (!scene) return <Hint>Open a scene to edit its materials.</Hint>;
+  return (
+    <MaterialEditor key={scene.path} materials={scene.materials} overrides={settings.materialOverrides}
+      scenePath={scene.path} selected={props.selectedMaterial} onSelect={props.onSelectMaterial}
+      onExpand={props.onExpandMaterial} onChange={(materialOverrides) => update({ materialOverrides })} />
+  );
+}
+
+function SystemTab({ props, update }: TabContext) {
+  const { settings, cores } = props;
+  return (
+    <Section id="performance" title="Performance">
+      <ScrubRow label="Threads" keywords="cores cpu" value={settings.threads} min={1} max={cores} step={1} strict
+        onChange={(threads) => update({ threads })} />
+      <CheckRow label="KD-Tree" hint="Skips objects a ray cannot hit. Turn it off only to compare speed."
+        checked={settings.useKd} onChange={(useKd) => update({ useKd })} />
+    </Section>
+  );
+}
+
+function EvolutionTab({ props }: TabContext) {
+  const { settings, onChange } = props;
+  return (
+    <Section id="evolution" title="Show evolution"
+      enabled={{ checked: settings.evolution, onChange: (evolution) => onChange(withEvolution(settings, evolution)) }}>
+      <Row label="Stage" keywords="2008 classic fixed enhanced">
+        <Segmented<Mode>
+          label="Stage"
+          value={settings.mode}
+          options={[
+            { value: "classic", label: "2008" },
+            { value: "fixed", label: "Fixed" },
+            { value: "enhanced", label: "Enh." },
+          ]}
+          onChange={(next) => onChange(withMode(settings, next))}
+        />
+      </Row>
+      <Row label="Compare with" keywords="comparison">
+        <Segmented<Comparison>
+          label="Compare with"
+          value={settings.comparison}
+          disabled={settings.mode === "classic"}
+          options={[
+            { value: "off", label: "Off" },
+            { value: "classic", label: "2008" },
+            { value: "fixed", label: "Fixed", disabled: settings.mode !== "enhanced" },
+          ]}
+          onChange={(comparison) => props.onChange({ ...settings, comparison })}
+        />
+      </Row>
+      <Hint>{MODE_NOTES[settings.mode]}</Hint>
+    </Section>
   );
 }
