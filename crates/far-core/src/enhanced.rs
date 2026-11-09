@@ -18,6 +18,7 @@ use crate::denoise::{self, Guide, Primary};
 use crate::scene::{Scene, Sphere, Material, Primitive};
 use crate::kdtree::KdTree;
 use crate::engine::{self, Context, Image, Mode, Options, PhotonStats, Progress, Ray};
+use crate::tonemap::{self, shoulder, ToneMapping};
 use crate::twister::{Twister, DEFAULT_SEED};
 use crate::vector::{Color, Vec3, EPSILON, PI};
 use std::collections::HashMap;
@@ -299,20 +300,6 @@ fn absorption(m: &Material, distance: f32) -> Color {
             let absorbed = (Color::new(1.0, 1.0, 1.0) - m.color) * (ABSORPTION * -distance);
             Color::new(absorbed.x.exp(), absorbed.y.exp(), absorbed.z.exp())
         }
-    }
-}
-
-/// Compresses only the highest tones: up to 0.8 the image is unchanged, and above
-/// that brightness approaches 1 smoothly instead of becoming a flat white area.
-fn shoulder(x: f32) -> f32 {
-    const KNEE: f32 = 0.8;
-    if x.is_nan() || x <= 0.0 {
-        0.0
-    } else if x < KNEE {
-        x
-    } else {
-        let rest = 1.0 - KNEE;
-        KNEE + rest * (1.0 - (-(x - KNEE) / rest).exp())
     }
 }
 
@@ -1349,14 +1336,31 @@ fn channel(v: f32) -> u32 {
     (v * 255.0 + 0.5).min(255.0) as u32
 }
 
-fn pass_sample(radiance: f32, exposure: f32, linear_hdr: bool) -> f32 {
-    if linear_hdr { (radiance * exposure).max(0.) }
-    else { shoulder((radiance * exposure).min(MAX_SAMPLE_RADIANCE)) }
+/// How samples become screen colors.
+#[derive(Clone, Copy)]
+struct Display {
+    /// Averages linear light and maps the mean with `curve`. Otherwise each sample goes through
+    /// the shoulder before the average: the historical pipeline, for scenes without an HDR
+    /// image and with the Standard curve.
+    linear: bool,
+    curve: ToneMapping,
+}
+
+impl Display {
+    fn sample(self, radiance: f32, exposure: f32) -> f32 {
+        if self.linear { (radiance * exposure).max(0.) }
+        else { shoulder((radiance * exposure).min(MAX_SAMPLE_RADIANCE)) }
+    }
+
+    /// Screen values of a pixel's mean sample.
+    fn show(self, mean: [f32; 3]) -> [f32; 3] {
+        if self.linear { tonemap::display(self.curve, mean) } else { mean }
+    }
 }
 
 /// Filters the accumulated image and writes it over the progressive one.
 /// Filters the rendered part of the image: all of it, or a region and its ring of tiles.
-fn apply_denoiser(sum: &[AtomicU32], guide: &Guide, counts: &[AtomicU32], linear_hdr: bool, image: &Image,
+fn apply_denoiser(sum: &[AtomicU32], guide: &Guide, counts: &[AtomicU32], display: Display, image: &Image,
     progress: &Progress, rendered: engine::Region) {
     let width = image.width as usize;
     let (x0, y0, x1, y1) = (rendered.x0 as usize, rendered.y0 as usize, rendered.x1 as usize, rendered.y1 as usize);
@@ -1374,9 +1378,9 @@ fn apply_denoiser(sum: &[AtomicU32], guide: &Guide, counts: &[AtomicU32], linear
         let color: Vec<[f32; 3]> = indices.iter().enumerate().map(|(q, &p)| mean(q, p)).collect();
         let (albedo, normal): (Vec<[f32; 3]>, Vec<[f32; 3]>) =
             (0..indices.len()).map(|q| guide.albedo_normal(q, pixel_counts[q])).unzip();
-        if let Some(result) = crate::oidn::denoise(&color, &albedo, &normal, x1 - x0, y1 - y0, linear_hdr) {
+        if let Some(result) = crate::oidn::denoise(&color, &albedo, &normal, x1 - x0, y1 - y0, display.linear) {
             for (&p, c) in indices.iter().zip(result) {
-                let c = if linear_hdr { c.map(shoulder) } else { c };
+                let c = display.show(c);
                 image.pixels[p].store(0xff00_0000 | channel(c[0]) | channel(c[1]) << 8 | channel(c[2]) << 16, Relaxed);
             }
             *progress.denoiser.lock().unwrap() = Some(engine::Denoiser::Oidn);
@@ -1388,13 +1392,14 @@ fn apply_denoiser(sum: &[AtomicU32], guide: &Guide, counts: &[AtomicU32], linear
         let mean = [0, 1, 2].map(|k| f32::from_bits(sum[p * 3 + k].load(Relaxed)) / count as f32);
         let brightness = denoise::luma(mean);
         let spread = (guide.mean_luminance2(q, count) - brightness * brightness).max(0.) / (count.max(2) - 1) as f32;
-        // The filter works on displayed values, where the shoulder compresses the noise.
-        let slope = if linear_hdr {
-            (shoulder(brightness + 0.01) - shoulder(brightness)) / 0.01
+        // The filter works on displayed values, where the curve compresses the noise.
+        let slope = if display.linear {
+            let shown = |b: f32| display.show([b; 3])[1];
+            (shown(brightness + 0.01) - shown(brightness)) / 0.01
         } else {
             1.
         };
-        color.push(if linear_hdr { mean.map(shoulder) } else { mean });
+        color.push(display.show(mean));
         variance.push(spread * slope * slope);
     }
     let Some(result) = denoise::denoise(color, variance, guide, &pixel_counts, x1 - x0, y1 - y0, &progress.cancel) else { return };
@@ -1473,12 +1478,17 @@ fn apply_bloom(glow: &[AtomicU32], counts: Option<&[AtomicU32]>, count: u32, ima
     }
 }
 
-fn accumulate_channel(sum: &AtomicU32, radiance: f32, exposure: f32, count: u32, linear_hdr: bool) -> u32 {
-    let sample = pass_sample(radiance, exposure, linear_hdr);
-    let total = f32::from_bits(sum.load(Relaxed)) + sample;
-    sum.store(total.to_bits(), Relaxed);
-    let mean = total / count as f32;
-    channel(if linear_hdr { shoulder(mean) } else { mean })
+/// Adds a sample to a pixel's sums and returns the pixel's screen color.
+fn accumulate(sum: &[AtomicU32], p: usize, color: Vec3, exposure: f32, count: u32, display: Display) -> u32 {
+    let radiance = [color.x, color.y, color.z];
+    let mean = [0, 1, 2].map(|k| {
+        let total = &sum[p * 3 + k];
+        let value = f32::from_bits(total.load(Relaxed)) + display.sample(radiance[k], exposure);
+        total.store(value.to_bits(), Relaxed);
+        value / count as f32
+    });
+    let shown = display.show(mean);
+    0xff00_0000 | channel(shown[0]) | channel(shown[1]) << 8 | channel(shown[2]) << 16
 }
 
 pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, progress: &Progress) {
@@ -1538,6 +1548,8 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
     let camera = crate::camera::Camera {
         aperture: if fixed { 0.0 } else { op.aperture.unwrap_or(scene.camera.aperture) },
         focus_distance: op.focus_distance.unwrap_or(scene.camera.focus_distance),
+        blades: op.blades.unwrap_or(scene.camera.blades),
+        blade_rotation: op.blade_rotation.unwrap_or(scene.camera.blade_rotation),
         ..crate::camera::Camera::default()
     };
     let caustics_only = op.caustics_only && photon_map.is_some();
@@ -1552,7 +1564,8 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
     // Each light adds full brightness with no falloff. Compensating part of that
     // keeps scenes with several lights from turning white.
     let exposure = op.exposure / (scene.lights.len().max(1) as f32).powf(0.35);
-    let linear_hdr = !fixed && scene.environment.as_ref().is_some_and(|e| e.active());
+    let hdr = scene.environment.as_ref().is_some_and(|e| e.active());
+    let display = Display { linear: !fixed && (hdr || op.tone_mapping != ToneMapping::Standard), curve: op.tone_mapping };
     let guide = denoising.then(|| Guide::new(w as usize * h as usize));
     let glow: Option<Vec<AtomicU32>> = (op.bloom && !fixed)
         .then(|| (0..w as usize * h as usize * 3).map(|_| AtomicU32::new(0)).collect());
@@ -1643,7 +1656,7 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
                         let (c, _) = t.trace(&ray, 1, 0, true);
                         let count = counts[p].fetch_add(1, Relaxed) + 1;
                         if let Some(guide) = &guide {
-                            let sample = [c.x, c.y, c.z].map(|v| pass_sample(v, exposure, linear_hdr));
+                            let sample = [c.x, c.y, c.z].map(|v| display.sample(v, exposure));
                             guide.record(p, denoise::luma(sample), &t.primary);
                         }
                         if fixed {
@@ -1666,14 +1679,9 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
                             }
                         }
                         if let Some(adaptive) = &adaptive {
-                            adaptive.record(p, [c.x, c.y, c.z].map(|v| pass_sample(v, exposure, linear_hdr)));
+                            adaptive.record(p, [c.x, c.y, c.z].map(|v| display.sample(v, exposure)));
                         }
-                        let mut rgba = 0xff00_0000u32;
-                        for (k, radiance) in [c.x, c.y, c.z].into_iter().enumerate() {
-                            rgba |= accumulate_channel(&sum[p * 3 + k], radiance, exposure,
-                                count, linear_hdr) << (8 * k);
-                        }
-                        image.pixels[p].store(rgba, Relaxed);
+                        image.pixels[p].store(accumulate(&sum, p, c, exposure, count, display), Relaxed);
                     }
                 }
                 progress.tiles_done.fetch_add(1, Relaxed);
@@ -1700,7 +1708,7 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
     }
     if let Some(guide) = &guide {
         if !progress.cancel.load(Relaxed) {
-            apply_denoiser(&sum, guide, &counts, linear_hdr, image, progress, rendered);
+            apply_denoiser(&sum, guide, &counts, display, image, progress, rendered);
         }
     }
     if let Some(glow) = &glow {
@@ -2003,20 +2011,20 @@ mod tests {
     fn hdr_accumulates_energy_before_compressing_highlights() {
         // A bright source covering 1/32 of the samples has mean radiance 0.5.
         // Compressing or clamping that one hit before averaging loses its energy.
-        let sum = AtomicU32::new(0);
-        accumulate_channel(&sum, 16., 1., 1, true);
-        let mut result = 0;
-        for count in 2..=32 {
-            result = accumulate_channel(&sum, 0., 1., count, true);
-        }
-        assert_eq!(result, 128);
-        let reversed = AtomicU32::new(0);
-        for count in 1..32 { accumulate_channel(&reversed, 0., 1., count, true); }
-        assert_eq!(accumulate_channel(&reversed, 16., 1., 32, true), result);
-        let legacy = AtomicU32::new(0);
-        accumulate_channel(&legacy, 16., 1., 1, false);
-        for count in 2..=32 { result = accumulate_channel(&legacy, 0., 1., count, false); }
-        assert_eq!(result, 8); // Existing scenes keep their established pipeline.
+        let red = |rgba: u32| rgba & 0xff;
+        let linear = Display { linear: true, curve: ToneMapping::Standard };
+        let legacy = Display { linear: false, curve: ToneMapping::Standard };
+        let bright = Vec3::new(16., 0., 0.);
+        let dark = Vec3::new(0., 0., 0.);
+        let run = |display: Display, order: &[Vec3]| {
+            let sum: Vec<AtomicU32> = (0..3).map(|_| AtomicU32::new(0)).collect();
+            order.iter().enumerate().map(|(i, &c)| red(accumulate(&sum, 0, c, 1., i as u32 + 1, display))).last().unwrap()
+        };
+        let first: Vec<Vec3> = std::iter::once(bright).chain(std::iter::repeat_n(dark, 31)).collect();
+        let last: Vec<Vec3> = std::iter::repeat_n(dark, 31).chain(std::iter::once(bright)).collect();
+        assert_eq!(run(linear, &first), 128);
+        assert_eq!(run(linear, &last), 128);
+        assert_eq!(run(legacy, &first), 8); // Existing scenes keep their established pipeline.
     }
 
     #[test]

@@ -30,8 +30,11 @@ usage:
                       (0.01 is a good start); --samples is then the most it takes
       --bloom         spread very bright light into a soft halo in enhanced mode
       --exposure N    brightness multiplier in enhanced mode (default 1)
+      --tone-mapping standard|agx|agx-punchy|aces   how light becomes screen colors (default standard)
       --aperture N    lens diameter in scene units; 0 disables depth of field
       --focus-distance N   focus-plane distance from camera in scene units
+      --blades N      diaphragm blades, the shape of out-of-focus highlights; 0 is round
+      --blade-rotation N   turns that shape, in degrees
       --camera X,Y,Z  camera position in enhanced mode
       --target X,Y,Z  point the camera looks at in enhanced mode
       --zoom N        lens magnification in enhanced mode (default 1)
@@ -93,6 +96,13 @@ fn render_command(mut args: impl Iterator<Item = String>) {
             "--bloom" => options.bloom = true,
             "--aperture" => options.aperture = Some(number(&mut args, &a)),
             "--focus-distance" => options.focus_distance = Some(number(&mut args, &a)),
+            "--blades" => options.blades = Some(number(&mut args, &a)),
+            "--blade-rotation" => options.blade_rotation = Some(number(&mut args, &a)),
+            "--tone-mapping" => {
+                let name = args.next().unwrap_or_default();
+                options.tone_mapping = far_core::ToneMapping::parse(&name)
+                    .unwrap_or_else(|| fail("--tone-mapping is standard, agx, agx-punchy or aces"));
+            }
             "--camera" => position = Some(point(&mut args, &a)),
             "--target" => target = Some(point(&mut args, &a)),
             "--zoom" => zoom = Some(number(&mut args, &a)),
@@ -126,6 +136,8 @@ fn render_command(mut args: impl Iterator<Item = String>) {
     let camera = far_core::Camera {
         aperture: options.aperture.unwrap_or(scene.camera.aperture),
         focus_distance: options.focus_distance.unwrap_or(scene.camera.focus_distance),
+        blades: options.blades.unwrap_or(scene.camera.blades),
+        blade_rotation: options.blade_rotation.unwrap_or(scene.camera.blade_rotation),
         position: position.unwrap_or(scene.camera.position),
         target: target.unwrap_or(scene.camera.target),
         zoom: zoom.unwrap_or(scene.camera.zoom),

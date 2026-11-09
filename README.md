@@ -395,6 +395,19 @@ With the default camera at `(0, 0, -5)`, distance 11.7 puts the focus plane at w
 `z = 6.7`. Classic and Fixed always use the original pinhole camera. The photon map
 preview also remains a sharp point projection for inspection.
 
+**Aperture shape** sets the blades of the lens diaphragm, which outline out-of-focus
+highlights: Round, or a polygon of 5, 6 or 8 blades with its corners on the round opening,
+turned by **Blade rotation**. Rotation 0 puts a flat edge at the bottom. Scene files and the
+command line (`--blades`, `--blade-rotation`) take 0 for round or 3 to 16 blades:
+
+```json
+"camera": { "aperture": 0.9, "focus_distance": 6, "blades": 6, "blade_rotation": 0 }
+```
+
+**File > Open Example > Techniques > Bokeh** shows it: strings of small bulbs far behind a gold
+sphere turn into hexagons. The bulbs are small, so the shapes need 512 passes or more to fill
+in.
+
 ### Render region
 
 To tune a material or a light without waiting for the whole image, render only part of it:
@@ -642,6 +655,23 @@ saves little: the pixels that converge first, such as the background, are the ch
 and the expensive ones, under indirect light, do not converge with a strict threshold within a
 few hundred passes; a loose one stops pixels with rare bright paths too early. So the app
 renders every pixel equally.
+
+### Tone mapping (Enhanced)
+
+**Image > Tone mapping** chooses how light becomes screen colors; the command line uses
+`--tone-mapping standard|agx|agx-punchy|aces`.
+
+| Curve | Look |
+| --- | --- |
+| Standard | The program's own curve: linear up to 0.8, then a soft shoulder, with no display encoding, as the 2008 images were made. The default, so scenes keep their look. |
+| AgX | Blender's default since 4.0. Holds a much wider range of light, and bright light turns toward white instead of a flat, saturated color, as on film. Soft contrast. |
+| AgX Punchy | Blender's Punchy look over AgX: more contrast and saturation. |
+| ACES | The film industry's curve, in Stephen Hill's fit: contrasty, with saturated highlights. |
+
+The film curves are scaled so a surface at half brightness looks as in Standard, so a scene
+keeps its level when the curve changes; shadows come out a little lighter and highlights
+softer. They average linear light before the curve, as HDR-lit scenes always do, so a small
+bright source keeps its energy. The denoiser works on the same linear values.
 
 ### Bloom (Enhanced)
 

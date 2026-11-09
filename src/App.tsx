@@ -103,6 +103,8 @@ export function App() {
             dofPasses: 256,
             aperture: info.camera.aperture > 0 ? info.camera.aperture : 0.5,
             focusDistance: info.camera.focus_distance,
+            blades: info.camera.blades,
+            bladeRotation: info.camera.blade_rotation,
           }));
           pivotChosen.current = false;
           setRenderedKey(null);

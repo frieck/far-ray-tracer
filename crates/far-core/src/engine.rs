@@ -72,6 +72,9 @@ pub struct Options {
     pub pose: Option<crate::camera::Pose>,
     pub aperture: Option<f32>,
     pub focus_distance: Option<f32>,
+    /// Diaphragm blades and their rotation in degrees; see `Camera`.
+    pub blades: Option<u32>,
+    pub blade_rotation: Option<f32>,
     pub mode: Mode,
     /// Samples per pixel in Enhanced mode, which is also the number of passes.
     pub samples: u32,
@@ -85,6 +88,8 @@ pub struct Options {
     pub indirect_clamp: Option<f32>,
     /// Brightness multiplier in Enhanced mode.
     pub exposure: f32,
+    /// How light becomes screen colors in Enhanced mode.
+    pub tone_mapping: crate::ToneMapping,
     /// Traces photons so glass and mirrors focus light, in Enhanced mode.
     pub caustics: bool,
     /// Photons emitted for caustics. More photons allow a smaller radius.
@@ -113,6 +118,8 @@ impl Default for Options {
             pose: None,
             aperture: None,
             focus_distance: None,
+            blades: None,
+            blade_rotation: None,
             mode: Mode::Classic,
             samples: 16,
             indirect: true,
@@ -120,6 +127,7 @@ impl Default for Options {
             max_bounces: None,
             indirect_clamp: None,
             exposure: 1.0,
+            tone_mapping: crate::ToneMapping::Standard,
             caustics: false,
             photons: 1_000_000,
             caustic_radius: 0.12,

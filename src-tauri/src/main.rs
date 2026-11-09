@@ -141,6 +141,10 @@ struct RenderRequest {
     pose: far_core::Pose,
     aperture: f32,
     focus_distance: f32,
+    #[serde(default)]
+    blades: u32,
+    #[serde(default)]
+    blade_rotation: f32,
     mode: String,
     width: u32,
     height: u32,
@@ -160,6 +164,8 @@ struct RenderRequest {
     #[serde(default)]
     bloom: bool,
     exposure: f32,
+    #[serde(default)]
+    tone_mapping: far_core::ToneMapping,
     caustics: bool,
     photons: u32,
     caustic_radius: f32,
@@ -640,12 +646,20 @@ fn render_scene(
         edited = Some(copy);
     }
     let scene = edited.as_ref().unwrap_or(&open.scene);
-    far_core::Camera { aperture: request.aperture, focus_distance: request.focus_distance, ..far_core::Camera::default() }.validate()?;
+    far_core::Camera {
+        aperture: request.aperture,
+        focus_distance: request.focus_distance,
+        blades: request.blades,
+        blade_rotation: request.blade_rotation,
+        ..far_core::Camera::default()
+    }.validate()?;
     request.pose.validate()?;
     let options = Options {
         pose: Some(request.pose),
         aperture: Some(request.aperture),
         focus_distance: Some(request.focus_distance),
+        blades: Some(request.blades),
+        blade_rotation: Some(request.blade_rotation),
         mode,
         samples: request.samples,
         indirect: request.indirect,
@@ -655,6 +669,7 @@ fn render_scene(
         denoise: request.denoise,
         bloom: request.bloom,
         exposure: request.exposure,
+        tone_mapping: request.tone_mapping,
         caustics: request.caustics,
         photons: request.photons,
         caustic_radius: request.caustic_radius,

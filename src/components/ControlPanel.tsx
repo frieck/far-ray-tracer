@@ -18,7 +18,7 @@ import {
   withEvolution,
   withMode,
 } from "../settings";
-import type { Bounces, DofPreset, CausticPreset, CausticReport, Comparison, Mode, Quality, Resolution, Settings } from "../types";
+import type { Bounces, DofPreset, CausticPreset, CausticReport, Comparison, Mode, Quality, Resolution, Settings, ToneMapping } from "../types";
 import { EnvironmentPanel } from "./EnvironmentPanel";
 import { MaterialEditor } from "./MaterialEditor";
 import { CausticStats } from "./CausticStats";
@@ -400,7 +400,24 @@ export function ControlPanel(props: ControlPanelProps) {
               <p className="note">Renders {effectivePasses(settings)} passes, the higher of Quality and this minimum.</p>
               <Slider label="Focus distance" value={settings.focusDistance} min={0.1} max={Math.max(50, settings.focusDistance)} step={0.1}
                 format={(value) => value.toFixed(1)} onChange={(focusDistance) => update({ focusDistance })} />
-              <p className="note">Larger apertures soften the foreground and background. Distances are in scene units, measured from the camera.</p>
+              <div className="field-row choice">
+                <span>Aperture shape</span>
+                <Select<string>
+                  label="Aperture shape" value={String(settings.blades)}
+                  onChange={(blades) => update({ blades: Number(blades) })}
+                >
+                  <option value="0">Round</option>
+                  <option value="5">5 blades</option>
+                  <option value="6">6 blades</option>
+                  <option value="8">8 blades</option>
+                  {![0, 5, 6, 8].includes(settings.blades) && <option value={settings.blades}>{settings.blades} blades</option>}
+                </Select>
+              </div>
+              {settings.blades > 0 && (
+                <Slider label="Blade rotation" value={settings.bladeRotation} min={0} max={360 / settings.blades} step={1}
+                  format={(value) => `${value.toFixed(0)}°`} onChange={(bladeRotation) => update({ bladeRotation })} />
+              )}
+              <p className="note">Larger apertures soften the foreground and background, and the shape outlines out-of-focus highlights. Distances are in scene units, measured from the camera.</p>
             </div>
           )}
         </div>
@@ -419,6 +436,21 @@ export function ControlPanel(props: ControlPanelProps) {
             format={(value) => value.toFixed(2)}
             onChange={(exposure) => update({ exposure })}
           />
+          <div className="field-row choice">
+            <span>Tone mapping</span>
+            <Select<ToneMapping>
+              label="Tone mapping" value={settings.toneMapping} disabled={!enhanced}
+              onChange={(toneMapping) => update({ toneMapping })}
+            >
+              <option value="standard">Standard</option>
+              <option value="agx">AgX</option>
+              <option value="agx_punchy">AgX Punchy</option>
+              <option value="aces">ACES</option>
+            </Select>
+          </div>
+          {enhanced && settings.toneMapping !== "standard" && (
+            <p className="note">Film curves hold bright light and turn it toward white, as a camera does. Shadows come out a little lighter.</p>
+          )}
           <Toggle
             label="Denoise"
             checked={settings.denoise}

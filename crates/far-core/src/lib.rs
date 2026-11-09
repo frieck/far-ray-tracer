@@ -23,12 +23,14 @@ mod scene_file;
 pub mod solid;
 pub mod spectral;
 pub mod texture;
+pub mod tonemap;
 pub mod twister;
 pub mod vector;
 
 pub use engine::{render, tile_size, Image, Mode, Options, Progress};
 pub use enhanced::Bounces;
 pub use kdtree::KdTree;
+pub use tonemap::ToneMapping;
 pub use scene::Scene;
 
 pub use camera::{Camera, Pose};

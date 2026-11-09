@@ -41,6 +41,11 @@ pub struct Camera {
     pub aperture: f32,
     /// Distance along the viewing axis, measured from the camera (not world Z).
     pub focus_distance: f32,
+    /// Blades of the lens diaphragm, which give out-of-focus highlights their shape: 0 is a
+    /// round opening, 3 or more a polygon with its corners on the round one.
+    pub blades: u32,
+    /// Turns the polygon, in degrees.
+    pub blade_rotation: f32,
     pub position: [f32; 3],
     pub target: [f32; 3],
     pub zoom: f32,
@@ -49,7 +54,7 @@ pub struct Camera {
 impl Default for Camera {
     fn default() -> Self {
         let pose = Pose::default();
-        Self { aperture: 0.0, focus_distance: 10.0, position: pose.position, target: pose.target, zoom: pose.zoom }
+        Self { aperture: 0.0, focus_distance: 10.0, blades: 0, blade_rotation: 0.0, position: pose.position, target: pose.target, zoom: pose.zoom }
     }
 }
 
@@ -65,18 +70,45 @@ impl Camera {
         if !self.focus_distance.is_finite() || self.focus_distance <= 0.0 {
             return Err("Camera focus_distance must be finite and positive".into());
         }
+        if self.blades != 0 && !(3..=16).contains(&self.blades) {
+            return Err("Camera blades must be 0 (round) or from 3 to 16".into());
+        }
+        if !self.blade_rotation.is_finite() {
+            return Err("Camera blade_rotation must be finite".into());
+        }
         self.pose().validate()
     }
 
     pub(crate) fn ray(&self, view: &View, direction: Vec3, u: f32, v: f32) -> Ray {
         if self.aperture == 0.0 { return Ray { o: view.origin, d: direction }; }
         let focus = view.origin + direction * (self.focus_distance / direction.dot(view.forward));
-        let radius = 0.5 * self.aperture * u.sqrt();
-        let angle = 2.0 * PI * v;
-        let o = view.origin + view.right * (radius * angle.cos()) + view.up * (radius * angle.sin());
+        let (x, y) = self.lens_point(u, v);
+        let o = view.origin + view.right * x + view.up * y;
         let mut d = focus - o;
         d.normalize();
         Ray { o, d }
+    }
+}
+
+impl Camera {
+    /// A point of the lens opening, spread evenly over it for (u, v) evenly spread in [0, 1)².
+    pub(crate) fn lens_point(&self, u: f32, v: f32) -> (f32, f32) {
+        let radius = 0.5 * self.aperture;
+        if self.blades < 3 {
+            let (r, angle) = (radius * u.sqrt(), 2.0 * PI * v);
+            return (r * angle.cos(), r * angle.sin());
+        }
+        // One of the polygon's triangles around the center, chosen by u, then a uniform point in
+        // it. Rotation 0 puts a flat edge at the bottom, like most lenses.
+        let n = self.blades as f32;
+        let side = ((u * n) as u32).min(self.blades - 1);
+        let t = u * n - side as f32;
+        let step = 2.0 * PI / n;
+        let start = self.blade_rotation.to_radians() - 0.5 * PI - 0.5 * step + side as f32 * step;
+        let corner = |angle: f32| (radius * angle.cos(), radius * angle.sin());
+        let (a, b) = (corner(start), corner(start + step));
+        let s = t.sqrt();
+        (s * ((1.0 - v) * a.0 + v * b.0), s * ((1.0 - v) * a.1 + v * b.1))
     }
 }
 
@@ -266,6 +298,34 @@ mod tests {
         let pose = Pose { position: [10.0, 0.0, 5.0], target: [0.0, 0.0, 5.0], zoom: 1.0 };
         assert!((pick_focus(&scene, None, &pose, 800, 600, 0.5, 0.5).unwrap() - 9.0).abs() < 1e-4);
         assert_eq!(pick_focus(&scene, None, &Pose { target: [20.0, 0.0, 5.0], ..pose }, 800, 600, 0.5, 0.5), None);
+    }
+
+    #[test]
+    fn polygon_lens_points_stay_inside_and_fill_the_blades() {
+        for blades in [3u32, 5, 6, 9] {
+            let camera = Camera { aperture: 2.0, blades, blade_rotation: 12.0, ..Camera::default() };
+            let n = blades as f32;
+            // Distance from the center to an edge of the polygon at this angle.
+            let edge = |angle: f32| {
+                let start = 12f32.to_radians() - 0.5 * PI - 0.5 * 2.0 * PI / n;
+                let local = (angle - start).rem_euclid(2.0 * PI / n) - PI / n;
+                (PI / n).cos() / local.cos()
+            };
+            let mut sectors = vec![0u32; blades as usize];
+            for pass in 0..4000 {
+                let (u, v) = lens_sample(pass, 7);
+                let (x, y) = camera.lens_point(u, v);
+                let (r, angle) = ((x * x + y * y).sqrt(), y.atan2(x));
+                assert!(r <= edge(angle) + 1e-4, "{blades} blades: {x} {y}");
+                sectors[(((angle.rem_euclid(2.0 * PI)) / (2.0 * PI) * n) as usize).min(blades as usize - 1)] += 1;
+            }
+            assert!(sectors.iter().all(|&c| c > 4000 / blades / 2), "{blades}: {sectors:?}");
+        }
+        let round = Camera { aperture: 2.0, ..Camera::default() };
+        let (x, y) = round.lens_point(0.999, 0.3);
+        assert!(((x * x + y * y).sqrt() - 1.0).abs() < 1e-3);
+        assert!(Camera { blades: 2, ..Camera::default() }.validate().is_err());
+        assert!(Camera { blades: 6, ..Camera::default() }.validate().is_ok());
     }
 
     #[test]

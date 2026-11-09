@@ -8,7 +8,7 @@ Rendering techniques still to add. Effort is a rough guess: **low** is a day or 
 Visual gain for the effort:
 
 1. ~~Rough and colored glass, then spectral dispersion~~ (done, with every material below).
-2. ACES/AgX tone mapping and shaped bokeh: cheap, and every image gains.
+2. ~~ACES/AgX tone mapping and shaped bokeh~~ (done).
 3. Volumes with light shafts: the largest change in atmosphere.
 4. glTF and OBJ import: opens the app to real scenes.
 
@@ -38,10 +38,10 @@ Visual gain for the effort:
 
 ## Camera and image
 
-- [ ] **Shaped bokeh**: hexagonal or other aperture shapes. Low.
+- [x] **Shaped bokeh**: hexagonal or other aperture shapes. Low.
 - [ ] **Vignetting and chromatic aberration**. Low.
-- [ ] **Film tone mapping (ACES or AgX) and white balance**: natural colors in bright light.
-  Low.
+- [x] **Film tone mapping (ACES or AgX)**: natural colors in bright light. Low.
+- [ ] **White balance**: a color temperature for the camera. Low.
 - [ ] **Motion blur**: needs moving objects in the scene format. Medium.
 
 ## Quality and speed

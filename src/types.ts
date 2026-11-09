@@ -60,7 +60,7 @@ export interface Pose {
 export interface SceneInfo {
   environment: EnvironmentConfig | null;
   materials: SceneMaterial[];
-  camera: Pose & { aperture: number; focus_distance: number };
+  camera: Pose & { aperture: number; focus_distance: number; blades: number; blade_rotation: number };
   center: [number, number, number] | null;
   name: string;
   path: string;
@@ -91,6 +91,9 @@ export interface MenuAction {
 /** A part of the image, as fractions of its width and height. */
 export interface Area { x0: number; y0: number; x1: number; y1: number }
 
+/** How light becomes screen colors; see crates/far-core/src/tonemap.rs. */
+export type ToneMapping = "standard" | "agx" | "agx_punchy" | "aces";
+
 export interface RenderRequest {
   /** Renders only this rectangle, in pixels: [x0, y0, x1, y1], the end excluded. */
   region?: [number, number, number, number] | null;
@@ -99,6 +102,9 @@ export interface RenderRequest {
   pose: Pose;
   aperture: number;
   focus_distance: number;
+  /** Diaphragm blades, 0 for a round opening, and their rotation in degrees. */
+  blades: number;
+  blade_rotation: number;
   mode: Mode;
   width: number;
   height: number;
@@ -113,6 +119,7 @@ export interface RenderRequest {
   denoise: boolean;
   bloom: boolean;
   exposure: number;
+  tone_mapping: ToneMapping;
   caustics: boolean;
   photons: number;
   caustic_radius: number;
@@ -149,9 +156,12 @@ export interface Settings {
   dofPasses: number;
   aperture: number;
   focusDistance: number;
+  blades: number;
+  bladeRotation: number;
   quality: Quality;
   customPasses: number;
   exposure: number;
+  toneMapping: ToneMapping;
   denoise: boolean;
   bloom: boolean;
   caustics: boolean;
