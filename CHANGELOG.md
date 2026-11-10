@@ -20,6 +20,18 @@ and moves under its version when that version is released.
 
 ### Changed
 
+- **Rendering again reuses the last render** in the app:
+  - changing exposure, tone mapping, or turning denoise or bloom off shows the image again at
+    once, without rendering, even with **Render after each change** off; turning denoise or
+    bloom on after a render without them, or changing exposure with bloom on, still renders;
+  - raising the passes with nothing else changed continues from the last render, so 64 to 256
+    passes costs 192, with the same image as a full 256-pass render;
+  - a render stopped halfway by such a change, such as dragging the exposure while it runs,
+    continues from where it stopped instead of starting over.
+- The Standard tone mapping averages linear light before its curve in Enhanced mode, as the
+  film curves and HDR scenes already did: scenes without an HDR environment keep the energy of
+  bright paths and come out somewhat brighter where light bounces strongly, as in the Cornell
+  box. The 2008 and Fixed stages are unchanged.
 - **Faster rendering in Enhanced mode:**
   - scenes with many lights sample one per point, picked by the light it brings: the Christmas
     scene renders about 4.5 times faster, with less noise in the same time;

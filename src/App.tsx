@@ -13,7 +13,7 @@ import {
   activeComparison, activeMode, buildPreview, buildRequest, defaultSettings, imageSize, sceneSaveRequest,
   withSavedRenderSettings,
 } from "./settings";
-import type { Area, EnvironmentConfig, MenuAction, Pose, SceneInfo, Settings, Startup } from "./types";
+import type { Area, EnvironmentConfig, MenuAction, Pose, RenderRequest, SceneInfo, Settings, Startup } from "./types";
 
 /** Waits for a pause in slider drags before starting a new render. */
 const SETTINGS_DELAY_MS = 180;
@@ -21,6 +21,15 @@ const SETTINGS_DELAY_MS = 180;
 const WHEEL_END_MS = 250;
 
 const scenePose = ({ camera: { position, target, zoom } }: SceneInfo): Pose => ({ position, target, zoom });
+
+/**
+ * The job without how the light is shown (exposure, tone mapping, denoise and bloom): two jobs
+ * with the same light differ only in what the engine shows again at once, without rendering.
+ */
+function lightKey(job: RenderJob): string {
+  const strip = (request: RenderRequest | null) => request && { ...request, exposure: 0, tone_mapping: null, denoise: false, bloom: false };
+  return JSON.stringify({ ...job, main: strip(job.main), comparison: strip(job.comparison) });
+}
 
 function buildJob(settings: Settings, moving: boolean, area: Area | null): RenderJob {
   if (moving) return { main: buildPreview(settings), comparison: null, preview: true };
@@ -177,7 +186,11 @@ export function App() {
       void renderer.stop();
       return;
     }
-    if (!renderAlone) return;
+    // Without auto-render, a change of exposure, tone mapping, denoise or bloom still applies at
+    // once: the last finished render is shown again with it, without rendering.
+    const lookOnly = !renderAlone && !job.preview && view.hasResult && renderedKey !== null && renderedKey !== jobKey
+      && lightKey(JSON.parse(renderedKey) as RenderJob) === lightKey(job);
+    if (!renderAlone && !lookOnly) return;
     const timer = setTimeout(() => start(job), movingCamera ? 0 : SETTINGS_DELAY_MS);
     return () => clearTimeout(timer);
     // `jobKey` stands for `job`, so a new object with the same values does not re-render.

@@ -166,6 +166,10 @@ export interface RenderResult {
   caustics: CausticReport | null;
   /** The denoiser the render used, if any. */
   denoiser: "oidn" | "builtin" | null;
+  /** The last render shown again with new exposure, tone mapping, denoise or bloom. */
+  redisplayed?: boolean;
+  /** The render continued from this many passes of the last one. */
+  continued_from?: number | null;
 }
 
 export interface Settings {

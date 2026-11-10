@@ -79,6 +79,15 @@ impl Guide {
     }
 
     /// Mean of the squared luminance over `count` samples.
+    /// Multiplies the recorded luminance by `factor`, as for samples taken at another exposure.
+    pub fn scale_luminance(&self, factor: f32) {
+        let pixels = self.sums.len() / FIELDS;
+        for pixel in 0..pixels {
+            let index = pixel * FIELDS + LUMA2;
+            self.sums[index].store((self.get(index) * factor * factor).to_bits(), Relaxed);
+        }
+    }
+
     pub fn mean_luminance2(&self, pixel: usize, count: u32) -> f32 {
         self.get(pixel * FIELDS + LUMA2) / count as f32
     }

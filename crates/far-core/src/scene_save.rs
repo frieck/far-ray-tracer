@@ -158,7 +158,9 @@ fn relative_to(path: &Path, base: &Path) -> String {
     let (path, base) = (absolute(path), absolute(base));
     let (a, b): (Vec<_>, Vec<_>) = (path.components().collect(), base.components().collect());
     if a.first() != b.first() {
-        return path.to_string_lossy().replace('\\', "/");
+        // Windows resolves folders to "\\?\C:\..."; the file keeps the plain form people read.
+        let text = path.to_string_lossy().into_owned();
+        return text.strip_prefix(r"\\?\").unwrap_or(&text).replace('\\', "/");
     }
     let common = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
     let mut parts: Vec<String> = vec!["..".into(); b.len() - common];
@@ -178,6 +180,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn paths_become_relative_to_where_the_scene_goes() {
         assert_eq!(relative_to(Path::new("/a/b/c.hdr"), Path::new("/a/d")), "../b/c.hdr");
         assert_eq!(relative_to(Path::new("/a/b/c.hdr"), Path::new("/a/b")), "c.hdr");

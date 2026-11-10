@@ -33,7 +33,9 @@ const MAX_DISTANCE: f32 = 10000.0;
 /// Distance from the surface, so a ray does not hit its own starting point.
 const SURFACE_OFFSET: f32 = 1e-3;
 const ABSORPTION: f32 = 0.15;
-/// Limits very bright samples, which would become isolated dots in the image.
+/// Limits very bright samples in scenes without an HDR environment, which would become isolated
+/// dots in the image. It applies before the exposure, so the light gathered can be shown again
+/// at another exposure exactly.
 const MAX_SAMPLE_RADIANCE: f32 = 6.0;
 /// How many diffuse surfaces indirect light goes through when the scene has a 2008
 /// light. Scenes lit only by physical emitters follow paths until Russian roulette ends
@@ -1569,29 +1571,32 @@ fn channel(v: f32) -> u32 {
 
 /// How samples become screen colors.
 #[derive(Clone, Copy)]
+/// Samples are averaged as linear light, and the mean goes through the tone mapping curve: the
+/// light of a small bright source keeps its energy, and exposure and the curve can change
+/// afterwards without rendering again.
 struct Display {
-    /// Averages linear light and maps the mean with `curve`. Otherwise each sample goes through
-    /// the shoulder before the average: the historical pipeline, for scenes without an HDR
-    /// image and with the Standard curve.
-    linear: bool,
     curve: ToneMapping,
+    /// The brightest a sample may be, before exposure; None in scenes lit by an HDR image or a
+    /// sky, whose sun is far brighter than any lamp.
+    cap: Option<f32>,
 }
 
 impl Display {
     fn sample(self, radiance: f32, exposure: f32) -> f32 {
-        if self.linear { (radiance * exposure).max(0.) }
-        else { shoulder((radiance * exposure).min(MAX_SAMPLE_RADIANCE)) }
+        (self.cap.map_or(radiance, |cap| radiance.min(cap)) * exposure).max(0.)
     }
 
     /// Screen values of a pixel's mean sample.
     fn show(self, mean: [f32; 3]) -> [f32; 3] {
-        if self.linear { tonemap::display(self.curve, mean) } else { mean }
+        tonemap::display(self.curve, mean)
     }
 }
 
 /// Filters the accumulated image and writes it over the progressive one.
 /// Filters the rendered part of the image: all of it, or a region and its ring of tiles.
-fn apply_denoiser(sum: &[AtomicU32], guide: &Guide, counts: &[AtomicU32], display: Display, image: &Image,
+/// `scale` multiplies the light, for a new exposure of linear samples.
+#[allow(clippy::too_many_arguments)]
+fn apply_denoiser(sum: &[AtomicU32], guide: &Guide, counts: &[AtomicU32], scale: f32, display: Display, image: &Image,
     progress: &Progress, rendered: engine::Region) {
     let width = image.width as usize;
     let (x0, y0, x1, y1) = (rendered.x0 as usize, rendered.y0 as usize, rendered.x1 as usize, rendered.y1 as usize);
@@ -1605,11 +1610,11 @@ fn apply_denoiser(sum: &[AtomicU32], guide: &Guide, counts: &[AtomicU32], displa
     if crate::oidn::available() {
         // The network takes the mean color, linear when the scene is lit by an HDR image, and
         // the albedo and normal of the first hits, which show it where edges and textures are.
-        let mean = |q: usize, p: usize| [0, 1, 2].map(|k| f32::from_bits(sum[p * 3 + k].load(Relaxed)) / pixel_counts[q] as f32);
+        let mean = |q: usize, p: usize| [0, 1, 2].map(|k| f32::from_bits(sum[p * 3 + k].load(Relaxed)) * scale / pixel_counts[q] as f32);
         let color: Vec<[f32; 3]> = indices.iter().enumerate().map(|(q, &p)| mean(q, p)).collect();
         let (albedo, normal): (Vec<[f32; 3]>, Vec<[f32; 3]>) =
             (0..indices.len()).map(|q| guide.albedo_normal(q, pixel_counts[q])).unzip();
-        if let Some(result) = crate::oidn::denoise(&color, &albedo, &normal, x1 - x0, y1 - y0, display.linear) {
+        if let Some(result) = crate::oidn::denoise(&color, &albedo, &normal, x1 - x0, y1 - y0, true) {
             for (&p, c) in indices.iter().zip(result) {
                 let c = display.show(c);
                 image.pixels[p].store(0xff00_0000 | channel(c[0]) | channel(c[1]) << 8 | channel(c[2]) << 16, Relaxed);
@@ -1620,16 +1625,12 @@ fn apply_denoiser(sum: &[AtomicU32], guide: &Guide, counts: &[AtomicU32], displa
     }
     for (q, &p) in indices.iter().enumerate() {
         let count = pixel_counts[q];
-        let mean = [0, 1, 2].map(|k| f32::from_bits(sum[p * 3 + k].load(Relaxed)) / count as f32);
+        let mean = [0, 1, 2].map(|k| f32::from_bits(sum[p * 3 + k].load(Relaxed)) * scale / count as f32);
         let brightness = denoise::luma(mean);
-        let spread = (guide.mean_luminance2(q, count) - brightness * brightness).max(0.) / (count.max(2) - 1) as f32;
+        let spread = (guide.mean_luminance2(q, count) * scale * scale - brightness * brightness).max(0.) / (count.max(2) - 1) as f32;
         // The filter works on displayed values, where the curve compresses the noise.
-        let slope = if display.linear {
-            let shown = |b: f32| display.show([b; 3])[1];
-            (shown(brightness + 0.01) - shown(brightness)) / 0.01
-        } else {
-            1.
-        };
+        let shown = |b: f32| display.show([b; 3])[1];
+        let slope = (shown(brightness + 0.01) - shown(brightness)) / 0.01;
         color.push(display.show(mean));
         variance.push(spread * slope * slope);
     }
@@ -1723,17 +1724,108 @@ fn accumulate(sum: &[AtomicU32], p: usize, color: Vec3, exposure: f32, count: u3
 }
 
 pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, progress: &Progress) {
+    render_continuing(scene, kd, op, image, progress, None);
+}
+
+/// What a finished Enhanced render accumulated: the sums of its samples, the denoiser's guide
+/// and the light above the bloom threshold, per pixel. The next render can continue from it
+/// when only the number of passes grows, and the image can be shown again with another
+/// exposure, tone mapping, denoise or bloom without tracing a ray.
+pub struct Accumulation {
+    width: u32,
+    height: u32,
+    rendered: engine::Region,
+    passes: u32,
+    sum: Vec<AtomicU32>,
+    counts: Vec<AtomicU32>,
+    /// Kept when the render denoised, so denoising can be turned off and on again.
+    guide: Option<Guide>,
+    /// Kept when the render had bloom.
+    glow: Option<Vec<AtomicU32>>,
+    /// The exposure the samples were taken with, before the scene's light compensation.
+    exposure: f32,
+}
+
+impl Accumulation {
+    pub fn passes(&self) -> u32 {
+        self.passes
+    }
+}
+
+/// The part of the image a render traces: the whole of it, or a region and a ring of tiles
+/// around it, which the denoiser filters against.
+fn rendered_area(op: &Options, fixed: bool) -> (u32, u32, u32, u32) {
+    let (tiles_x, tiles_y) = (op.width.div_ceil(TILE), op.height.div_ceil(TILE));
+    match op.region.and_then(|r| r.within(op.width, op.height)) {
+        Some(r) => r.tiles(TILE, tiles_x, tiles_y, (!fixed) as u32),
+        None => (0, 0, tiles_x, tiles_y),
+    }
+}
+
+fn display_for(scene: &Scene, op: &Options) -> Display {
+    let hdr = scene.environment.as_ref().is_some_and(|e| e.active());
+    Display { curve: op.tone_mapping, cap: (!hdr).then_some(MAX_SAMPLE_RADIANCE) }
+}
+
+/// Shows `previous` again with `op`'s exposure, tone mapping, denoise and bloom, without
+/// rendering. False when that cannot give the image a render would, and a render is needed:
+/// another size, region, camera or scene is the caller's to rule out; here, a change between
+/// the 2008 display and linear light, or of exposure where samples went through the 2008
+/// shoulder or bloom was taken.
+pub fn redisplay(previous: &Accumulation, scene: &Scene, op: &Options, image: &Image, progress: &Progress) -> bool {
+    let fixed = op.mode == Mode::Fixed;
+    let (tx0, ty0, tx1, ty1) = rendered_area(op, fixed);
+    let rendered = engine::Region { x0: tx0 * TILE, y0: ty0 * TILE, x1: (tx1 * TILE).min(op.width), y1: (ty1 * TILE).min(op.height) };
+    let display = display_for(scene, op);
+    let same_exposure = op.exposure == previous.exposure;
+    if fixed || previous.width != op.width || previous.height != op.height || previous.rendered != rendered
+        || (op.bloom && !same_exposure)
+        || previous.passes == 0 || (op.denoise && previous.guide.is_none()) || (op.bloom && previous.glow.is_none()) {
+        return false;
+    }
+    *progress.denoiser.lock().unwrap() = None;
+    let scale = op.exposure / previous.exposure;
+    paint(&previous.sum, &previous.counts, scale, display, image, rendered);
+    if let Some(guide) = previous.guide.as_ref().filter(|_| op.denoise && previous.passes >= denoise::MIN_PASSES) {
+        apply_denoiser(&previous.sum, guide, &previous.counts, scale, display, image, progress, rendered);
+    }
+    if let Some(glow) = previous.glow.as_ref().filter(|_| op.bloom) {
+        apply_bloom(glow, Some(&previous.counts), previous.passes, image);
+    }
+    true
+}
+
+/// Writes the mean of each pixel's samples, times `scale`, as screen colors.
+fn paint(sum: &[AtomicU32], counts: &[AtomicU32], scale: f32, display: Display, image: &Image, rendered: engine::Region) {
+    let width = image.width as usize;
+    for y in rendered.y0 as usize..rendered.y1 as usize {
+        for x in rendered.x0 as usize..rendered.x1 as usize {
+            let p = y * width + x;
+            let count = counts[p].load(Relaxed);
+            if count == 0 {
+                continue;
+            }
+            let mean = [0, 1, 2].map(|k| f32::from_bits(sum[p * 3 + k].load(Relaxed)) * scale / count as f32);
+            let shown = display.show(mean);
+            image.pixels[p].store(0xff00_0000 | channel(shown[0]) | channel(shown[1]) << 8 | channel(shown[2]) << 16, Relaxed);
+        }
+    }
+}
+
+/// Renders like `render`, continuing from `previous` when it was the same render with fewer
+/// passes: the passes it holds are the ones a full render takes first, so the result is the
+/// same, for the cost of the new passes only. Returns what this render accumulated, unless it
+/// was cancelled or in Fixed mode.
+pub fn render_continuing(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, progress: &Progress,
+    previous: Option<Accumulation>) -> Option<Accumulation> {
     let (w, h) = (op.width, op.height);
     let (tiles_x, tiles_y) = (w.div_ceil(TILE), h.div_ceil(TILE));
     let fixed = op.mode == Mode::Fixed;
     let samples = if fixed { 1 } else { op.samples.max(1) };
     let denoising = op.denoise && !fixed && samples >= denoise::MIN_PASSES;
-    // A region renders its tiles, plus a ring of tiles around it when the denoiser runs, so
-    // its edge filters against real neighbors instead of black.
-    let (tx0, ty0, tx1, ty1) = match op.region.and_then(|r| r.within(w, h)) {
-        Some(r) => r.tiles(TILE, tiles_x, tiles_y, denoising as u32),
-        None => (0, 0, tiles_x, tiles_y),
-    };
+    // A region renders its tiles, plus a ring of tiles around it, so the denoiser filters its
+    // edge against real neighbors instead of black, now or when it is turned on later.
+    let (tx0, ty0, tx1, ty1) = rendered_area(op, fixed);
     let columns = tx1 - tx0;
     let total_tiles = (columns * (ty1 - ty0)) as usize;
     let all_tiles = tiles_x * tiles_y;
@@ -1742,8 +1834,32 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
     // that is not a perfect square, some strata simply stay unused.
     let grid = (samples as f32).sqrt().ceil() as u32;
     let strata = grid * grid;
+    let display = display_for(scene, op);
+    // Continues from `previous` only when it is this render cut short: the same image, area,
+    // display and exposure, with fewer passes. The caller makes sure the scene, camera and
+    // other settings are the same.
+    // The light gathered can be taken over at another exposure by scaling it; bloom cannot.
+    let previous = previous.filter(|p| {
+        !fixed && op.noise_threshold <= 0.0 && p.width == w && p.height == h && p.rendered == rendered
+            && p.guide.is_some() == denoising && p.glow.is_some() == op.bloom
+            && p.passes < samples && (p.exposure == op.exposure || !op.bloom)
+            // A single pass samples pixel centers, which longer renders do not.
+            && p.passes > 1
+    });
+    if let Some(p) = &previous {
+        if p.exposure != op.exposure {
+            let factor = op.exposure / p.exposure;
+            for cell in &p.sum {
+                cell.store((f32::from_bits(cell.load(Relaxed)) * factor).to_bits(), Relaxed);
+            }
+            if let Some(guide) = &p.guide {
+                guide.scale_luminance(factor);
+            }
+        }
+    }
+    let first_pass = previous.as_ref().map_or(0, |p| p.passes);
     progress.tiles_done.store(0, Relaxed);
-    progress.tiles_total.store(total_tiles * samples as usize, Relaxed);
+    progress.tiles_total.store(total_tiles * (samples - first_pass) as usize, Relaxed);
     progress.rays.store(0, Relaxed);
 
     let pose = if fixed { Pose::default() } else { op.pose.unwrap_or(scene.camera.pose()) };
@@ -1790,22 +1906,27 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
     // Fixed mode samples the same point of each pixel as Classic mode, so comparing
     // the two shows the bugs and nothing else.
     let pixel_center = if fixed { 0.0 } else { 0.5 };
-    let sum: Vec<AtomicU32> = (0..w as usize * h as usize * 3).map(|_| AtomicU32::new(0)).collect();
+    let pixels = w as usize * h as usize;
+    let (sum, counts, guide, glow) = match previous {
+        Some(p) => (p.sum, p.counts, p.guide, p.glow),
+        None => (
+            (0..pixels * 3).map(|_| AtomicU32::new(0)).collect::<Vec<_>>(),
+            (0..pixels).map(|_| AtomicU32::new(0)).collect::<Vec<_>>(),
+            denoising.then(|| Guide::new(pixels)),
+            (op.bloom && !fixed).then(|| (0..pixels * 3).map(|_| AtomicU32::new(0)).collect::<Vec<_>>()),
+        ),
+    };
     let stride = stratum_stride(strata);
     // Each light adds full brightness with no falloff. Compensating part of that
     // keeps scenes with several lights from turning white.
     let exposure = op.exposure / (scene.lights.len().max(1) as f32).powf(0.35);
-    let hdr = scene.environment.as_ref().is_some_and(|e| e.active());
-    let display = Display { linear: !fixed && (hdr || op.tone_mapping != ToneMapping::Standard), curve: op.tone_mapping };
-    let guide = denoising.then(|| Guide::new(w as usize * h as usize));
-    let glow: Option<Vec<AtomicU32>> = (op.bloom && !fixed)
-        .then(|| (0..w as usize * h as usize * 3).map(|_| AtomicU32::new(0)).collect());
-    let pixels = w as usize * h as usize;
-    // Samples each pixel has taken: all the same, unless adaptive sampling stops some early.
-    let counts: Vec<AtomicU32> = (0..pixels).map(|_| AtomicU32::new(0)).collect();
     let adaptive = Adaptive::new(op, fixed, samples, pixels);
+    // A continued render starts from the image so far.
+    if first_pass > 0 {
+        paint(&sum, &counts, 1.0, display, image, rendered);
+    }
 
-    for pass_index in 0..samples {
+    for pass_index in first_pass..samples {
         if progress.cancel.load(Relaxed) {
             break;
         }
@@ -1830,8 +1951,11 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
                 caustics_only,
                 photon_lookups: 0,
                 photons_gathered: 0,
-                stratum: light_stratum,
-                grid: grid as f32,
+                // Camera samples draw their decisions from sequences of their pass, which do not
+                // depend on how many passes there are; the grid of strata, which does, stays
+                // with Fixed mode, so a render continued with more passes gives the same image.
+                stratum: if fixed { light_stratum } else { (0.0, 0.0) },
+                grid: if fixed { grid as f32 } else { 1.0 },
                 first_hit: false,
                 primary: Primary::default(),
                 wavelength: None,
@@ -1856,6 +1980,11 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
                     for x in x0..(x0 + TILE).min(w) {
                         let p = (y * w + x) as usize;
                         if adaptive.as_ref().is_some_and(|a| a.done[p].load(Relaxed)) {
+                            continue;
+                        }
+                        // A render cut short in the middle of a pass and continued here already
+                        // has this pass in some pixels.
+                        if counts[p].load(Relaxed) > pass_index {
                             continue;
                         }
                         // Each camera sample draws from its own pixel's sequences, from the start.
@@ -1937,21 +2066,138 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
             }
         }
     }
+    if fixed || adaptive.is_some() {
+        return None;
+    }
+    // A cancelled render keeps what it gathered, so the next one continues from it, as when
+    // only the exposure changes while it runs: the passes every pixel finished count, and the
+    // pixels already through the next one skip it.
+    if progress.cancel.load(Relaxed) {
+        let width = w as usize;
+        let finished = (rendered.y0..rendered.y1)
+            .flat_map(|y| (rendered.x0..rendered.x1).map(move |x| y as usize * width + x as usize))
+            .map(|p| counts[p].load(Relaxed)).min().unwrap_or(0);
+        return Some(Accumulation {
+            width: w, height: h, rendered, passes: finished, sum, counts, guide, glow, exposure: op.exposure,
+        });
+    }
     if let Some(guide) = &guide {
-        if !progress.cancel.load(Relaxed) {
-            apply_denoiser(&sum, guide, &counts, display, image, progress, rendered);
-        }
+        apply_denoiser(&sum, guide, &counts, 1.0, display, image, progress, rendered);
     }
     if let Some(glow) = &glow {
-        if !progress.cancel.load(Relaxed) {
-            apply_bloom(glow, Some(&counts), samples, image);
-        }
+        apply_bloom(glow, Some(&counts), samples, image);
     }
+    Some(Accumulation {
+        width: w, height: h, rendered, passes: samples, sum, counts, guide, glow, exposure: op.exposure,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn example(name: &str) -> Scene {
+        Scene::open(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes").join(name)).unwrap()
+    }
+
+    fn small(samples: u32) -> Options {
+        Options { mode: Mode::Enhanced, width: 64, height: 48, samples, threads: 4, ..Options::default() }
+    }
+
+    fn rendered(scene: &Scene, op: &Options, previous: Option<Accumulation>) -> (Vec<u32>, Option<Accumulation>) {
+        let kd = KdTree::build_corrected(scene);
+        let image = Image::new(op.width, op.height);
+        let acc = render_continuing(scene, Some(&kd), op, &image, &Progress::default(), previous);
+        (image.pixels.iter().map(|p| p.load(Relaxed)).collect(), acc)
+    }
+
+    /// Largest difference of one color channel between two images.
+    fn largest_difference(a: &[u32], b: &[u32]) -> u32 {
+        a.iter().zip(b).map(|(x, y)| (0..3).map(|k| ((x >> (8 * k)) & 0xff).abs_diff((y >> (8 * k)) & 0xff)).max().unwrap()).max().unwrap()
+    }
+
+    #[test]
+    fn a_continued_render_is_the_render_with_all_its_passes() {
+        for name in ["cornell-box.far", "materials/glass.far", "materials/coatings.far", "techniques/smoke.far"] {
+            let scene = example(name);
+            let (_, first) = rendered(&scene, &small(4), None);
+            let (continued, _) = rendered(&scene, &small(8), first);
+            assert_eq!(continued, rendered(&scene, &small(8), None).0, "{name}");
+        }
+        let scene = example("materials/coatings.far");
+        let (_, first) = rendered(&scene, &small(4), None);
+        assert_eq!(first.as_ref().unwrap().passes(), 4);
+        let (continued, acc) = rendered(&scene, &small(8), first);
+        assert_eq!(acc.unwrap().passes(), 8);
+        let (fresh, _) = rendered(&scene, &small(8), None);
+        assert_eq!(continued, fresh);
+        // Another exposure starts over.
+        let (_, first) = rendered(&scene, &small(4), None);
+        let brighter = Options { exposure: 1.5, ..small(8) };
+        let (restarted, _) = rendered(&scene, &brighter, first);
+        assert_eq!(restarted, rendered(&scene, &brighter, None).0);
+    }
+
+    #[test]
+    fn a_cancelled_render_continues_to_the_same_image() {
+        let scene = example("materials/coatings.far");
+        let kd = KdTree::build_corrected(&scene);
+        let op = Options { width: 128, height: 96, ..small(24) };
+        for (delay, exposure) in [(15, 1.0), (40, 1.0), (25, 1.6)] {
+            // Cancelled after a while, wherever the render then is.
+            let progress = Progress::default();
+            let image = Image::new(op.width, op.height);
+            let partial = std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(delay));
+                    progress.cancel.store(true, Relaxed);
+                });
+                render_continuing(&scene, Some(&kd), &op, &image, &progress, None)
+            }).expect("a cancelled render keeps what it gathered");
+            // On a fast machine the render may finish first; then it simply is not continued.
+            let next = Options { exposure, ..op };
+            let (continued, acc) = rendered(&scene, &next, Some(partial));
+            assert_eq!(acc.unwrap().passes(), 24);
+            let (fresh, _) = rendered(&scene, &next, None);
+            assert!(largest_difference(&continued, &fresh) <= 1, "delay {delay} exposure {exposure}");
+        }
+    }
+
+    #[test]
+    fn redisplay_shows_what_a_new_render_would() {
+        let scene = example("materials/coatings.far");
+        let agx = Options { tone_mapping: ToneMapping::Agx, denoise: true, bloom: true, ..small(6) };
+        let (_, acc) = rendered(&scene, &agx, None);
+        let acc = acc.unwrap();
+        let shown = |op: &Options| {
+            let image = Image::new(op.width, op.height);
+            redisplay(&acc, &scene, op, &image, &Progress::default())
+                .then(|| image.pixels.iter().map(|p| p.load(Relaxed)).collect::<Vec<u32>>())
+        };
+        // Exposure, curve and denoise on linear light.
+        for op in [
+            Options { exposure: 1.7, bloom: false, ..agx },
+            Options { tone_mapping: ToneMapping::Aces, exposure: 0.6, bloom: false, ..agx },
+            Options { denoise: false, ..agx },
+            Options { bloom: false, tone_mapping: ToneMapping::AgxPunchy, ..agx },
+        ] {
+            let again = shown(&op).expect("shown again");
+            let (fresh, _) = rendered(&scene, &op, None);
+            assert!(largest_difference(&again, &fresh) <= 1, "{:?} {}", op.tone_mapping, op.exposure);
+        }
+        // The 2008 display cannot become linear light, and bloom taken at one exposure cannot
+        // show another.
+        // A scene without an HDR environment, with the Standard curve, too.
+        let cornell = example("cornell-box.far");
+        let (_, kept) = rendered(&cornell, &small(6), None);
+        let brighter = Options { exposure: 1.8, ..small(6) };
+        let image = Image::new(64, 48);
+        assert!(redisplay(kept.as_ref().unwrap(), &cornell, &brighter, &image, &Progress::default()));
+        let again: Vec<u32> = image.pixels.iter().map(|p| p.load(Relaxed)).collect();
+        assert!(largest_difference(&again, &rendered(&cornell, &brighter, None).0) <= 1);
+        assert!(shown(&Options { exposure: 2.0, ..agx }).is_none());
+        assert!(shown(&Options { width: 32, ..agx }).is_none());
+    }
 
     #[test]
     fn many_lights_are_picked_by_the_light_they_bring() {
@@ -2311,12 +2557,11 @@ mod tests {
     }
 
     #[test]
-    fn hdr_accumulates_energy_before_compressing_highlights() {
-        // A bright source covering 1/32 of the samples has mean radiance 0.5.
-        // Compressing or clamping that one hit before averaging loses its energy.
+    fn samples_keep_their_energy_before_the_curve() {
+        // A bright source covering 1/32 of the samples has mean radiance 0.5: averaged before
+        // the curve, it shows as 0.5 whatever the order of the samples.
         let red = |rgba: u32| rgba & 0xff;
-        let linear = Display { linear: true, curve: ToneMapping::Standard };
-        let legacy = Display { linear: false, curve: ToneMapping::Standard };
+        let display = Display { curve: ToneMapping::Standard, cap: None };
         let bright = Vec3::new(16., 0., 0.);
         let dark = Vec3::new(0., 0., 0.);
         let run = |display: Display, order: &[Vec3]| {
@@ -2325,9 +2570,10 @@ mod tests {
         };
         let first: Vec<Vec3> = std::iter::once(bright).chain(std::iter::repeat_n(dark, 31)).collect();
         let last: Vec<Vec3> = std::iter::repeat_n(dark, 31).chain(std::iter::once(bright)).collect();
-        assert_eq!(run(linear, &first), 128);
-        assert_eq!(run(linear, &last), 128);
-        assert_eq!(run(legacy, &first), 8); // Existing scenes keep their established pipeline.
+        assert_eq!(run(display, &first), 128);
+        assert_eq!(run(display, &last), 128);
+        // Without an HDR environment, a sample is capped at 6 before the average.
+        assert_eq!(run(Display { cap: Some(MAX_SAMPLE_RADIANCE), ..display }, &first), 48);
     }
 
     #[test]

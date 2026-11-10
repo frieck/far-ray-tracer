@@ -36,8 +36,13 @@ type Header = Uint32Array;
 
 function summarize(result: RenderResult): string {
   const parts: string[] = [];
-  if (result.kd_ms !== null) parts.push(`KD-Tree ${formatTime(result.kd_ms)}`);
-  parts.push(`Render ${formatTime(result.render_ms)}`, formatRays(result.rays));
+  if (result.redisplayed) {
+    parts.push(`Shown again in ${formatTime(result.render_ms)}, without rendering`);
+  } else {
+    if (result.kd_ms !== null) parts.push(`KD-Tree ${formatTime(result.kd_ms)}`);
+    if (result.continued_from) parts.push(`Continued from pass ${result.continued_from}`);
+    parts.push(`Render ${formatTime(result.render_ms)}`, formatRays(result.rays));
+  }
   if (result.denoiser) parts.push(result.denoiser === "oidn" ? "Denoised by Open Image Denoise" : "Denoised");
   return (result.cancelled ? "Cancelled · " : "") + parts.join(" · ");
 }

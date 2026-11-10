@@ -63,6 +63,10 @@ struct AppState {
     progress: Arc<Progress>,
     rendering: AtomicBool,
     last_image: Mutex<Option<FinishedImage>>,
+    /// What the last kept render accumulated, with the settings it depends on: the next render
+    /// continues from it when only its passes grow, or shows it again when only exposure, tone
+    /// mapping, denoise or bloom changed.
+    accumulation: Mutex<Option<(String, far_core::enhanced::Accumulation)>>,
     /// The scene has edits not saved, as the interface last said.
     unsaved: AtomicBool,
     /// Quitting was confirmed, so the exit request goes through.
@@ -92,7 +96,7 @@ struct BumpInfo {
     strength: f32,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(deny_unknown_fields)]
 struct MaterialOverride {
     id: usize,
@@ -219,6 +223,10 @@ struct RenderResult {
     caustics: Option<CausticReport>,
     /// The denoiser the render used, if any.
     denoiser: Option<far_core::engine::Denoiser>,
+    /// The image is the last render shown again with new exposure, tone mapping, denoise or bloom.
+    redisplayed: bool,
+    /// The render continued from this many passes of the last one.
+    continued_from: Option<u32>,
 }
 
 fn open_scene(path: &Path, state: &AppState) -> Result<SceneInfo, String> {
@@ -866,6 +874,20 @@ fn render_scene(
     let passes = if mode == Mode::Enhanced { request.samples } else { 1 };
     let image = Image::new(options.width, options.height);
     let start = Instant::now();
+    // Everything the accumulated light depends on; exposure, tone mapping, denoise, bloom and the
+    // number of passes are left out, since the engine reuses the light across them.
+    let reuse_key = (mode == Mode::Enhanced && request.keep).then(|| format!(
+        "{:p}|{:?}|{:?}|{:?}|{:?}|{}|{}|{}|{}|{:?}|{:?}|{:?}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}",
+        Arc::as_ptr(&open), request.environment, request.material_overrides, request.pose, request.aperture,
+        request.focus_distance, request.blades, request.blade_rotation, request.indirect, request.indirect_strength,
+        request.max_bounces, request.indirect_clamp, request.caustics, request.photons, request.caustic_radius,
+        request.caustic_strength, request.width, request.height, request.use_kd, request.depth, request.region,
+        request.noise_threshold));
+    // A new kept render replaces what was kept, which frees its memory early.
+    let previous = reuse_key.as_ref().and_then(|key| match state.accumulation.lock().unwrap().take() {
+        Some((kept, accumulation)) if &kept == key => Some(accumulation),
+        _ => None,
+    });
     let send_frame = || {
         if let Some(preview) = progress.photon_preview.lock().unwrap().take() {
             // Diagnostic messages carry dimensions instead of render progress.
@@ -878,13 +900,45 @@ fn render_scene(
         channel.send(message([MESSAGE_FRAME, done, total, ms, pass, passes], Some(&image)))
     };
 
+    // The same light with as many passes: shown again with the new exposure, tone mapping,
+    // denoise or bloom, without rendering.
+    if let (Some(key), Some(accumulation)) = (&reuse_key, previous.as_ref()) {
+        if accumulation.passes() == options.samples && far_core::enhanced::redisplay(accumulation, scene, &options, &image, progress) {
+            progress.pass_index.store(options.samples as usize, Relaxed);
+            progress.tiles_total.store(1, Relaxed);
+            progress.tiles_done.store(1, Relaxed);
+            send_frame().map_err(|e| e.to_string())?;
+            *state.last_image.lock().unwrap() =
+                Some(FinishedImage { width: options.width, height: options.height, rgba: image.rgba() });
+            let denoiser = *progress.denoiser.lock().unwrap();
+            *state.accumulation.lock().unwrap() = previous.map(|a| (key.clone(), a));
+            return Ok(RenderResult {
+                kd_ms, render_ms: start.elapsed().as_millis() as u64, rays: 0, cancelled: false,
+                caustics: None, denoiser, redisplayed: true, continued_from: None,
+            });
+        }
+    }
+    // Fewer passes than kept cannot reuse them; more continue from them.
+    let previous = previous.filter(|a| a.passes() < options.samples);
+    let continued_from = previous.as_ref().map(|a| a.passes());
+
     let frame_interval = FRAME_INTERVAL * (image.width * image.height / PIXELS_PER_FRAME_INTERVAL).max(1);
+    let mut accumulated = None;
     let render_ms = render_with_frames(
-        || render(scene, kd, &options, &image, progress),
+        || {
+            if mode == Mode::Enhanced {
+                accumulated = far_core::enhanced::render_continuing(scene, kd, &options, &image, progress, previous);
+            } else {
+                render(scene, kd, &options, &image, progress);
+            }
+        },
         frame_interval,
         || { let _ = send_frame(); },
     )?;
     send_frame().map_err(|e| e.to_string())?;
+    if let (Some(key), Some(accumulation)) = (reuse_key, accumulated) {
+        *state.accumulation.lock().unwrap() = Some((key, accumulation));
+    }
 
     if request.keep {
         let rgba = image.rgba();
@@ -910,6 +964,8 @@ fn render_scene(
         cancelled: progress.cancel.load(Relaxed),
         caustics,
         denoiser: *progress.denoiser.lock().unwrap(),
+        redisplayed: false,
+        continued_from,
     })
 }
 
