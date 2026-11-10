@@ -805,7 +805,7 @@ dependencies = [
 
 [[package]]
 name = "far-app"
-version = "3.0.0-beta.4"
+version = "3.0.0-rc.1"
 dependencies = [
  "far-core",
  "image",
@@ -819,7 +819,7 @@ dependencies = [
 
 [[package]]
 name = "far-cli"
-version = "3.0.0-beta.4"
+version = "3.0.0-rc.1"
 dependencies = [
  "far-core",
  "image",
@@ -828,7 +828,7 @@ dependencies = [
 
 [[package]]
 name = "far-core"
-version = "3.0.0-beta.4"
+version = "3.0.0-rc.1"
 dependencies = [
  "gltf",
  "image",

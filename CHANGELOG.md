@@ -7,6 +7,8 @@ and moves under its version when that version is released.
 
 ## [Unreleased]
 
+## [3.0.0-rc.1] - 2026-11-09
+
 ### Added
 
 - **Save Scene** and **Save Scene As…**: write the scene with the app's edits (camera,
@@ -154,7 +156,8 @@ Windows.
 - **Evolution:** compares the 2008, Fixed and Enhanced stages side by side.
 - **Example scenes:** a showcase, materials and techniques.
 
-[Unreleased]: https://github.com/frieck/far-ray-tracer/compare/v3.0.0-beta.4...HEAD
+[Unreleased]: https://github.com/frieck/far-ray-tracer/compare/v3.0.0-rc.1...HEAD
+[3.0.0-rc.1]: https://github.com/frieck/far-ray-tracer/compare/v3.0.0-beta.4...v3.0.0-rc.1
 [3.0.0-beta.4]: https://github.com/frieck/far-ray-tracer/compare/v3.0.0-beta.3...v3.0.0-beta.4
 [3.0.0-beta.3]: https://github.com/frieck/far-ray-tracer/compare/v3.0.0-beta.2...v3.0.0-beta.3
 [3.0.0-beta.2]: https://github.com/frieck/far-ray-tracer/compare/v3.0.0-beta.1...v3.0.0-beta.2

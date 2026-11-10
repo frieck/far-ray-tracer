@@ -1,7 +1,7 @@
 {
   "name": "far-ray-tracer",
   "private": true,
-  "version": "3.0.0-beta.4",
+  "version": "3.0.0-rc.1",
   "license": "MIT",
   "author": "FARSystems (https://farsystems.com.br)",
   "type": "module",
