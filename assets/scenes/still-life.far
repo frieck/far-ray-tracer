@@ -1,0 +1,3414 @@
+{
+ "format": 3,
+ "camera": {
+  "position": [
+   3.0,
+   3.0,
+   -11.0
+  ],
+  "target": [
+   -1.0,
+   1.3,
+   2.0
+  ],
+  "zoom": 1.9,
+  "aperture": 0.14,
+  "focus_distance": 11.0,
+  "blades": 0
+ },
+ "environment": {
+  "sky": {
+   "elevation": 14,
+   "azimuth": 312,
+   "turbidity": 3,
+   "sun_strength": 3
+  },
+  "intensity": 1.3,
+  "visible": true
+ },
+ "fog": {
+  "density": 0.008,
+  "color": [
+   0.92,
+   0.9,
+   0.86
+  ],
+  "anisotropy": 0.6,
+  "bounds": [
+   [
+    -12.5,
+    -7.5,
+    -18.0
+   ],
+   [
+    14.0,
+    14.0,
+    8.0
+   ]
+  ]
+ },
+ "lights": [
+  {
+   "type": "sphere",
+   "position": [
+    -0.2,
+    3.75,
+    5.0
+   ],
+   "radius": 0.035,
+   "color": [
+    1.0,
+    0.62,
+    0.28
+   ],
+   "intensity": 3.0
+  },
+  {
+   "type": "rectangle",
+   "position": [
+    12.0,
+    9.0,
+    -14.0
+   ],
+   "edge_u": [
+    3.0,
+    0.0,
+    3.0
+   ],
+   "edge_v": [
+    -1.2,
+    2.5,
+    1.2
+   ],
+   "color": [
+    0.85,
+    0.9,
+    1.0
+   ],
+   "intensity": 4.5
+  }
+ ],
+ "objects": [
+  {
+   "type": "model",
+   "file": "still-life-table.glb",
+   "position": [
+    0,
+    0,
+    0
+   ],
+   "rotation": [
+    0,
+    0.0,
+    0
+   ],
+   "scale": 1,
+   "material": {
+    "color": [
+     1,
+     1,
+     1
+    ],
+    "texture": "still-life-oak.png",
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.42
+    },
+    "bump": {
+     "map": "still-life-oak-height.png",
+     "strength": 0.006
+    }
+   }
+  },
+  {
+   "type": "model",
+   "file": "still-life-towel.glb",
+   "position": [
+    0,
+    0,
+    0
+   ],
+   "rotation": [
+    0,
+    0.0,
+    0
+   ],
+   "scale": 1,
+   "material": {
+    "color": [
+     1,
+     1,
+     1
+    ],
+    "texture": "still-life-linen.png",
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.85,
+     "sheen": 0.7,
+     "sheen_color": [
+      0.95,
+      0.92,
+      0.85
+     ]
+    },
+    "bump": {
+     "map": "still-life-linen-weave.png",
+     "strength": 0.004
+    }
+   }
+  },
+  {
+   "type": "model",
+   "file": "still-life-wine-glass.glb",
+   "position": [
+    -0.9,
+    0.014,
+    -1.0
+   ],
+   "rotation": [
+    0,
+    0.0,
+    0
+   ],
+   "scale": 1,
+   "material": {
+    "color": [
+     0.95,
+     0.97,
+     0.97
+    ],
+    "surface": {
+     "preset": "glass",
+     "roughness": 0.0,
+     "ior": 1.56,
+     "abbe": 48,
+     "absorption_depth": 3.0
+    }
+   }
+  },
+  {
+   "type": "model",
+   "file": "still-life-wine-glass-wine.glb",
+   "position": [
+    -0.9,
+    0.014,
+    -1.0
+   ],
+   "rotation": [
+    0,
+    0.0,
+    0
+   ],
+   "scale": 1,
+   "material": {
+    "color": [
+     0.72,
+     0.06,
+     0.1
+    ],
+    "surface": {
+     "preset": "glass",
+     "roughness": 0.0,
+     "ior": 1.34,
+     "absorption_depth": 0.55
+    }
+   }
+  },
+  {
+   "type": "model",
+   "file": "still-life-decanter.glb",
+   "position": [
+    -4.6,
+    0.0,
+    3.4
+   ],
+   "rotation": [
+    0,
+    0.0,
+    0
+   ],
+   "scale": 1,
+   "material": {
+    "color": [
+     0.93,
+     0.97,
+     0.95
+    ],
+    "surface": {
+     "preset": "glass",
+     "roughness": 0.0,
+     "ior": 1.52,
+     "absorption_depth": 2.5
+    }
+   }
+  },
+  {
+   "type": "model",
+   "file": "still-life-decanter-wine.glb",
+   "position": [
+    -4.6,
+    0.0,
+    3.4
+   ],
+   "rotation": [
+    0,
+    0.0,
+    0
+   ],
+   "scale": 1,
+   "material": {
+    "color": [
+     0.72,
+     0.07,
+     0.1
+    ],
+    "surface": {
+     "preset": "glass",
+     "roughness": 0.0,
+     "ior": 1.34,
+     "absorption_depth": 1.3
+    }
+   }
+  },
+  {
+   "type": "model",
+   "file": "still-life-bowl.glb",
+   "position": [
+    1.2,
+    0.0,
+    1.4
+   ],
+   "rotation": [
+    0,
+    0.0,
+    0
+   ],
+   "scale": 1,
+   "material": {
+    "color": [
+     0.36,
+     0.45,
+     0.4
+    ],
+    "surface": {
+     "preset": "ceramic",
+     "roughness": 0.18,
+     "clearcoat": 0.5,
+     "clearcoat_roughness": 0.05,
+     "subsurface": 0.3,
+     "subsurface_radius": 0.05
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.9573,
+    0.7607,
+    1.3961
+   ],
+   "radius": 0.1597,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.1463,
+    0.3194,
+    1.2495
+   ],
+   "radius": 0.1593,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.0033,
+    0.6418,
+    0.5035
+   ],
+   "radius": 0.1887,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.6605,
+    0.3336,
+    2.3322
+   ],
+   "radius": 0.1734,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.7652,
+    0.3495,
+    1.1701
+   ],
+   "radius": 0.1894,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.8212,
+    0.6074,
+    0.9273
+   ],
+   "radius": 0.1691,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.3542,
+    0.6014,
+    0.5139
+   ],
+   "radius": 0.1647,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.1942,
+    0.6738,
+    0.7818
+   ],
+   "radius": 0.1577,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    2.0982,
+    0.6212,
+    0.7311
+   ],
+   "radius": 0.1688,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.931,
+    0.3432,
+    0.5988
+   ],
+   "radius": 0.183,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.2967,
+    0.3496,
+    1.4735
+   ],
+   "radius": 0.1894,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.6282,
+    0.3267,
+    2.3816
+   ],
+   "radius": 0.1666,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.5068,
+    0.3463,
+    1.1552
+   ],
+   "radius": 0.1862,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.9292,
+    0.3625,
+    2.2689
+   ],
+   "radius": 0.168,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.3451,
+    0.9648,
+    0.8853
+   ],
+   "radius": 0.1893,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.3532,
+    0.3993,
+    0.5864
+   ],
+   "radius": 0.1873,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    2.2349,
+    0.5767,
+    1.4793
+   ],
+   "radius": 0.1826,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.972,
+    0.3112,
+    1.506
+   ],
+   "radius": 0.1511,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.5907,
+    0.3333,
+    0.8225
+   ],
+   "radius": 0.1732,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.6223,
+    0.9085,
+    1.2637
+   ],
+   "radius": 0.1792,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.6792,
+    0.3123,
+    1.4494
+   ],
+   "radius": 0.1521,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.2209,
+    0.3494,
+    0.9234
+   ],
+   "radius": 0.1893,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.7513,
+    0.3294,
+    2.0437
+   ],
+   "radius": 0.1693,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.5882,
+    0.9246,
+    1.9263
+   ],
+   "radius": 0.1814,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.8466,
+    0.3106,
+    1.008
+   ],
+   "radius": 0.1505,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.2325,
+    0.3324,
+    1.8709
+   ],
+   "radius": 0.1723,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.9175,
+    0.3383,
+    0.6952
+   ],
+   "radius": 0.1781,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.8744,
+    0.7944,
+    1.095
+   ],
+   "radius": 0.1507,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.6885,
+    0.6795,
+    0.6069
+   ],
+   "radius": 0.1895,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.7303,
+    0.3256,
+    2.0378
+   ],
+   "radius": 0.1654,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.8168,
+    0.5159,
+    1.2548
+   ],
+   "radius": 0.1774,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.644,
+    0.3231,
+    1.4792
+   ],
+   "radius": 0.163,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.9782,
+    0.3448,
+    2.4628
+   ],
+   "radius": 0.1847,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.0492,
+    0.3407,
+    2.1201
+   ],
+   "radius": 0.1806,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.0586,
+    1.0561,
+    1.5493
+   ],
+   "radius": 0.1872,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.9068,
+    0.5622,
+    1.9241
+   ],
+   "radius": 0.1529,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.532,
+    0.7113,
+    1.0145
+   ],
+   "radius": 0.1557,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.2106,
+    0.6082,
+    1.1495
+   ],
+   "radius": 0.1871,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.9823,
+    0.3275,
+    0.3507
+   ],
+   "radius": 0.1674,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.6697,
+    0.3329,
+    0.4633
+   ],
+   "radius": 0.1727,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.1323,
+    0.9565,
+    1.179
+   ],
+   "radius": 0.1746,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.4373,
+    0.4743,
+    0.8381
+   ],
+   "radius": 0.1732,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.8457,
+    0.5798,
+    2.2312
+   ],
+   "radius": 0.1664,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    2.0927,
+    0.3285,
+    1.9945
+   ],
+   "radius": 0.1684,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.0953,
+    0.3543,
+    1.5692
+   ],
+   "radius": 0.1703,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.528,
+    0.6139,
+    1.4109
+   ],
+   "radius": 0.1741,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.3068,
+    0.3244,
+    0.3365
+   ],
+   "radius": 0.1642,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    2.2204,
+    0.3135,
+    1.6839
+   ],
+   "radius": 0.1534,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.4164,
+    0.3423,
+    2.1129
+   ],
+   "radius": 0.1822,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.6228,
+    0.8832,
+    1.5204
+   ],
+   "radius": 0.1826,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.2831,
+    0.798,
+    1.4405
+   ],
+   "radius": 0.1711,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    2.122,
+    0.5918,
+    1.7974
+   ],
+   "radius": 0.162,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.5476,
+    0.3223,
+    1.7923
+   ],
+   "radius": 0.1621,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.8534,
+    0.6142,
+    1.4706
+   ],
+   "radius": 0.1812,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.2234,
+    0.3325,
+    1.8154
+   ],
+   "radius": 0.1723,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.1585,
+    0.3266,
+    0.9383
+   ],
+   "radius": 0.1665,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.9029,
+    0.3109,
+    1.7737
+   ],
+   "radius": 0.1507,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.7095,
+    0.8558,
+    1.5925
+   ],
+   "radius": 0.1675,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.7315,
+    0.6154,
+    1.8754
+   ],
+   "radius": 0.1692,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    2.0385,
+    0.5865,
+    1.1803
+   ],
+   "radius": 0.1695,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.4282,
+    0.3112,
+    2.1224
+   ],
+   "radius": 0.151,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.6239,
+    0.6219,
+    0.9864
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.1896,
+    0.6047,
+    2.3404
+   ],
+   "radius": 0.1799,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.4535,
+    0.6086,
+    1.6695
+   ],
+   "radius": 0.1803,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.2274,
+    0.6251,
+    1.9859
+   ],
+   "radius": 0.179,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.5532,
+    0.336,
+    1.7608
+   ],
+   "radius": 0.1759,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    2.2657,
+    0.3408,
+    1.2085
+   ],
+   "radius": 0.1806,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.4665,
+    0.9544,
+    1.216
+   ],
+   "radius": 0.164,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.5815,
+    0.3415,
+    0.5323
+   ],
+   "radius": 0.1814,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.338,
+    0.5811,
+    1.6886
+   ],
+   "radius": 0.1579,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.4198,
+    0.3243,
+    1.1381
+   ],
+   "radius": 0.1641,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.4242,
+    0.8001,
+    2.1952
+   ],
+   "radius": 0.1589,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.0665,
+    0.3139,
+    1.2327
+   ],
+   "radius": 0.1538,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.7053,
+    0.586,
+    0.6608
+   ],
+   "radius": 0.1558,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.7685,
+    0.538,
+    1.6225
+   ],
+   "radius": 0.161,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.7204,
+    0.3193,
+    0.8406
+   ],
+   "radius": 0.1592,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.7941,
+    0.836,
+    1.1966
+   ],
+   "radius": 0.1849,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    2.0171,
+    0.3211,
+    1.403
+   ],
+   "radius": 0.1609,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.2436,
+    0.3214,
+    0.6223
+   ],
+   "radius": 0.1613,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.5308,
+    0.5861,
+    1.3238
+   ],
+   "radius": 0.1786,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.6474,
+    0.5768,
+    2.1879
+   ],
+   "radius": 0.1569,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.3196,
+    0.3189,
+    2.4572
+   ],
+   "radius": 0.1588,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.2718,
+    0.612,
+    1.1655
+   ],
+   "radius": 0.1724,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.8863,
+    0.3488,
+    1.7264
+   ],
+   "radius": 0.1887,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.9479,
+    0.8669,
+    1.8287
+   ],
+   "radius": 0.1697,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.2795,
+    0.894,
+    1.7701
+   ],
+   "radius": 0.1681,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    2.0488,
+    0.3427,
+    0.9299
+   ],
+   "radius": 0.1826,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.1011,
+    0.6052,
+    1.6547
+   ],
+   "radius": 0.1799,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.3805,
+    0.325,
+    1.4676
+   ],
+   "radius": 0.1648,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    0.9539,
+    0.562,
+    0.9231
+   ],
+   "radius": 0.1509,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.15,
+    0.17,
+    -2.2
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    1.5,
+    0.16,
+    -2.55
+   ],
+   "radius": 0.16,
+   "material": {
+    "color": [
+     0.16,
+     0.03,
+     0.1
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.3,
+     "subsurface": 0.6,
+     "subsurface_radius": 0.06,
+     "sheen": 0.5,
+     "sheen_color": [
+      0.55,
+      0.6,
+      0.75
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    3.7,
+    0.17,
+    -2.0
+   ],
+   "radius": 0.17,
+   "material": {
+    "color": [
+     0.42,
+     0.48,
+     0.12
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.25,
+     "subsurface": 0.7,
+     "subsurface_radius": 0.08,
+     "sheen": 0.3,
+     "sheen_color": [
+      0.8,
+      0.85,
+      0.7
+     ]
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    4.0,
+    0.16,
+    -1.75
+   ],
+   "radius": 0.16,
+   "material": {
+    "color": [
+     0.42,
+     0.48,
+     0.12
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.25,
+     "subsurface": 0.7,
+     "subsurface_radius": 0.08,
+     "sheen": 0.3,
+     "sheen_color": [
+      0.8,
+      0.85,
+      0.7
+     ]
+    }
+   }
+  },
+  {
+   "type": "model",
+   "file": "still-life-pear.glb",
+   "position": [
+    2.5,
+    0.0,
+    -1.5
+   ],
+   "rotation": [
+    0,
+    200,
+    0
+   ],
+   "scale": 1,
+   "material": {
+    "color": [
+     1,
+     1,
+     1
+    ],
+    "texture": "still-life-pear.png",
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.45,
+     "subsurface": 0.35,
+     "subsurface_radius": 0.05
+    }
+   }
+  },
+  {
+   "type": "model",
+   "file": "still-life-copper-cup.glb",
+   "position": [
+    3.9,
+    0.0,
+    3.4
+   ],
+   "rotation": [
+    0,
+    -30,
+    0
+   ],
+   "scale": 1,
+   "material": {
+    "color": [
+     0.96,
+     0.58,
+     0.42
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.28,
+     "anisotropy": 0.7,
+     "clearcoat": 0.6,
+     "clearcoat_roughness": 0.04
+    }
+   }
+  },
+  {
+   "type": "model",
+   "file": "still-life-candlestick.glb",
+   "position": [
+    -0.2,
+    0.0,
+    5.0
+   ],
+   "rotation": [
+    0,
+    0.0,
+    0
+   ],
+   "scale": 1,
+   "material": {
+    "color": [
+     0.95,
+     0.74,
+     0.4
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.2,
+     "anisotropy": 0.5
+    }
+   }
+  },
+  {
+   "type": "cylinder",
+   "center": [
+    -0.2,
+    2.55,
+    5.0
+   ],
+   "radius": 0.19,
+   "height": 2.1,
+   "material": {
+    "color": [
+     0.9,
+     0.85,
+     0.72
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.4,
+     "subsurface": 0.9,
+     "subsurface_radius": 0.18
+    }
+   }
+  },
+  {
+   "type": "cylinder",
+   "center": [
+    -0.2,
+    3.66,
+    5.0
+   ],
+   "radius": 0.012,
+   "height": 0.12,
+   "material": {
+    "color": [
+     0.02,
+     0.02,
+     0.02
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.8
+    }
+   }
+  },
+  {
+   "type": "model",
+   "file": "still-life-flame.glb",
+   "position": [
+    -0.2,
+    3.77,
+    5.0
+   ],
+   "rotation": [
+    0,
+    0.0,
+    0
+   ],
+   "scale": 1,
+   "material": {
+    "color": [
+     0,
+     0,
+     0
+    ],
+    "emission": {
+     "color": [
+      1.0,
+      0.6,
+      0.22
+     ],
+     "strength": 12
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -12.0,
+    3.25,
+    8.15
+   ],
+   "size": [
+    1.0,
+    21.5,
+    0.3
+   ],
+   "material": {
+    "color": [
+     0.3,
+     0.27,
+     0.23
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.9
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    5.75,
+    3.25,
+    8.15
+   ],
+   "size": [
+    16.5,
+    21.5,
+    0.3
+   ],
+   "material": {
+    "color": [
+     0.3,
+     0.27,
+     0.23
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.9
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -7.0,
+    -3.55,
+    8.15
+   ],
+   "size": [
+    9.0,
+    7.9,
+    0.3
+   ],
+   "material": {
+    "color": [
+     0.3,
+     0.27,
+     0.23
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.9
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -7.0,
+    11.25,
+    8.15
+   ],
+   "size": [
+    9.0,
+    5.5,
+    0.3
+   ],
+   "material": {
+    "color": [
+     0.3,
+     0.27,
+     0.23
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.9
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -8.5,
+    4.45,
+    8.15
+   ],
+   "size": [
+    0.18,
+    8.1,
+    0.4
+   ],
+   "material": {
+    "color": [
+     0.1,
+     0.07,
+     0.05
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.6
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -5.5,
+    4.45,
+    8.15
+   ],
+   "size": [
+    0.18,
+    8.1,
+    0.4
+   ],
+   "material": {
+    "color": [
+     0.1,
+     0.07,
+     0.05
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.6
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -7.0,
+    5.26,
+    8.15
+   ],
+   "size": [
+    9.0,
+    0.18,
+    0.4
+   ],
+   "material": {
+    "color": [
+     0.1,
+     0.07,
+     0.05
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.6
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -7.0,
+    0.32,
+    7.95
+   ],
+   "size": [
+    9.4,
+    0.16,
+    0.8999999999999999
+   ],
+   "material": {
+    "color": [
+     0.1,
+     0.07,
+     0.05
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.6
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -12.65,
+    3.25,
+    -5.0
+   ],
+   "size": [
+    0.3,
+    21.5,
+    26.0
+   ],
+   "material": {
+    "color": [
+     0.3,
+     0.27,
+     0.23
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.9
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    14.15,
+    3.25,
+    -5.0
+   ],
+   "size": [
+    0.3,
+    21.5,
+    26.0
+   ],
+   "material": {
+    "color": [
+     0.3,
+     0.27,
+     0.23
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.9
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    0.75,
+    3.25,
+    -18.15
+   ],
+   "size": [
+    27.1,
+    21.5,
+    0.3
+   ],
+   "material": {
+    "color": [
+     0.3,
+     0.27,
+     0.23
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.9
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    0.75,
+    14.15,
+    -5.0
+   ],
+   "size": [
+    27.1,
+    0.3,
+    26.0
+   ],
+   "material": {
+    "color": [
+     0.3,
+     0.27,
+     0.23
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.9
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    0.75,
+    -7.65,
+    -5.0
+   ],
+   "size": [
+    27.1,
+    0.3,
+    26.0
+   ],
+   "material": {
+    "color": [
+     0.1,
+     0.07,
+     0.05
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.6
+    }
+   }
+  }
+ ],
+ "render": {
+  "app": 1,
+  "quality": 256,
+  "toneMapping": "agx_punchy",
+  "denoise": true,
+  "depth": 5
+ }
+}

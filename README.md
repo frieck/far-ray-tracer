@@ -33,6 +33,8 @@ bugs and the gain from new techniques can be seen separately.
 | **Smoke**: noise volumes and fog thinning with height | **Light shafts**: sunlight through a window |
 | ![Six-bladed bokeh](docs/images/bokeh.jpg) | ![OBJ and glTF models](docs/images/models.jpg) |
 | **Bokeh**: a six-bladed aperture | **Models**: an OBJ vase and a glTF table |
+| ![Still life: glassware, wine and fruit by a window](docs/images/still-life.jpg) | |
+| **Still life**: glassware, wine and fruit by a window at sunset | |
 
 Each image is an example in the app, rendered by `tools/screenshots.sh` with AgX Punchy and
 Denoise.
@@ -129,7 +131,7 @@ Example scenes are in **File > Open Example**, in `assets/scenes`:
 
 | Menu | Folder | Scenes |
 | --- | --- | --- |
-| (top) | `assets/scenes` | Showcase, Cornell box, Christmas |
+| (top) | `assets/scenes` | Showcase, Cornell box, Christmas, Still life |
 | Materials | `materials` | Glass, Coatings, Subsurface, Maps, GGX materials, Bump maps, Displacement |
 | Techniques | `techniques` | Infinite ground, HDRI studio, Sun and sky, Depth of field, Bokeh, Rectangular lights, Spotlights, Light shafts, Smoke, Models, Primitives |
 | From 2008 | `2008` | The final project's own scenes, including Rhino, Knot show and the thesis test scenes A and B |

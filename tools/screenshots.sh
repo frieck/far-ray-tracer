@@ -23,6 +23,7 @@ SHOTS=(
   "light-shafts|techniques/light-shafts.far|192|"
   "bokeh|techniques/bokeh.far|768|"
   "models|techniques/models.far|256|"
+  "still-life|still-life.far|256|--depth 5"
 )
 
 wanted=("$@")

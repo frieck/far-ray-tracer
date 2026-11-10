@@ -17,6 +17,9 @@ and moves under its version when that version is released.
   quitting: Save, Don't Save or Cancel. The save button shows a dot while there are edits.
 - Scene files carry a format version (`"format": 3`); a newer format than the app knows is
   refused with a message to update.
+- A **Still life** example: a wine glass, a decanter, grapes in a glazed bowl, a pear, a copper
+  cup and a candle on an oak table by a window at sunset. `tools/still_life.py` generates its
+  meshes and textures.
 
 ### Changed
 
@@ -45,6 +48,14 @@ and moves under its version when that version is released.
 
 ### Fixed
 
+- Enhanced renders that slowed down sharply with ray depth. Past the camera's first hit, each
+  bounce traced every kind of light leaving the surface (bounced light, subsurface,
+  reflection, refraction), so rays per pixel grew about threefold per level. Now each bounce
+  draws one at random, weighted by the light it carries. The image is the same and scenes
+  with subsurface or fog render 3 to 6 times faster.
+- Models of about 10 000 to 50 000 triangles vanished in Fixed and Enhanced renders, with
+  everything else in the scene: the KD-Tree build split them into two empty boxes. Such
+  scenes now also build in a fraction of a second instead of several.
 - `Cmd/Ctrl+S` and the Save Scene menu items did nothing in 3.0.0-beta.3 and beta.4; they now
   save the scene. Exporting the image as PNG is `Cmd/Ctrl+E`, as in those versions.
 - A crash while opening a scene or rendering a material preview shows an error instead of
