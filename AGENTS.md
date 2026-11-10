@@ -24,9 +24,9 @@ The README explains every feature and the scene format; `TODO.md` lists what is 
 
 ## Ground rules
 
-- **Feature freeze until 3.0.0.** The 3.0 betas take fixes, performance work that does not
-  change images, documentation and tests. New features wait for after 3.0.0; note them in
-  `TODO.md`.
+- **3.0.0 ships with GPU rendering.** 3.0.0-rc.1 was tested and approved by hand, and the
+  user then chose to hold 3.0.0 for the GPU work in `TODO.md`. Until it is out, the GPU steps
+  and fixes go in; other new features are noted in `TODO.md` for later.
 
 - **Language.** Everything in the repository is in English: code, comments, docs, commit
   messages, release notes. Talk to the user in the user's language.

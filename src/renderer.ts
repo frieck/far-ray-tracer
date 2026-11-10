@@ -34,12 +34,15 @@ export interface RenderView {
 
 type Header = Uint32Array;
 
-function summarize(result: RenderResult): string {
+/** The structure that finds what a ray hits: the 2008 stage's KD-Tree, or the BVH of the others. */
+const structureName = (mode: string) => (mode === "classic" ? "KD-Tree" : "BVH");
+
+function summarize(result: RenderResult, mode: string): string {
   const parts: string[] = [];
   if (result.redisplayed) {
     parts.push(`Shown again in ${formatTime(result.render_ms)}, without rendering`);
   } else {
-    if (result.kd_ms !== null) parts.push(`KD-Tree ${formatTime(result.kd_ms)}`);
+    if (result.kd_ms !== null) parts.push(`${structureName(mode)} ${formatTime(result.kd_ms)}`);
     if (result.continued_from) parts.push(`Continued from pass ${result.continued_from}`);
     parts.push(`Render ${formatTime(result.render_ms)}`, formatRays(result.rays));
   }
@@ -158,7 +161,7 @@ export class Renderer {
       const onHeader = (header: Header) => {
         if (!live) return;
         const tracingPhotons = job.main.caustics && header[4] === 0 && header[5] > 1;
-        if (header[0] === MESSAGE_BUILDING_KD) this.publish({ status: "Building the KD-Tree…" });
+        if (header[0] === MESSAGE_BUILDING_KD) this.publish({ status: `Building the ${structureName(job.main.mode)}…` });
         else if (tracingPhotons) this.publish({ status: "Tracing photons…" });
         else this.publish({ ...describe(header), painted: header[4] >= 2 || header[1] === header[2] });
       };
@@ -174,7 +177,7 @@ export class Renderer {
       const result = await paintRender(surfaces.after, job.main, onHeader, surfaces.ambient, onPhotonMap, isCurrent);
       live = false;
       this.publish({
-        status: job.preview ? "Moving the camera…" : summarize(result),
+        status: job.preview ? "Moving the camera…" : summarize(result, job.main.mode),
         hasResult: !job.preview && !result.cancelled,
         caustics: result.caustics,
         progress: result.cancelled ? 0 : 1,

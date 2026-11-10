@@ -426,6 +426,21 @@ impl<'a> Context<'a> {
                 ground = (res, i);
             }
         }
+        if let Some(bvh) = &kd.bvh {
+            let mut found = ground;
+            let mut nearest = *max_dist;
+            bvh.walk(r.o, r.d, nearest, |i, limit| {
+                let mut dist = limit;
+                let res = self.intersect(i, r, &mut dist);
+                if res != 0 {
+                    found = (res, i);
+                    nearest = dist;
+                }
+                dist
+            });
+            *max_dist = nearest;
+            return found;
+        }
         let (mut tnear, mut tfar) = (0.0f32, *max_dist);
         let p1 = self.scene.extends.pos.array();
         let p2 = (self.scene.extends.pos + self.scene.extends.size).array();
@@ -517,6 +532,18 @@ impl<'a> Context<'a> {
             if self.intersect(i, r, &mut dist) != 0 {
                 return true;
             }
+        }
+        if let Some(bvh) = &kd.bvh {
+            let mut hit = false;
+            bvh.walk(r.o, r.d, max_dist, |i, limit| {
+                let mut dist = limit;
+                if self.intersect(i, r, &mut dist) != 0 {
+                    hit = true;
+                    return -1.0;
+                }
+                limit
+            });
+            return hit;
         }
         let (mut entry, mut exit) = (0usize, 1usize);
         self.stack[0].t = EPSILON;
@@ -956,5 +983,47 @@ mod tests {
         assert_eq!(w, 4.0);
         assert!((w / h - 600.0 / 800.0).abs() < 1e-5);
     }
-}
 
+    #[test]
+    fn the_bvh_finds_what_testing_every_primitive_finds() {
+        for name in ["showcase.far", "techniques/models.far", "techniques/primitives.far", "materials/displacement.far", "2008/rhino.far"] {
+            let scene = Scene::open(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes").join(name)).unwrap();
+            let tree = KdTree::build_corrected(&scene);
+            assert!(tree.bvh.is_some());
+            let (low, size) = (scene.extends.pos, scene.extends.size);
+            let mut seed = 12345u32;
+            let mut random = || {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                (seed >> 8) as f32 / 16777216.0
+            };
+            let mut ctx = Context::with_fixes(&scene, Some(&tree), 1);
+            // Fewer rays where testing every primitive is slow.
+            let rays = if scene.prims.len() > 50_000 { 300 } else { 5000 };
+            let mut hits = 0;
+            for _ in 0..rays {
+                let o = low + Vec3::new(random() * size.x, random() * size.y, random() * size.z);
+                let mut d = Vec3::new(random() - 0.5, random() - 0.5, random() - 0.5);
+                d.normalize();
+                let r = Ray { o, d };
+                let mut found = 1e6f32;
+                let hit = ctx.closest(&tree, &r, &mut found).0 != 0;
+                let mut brute = 1e6f32;
+                let mut any = false;
+                for i in 0..scene.prims.len() {
+                    any |= ctx.intersect(i, &r, &mut brute) != 0;
+                }
+                assert_eq!(hit, any, "{name}: {found} vs {brute}");
+                assert!((found - brute).abs() <= 1e-3 * brute.max(1.0), "{name}: {found} vs {brute}");
+                hits += hit as u32;
+                // A shadow ray is blocked exactly when it reaches past the nearest hit.
+                if hit {
+                    assert!(ctx.occluded(&tree, &r, found * 1.01 + 0.01), "{name}: shadow ray passes a hit");
+                    assert!(!ctx.occluded(&tree, &r, found * 0.99 - 0.01), "{name}: shadow ray blocked before the hit");
+                } else {
+                    assert!(!ctx.occluded(&tree, &r, 1e5), "{name}: shadow ray blocked by nothing");
+                }
+            }
+            assert!(hits as usize > rays / 20, "{name}: only {hits} rays hit");
+        }
+    }
+}

@@ -65,6 +65,9 @@ impl Node {
 pub struct KdTree {
     pub nodes: Vec<Node>,
     pub list: Vec<u32>,
+    /// Fixed and Enhanced modes walk this instead of the KD-Tree, whose nodes are then empty.
+    /// Classic keeps the original tree, to show how the program was.
+    pub bvh: Option<crate::bvh::Bvh>,
 }
 
 enum BuildNode {
@@ -83,11 +86,17 @@ impl KdTree {
     /// plane, such as a wall, can drop out of both children in the original tree,
     /// and rays then pass through it.
     pub fn build_corrected(scene: &Scene) -> Self {
+        KdTree { nodes: vec![Node { a: 0, b: LEAF_AXIS }], list: Vec::new(), bvh: Some(crate::bvh::Bvh::build(scene)) }
+    }
+
+    /// The corrected KD-Tree that Fixed and Enhanced modes used before the BVH, kept to compare
+    /// the two.
+    pub fn build_corrected_kd(scene: &Scene) -> Self {
         Self::build_with(scene, true)
     }
 
     pub fn for_mode(scene: &Scene, mode: crate::Mode) -> Self {
-        Self::build_with(scene, mode != crate::Mode::Classic)
+        if mode == crate::Mode::Classic { Self::build(scene) } else { Self::build_corrected(scene) }
     }
 
     fn build_with(scene: &Scene, corrected: bool) -> Self {
@@ -98,7 +107,7 @@ impl KdTree {
         let sweep_from = if scene.prims.len() > large { SWEEP_FROM } else { usize::MAX };
         let max_depth = if corrected { corrected_depth(root.len()) } else { MAX_DEPTH };
         let tree = subdivide(scene, corrected, sweep_from, max_depth, root, scene.extends, 0);
-        let mut kd = KdTree { nodes: vec![Node { a: 0, b: LEAF_AXIS }], list: Vec::new() };
+        let mut kd = KdTree { nodes: vec![Node { a: 0, b: LEAF_AXIS }], list: Vec::new(), bvh: None };
         kd.flatten(tree, 0);
         kd
     }

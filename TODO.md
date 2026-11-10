@@ -66,10 +66,10 @@ Visual gain for the effort:
 - [ ] **GPU rendering (wgpu)**: path tracing in compute shaders (WGSL), one code for Metal,
   DirectX 12 and Vulkan, with the CPU engine as the reference and the fallback. Very high.
   After 3.0, in this order:
-  1. A flattened BVH on the CPU for every mode, replacing both KD-Trees; the 2008 stage no
-     longer has to match the original, so its tree and the code kept only for that match
-     (`--exact`, the ordered random numbers, `npm run validate`) can go. Faster on the CPU by
-     itself.
+  1. ~~A flattened BVH on the CPU~~ (done for Fixed and Enhanced, in `bvh.rs`). Left: the
+     2008 stage still walks its own KD-Tree; since it no longer has to match the original, it
+     can move to the BVH, and the KD-Tree and the code kept only for that match (`--exact`,
+     the ordered random numbers, `npm run validate`) can go.
   2. The scene in flat buffers the GPU reads: primitives, materials, lights and a texture array.
   3. The GPU for previews first, camera movement and the material ball: triangles, spheres,
      solids, GGX, direct light with light picking, the environment and indirect light.

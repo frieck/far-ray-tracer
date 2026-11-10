@@ -294,11 +294,13 @@ Measured on an Apple M4 Max with 16 cores at 800 x 600, depth 3, in the 2008 sta
 | `scene-b` render | 425 ms | 404 ms | 52 ms |
 | `showcase-1` render | 4912 ms | 4401 ms | 401 ms |
 
-The KD-Tree build always runs in parallel. Classic mode uses the same tree as the original;
-Fixed and Enhanced use one with the split-plane fix above, so each is built on first use.
-That tree also grows deeper with the scene (to about 8 + 1.3 log2 of its primitives, instead
-of the original's fixed 20 levels) and, where splitting across the longest side helps little,
-tries the other two sides, so dense meshes end in small leaves.
+Classic mode uses the same KD-Tree as the original, built in parallel. Fixed and Enhanced
+use a bounding volume hierarchy (BVH) instead: boxes within boxes in one flat array, built by
+the surface area heuristic over 16 bins, which a ray walks with a small stack, nearer box
+first. It is the structure a GPU can walk too. Against the corrected KD-Tree it replaced, it
+builds 20 to 90 times faster (the showcase's 364,000 primitives in 50 ms instead of 1.2 s)
+and renders meshes 10% to 35% faster (the still life at 32 samples in 30 s instead of 47 s).
+A test checks its hits against testing every primitive.
 
 Enhanced mode also:
 

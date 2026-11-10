@@ -560,7 +560,8 @@ function SystemTab({ props, update }: TabContext) {
     <Section id="performance" title="Performance">
       <ScrubRow label="Threads" keywords="cores cpu" value={settings.threads} min={1} max={cores} step={1} strict
         onChange={(threads) => update({ threads })} />
-      <CheckRow label="KD-Tree" hint="Skips objects a ray cannot hit. Turn it off only to compare speed."
+      <CheckRow label="Acceleration" keywords="bvh kd-tree"
+        hint="Skips objects a ray cannot hit: a BVH, or the original KD-Tree in the 2008 stage. Turn it off only to compare speed."
         checked={settings.useKd} onChange={(useKd) => update({ useKd })} />
     </Section>
   );

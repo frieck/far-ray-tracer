@@ -152,15 +152,16 @@ export function CheckBox({ label, checked, onChange, disabled, children }: {
 }
 
 /** A boolean setting as a row. */
-export function CheckRow({ label, hint, checked, onChange, disabled }: {
+export function CheckRow({ label, hint, keywords, checked, onChange, disabled }: {
   label: string;
   hint?: string;
+  keywords?: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
   disabled?: boolean;
 }) {
   return (
-    <Row label={label} hint={hint}>
+    <Row label={label} hint={hint} keywords={keywords}>
       <CheckBox label={label} checked={checked} onChange={onChange} disabled={disabled} />
     </Row>
   );

@@ -7,6 +7,12 @@ and moves under its version when that version is released.
 
 ## [Unreleased]
 
+### Changed
+
+- Fixed and Enhanced modes find what a ray hits with a bounding volume hierarchy (BVH) instead
+  of the KD-Tree: scenes are ready 20 to 90 times sooner, and meshes render 10% to 35% faster.
+  It is also the first step toward rendering on the GPU. The 2008 stage keeps its KD-Tree.
+
 ## [3.0.0-rc.1] - 2026-11-09
 
 ### Added

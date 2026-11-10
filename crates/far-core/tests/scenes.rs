@@ -656,7 +656,7 @@ fn corrected_tree_keeps_a_large_model() {
     let scene = Scene::open(&path).unwrap();
     let _ = std::fs::remove_dir_all(&folder);
     assert!(scene.prims.len() > 10_000);
-    let kd = KdTree::build_corrected(&scene);
+    let kd = KdTree::build_corrected_kd(&scene);
     let mut kept: Vec<u32> = kd.list.clone();
     kept.sort_unstable();
     kept.dedup();
