@@ -7,6 +7,15 @@ and moves under its version when that version is released.
 
 ## [Unreleased]
 
+### Added
+
+- A first cut of rendering on the graphics card, on the command line: `far render … --gpu`.
+  One compute shader runs on Metal, DirectX 12 and Vulkan, 17 to 50 times faster than 16 CPU
+  cores on the scenes it covers. It traces triangles, spheres, boxes and grounds, with
+  diffuse, GGX-like and glass materials and every kind of light; textures, cylinders and the
+  other solids, volumes, coatings and subsurface are still the CPU's, and the app does not use
+  it yet.
+
 ### Changed
 
 - Fixed and Enhanced modes find what a ray hits with a bounding volume hierarchy (BVH) instead

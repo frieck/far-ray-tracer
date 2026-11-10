@@ -32,6 +32,7 @@ usage:
       --noise-threshold N   adaptive sampling: a pixel stops once its error is below N
                       (0.01 is a good start); --samples is then the most it takes
       --bloom         spread very bright light into a soft halo in enhanced mode
+      --gpu           render on the graphics card (a first cut: see the README)
       --exposure N    brightness multiplier in enhanced mode (default 1)
       --tone-mapping standard|agx|agx-punchy|aces   how light becomes screen colors (default standard)
       --aperture N    lens diameter in scene units; 0 disables depth of field
@@ -74,6 +75,7 @@ fn point(args: &mut impl Iterator<Item = String>, name: &str) -> [f32; 3] {
 
 fn render_command(mut args: impl Iterator<Item = String>) {
     let mut options = Options::default();
+    let mut gpu = false;
     let (mut scene, mut output) = (None, None);
     let (mut position, mut target, mut zoom) = (None, None, None);
     while let Some(a) = args.next() {
@@ -99,6 +101,7 @@ fn render_command(mut args: impl Iterator<Item = String>) {
             "--denoise" => options.denoise = true,
             "--noise-threshold" => options.noise_threshold = number(&mut args, &a),
             "--bloom" => options.bloom = true,
+            "--gpu" => gpu = true,
             "--aperture" => options.aperture = Some(number(&mut args, &a)),
             "--focus-distance" => options.focus_distance = Some(number(&mut args, &a)),
             "--blades" => options.blades = Some(number(&mut args, &a)),
@@ -155,6 +158,9 @@ fn render_command(mut args: impl Iterator<Item = String>) {
     if options.denoise {
         load_denoiser();
     }
+    if gpu {
+        return render_on_gpu(&scene, &options, &output, t0);
+    }
     let t1 = Instant::now();
     let kd = options.use_kd.then(|| KdTree::for_mode(&scene, options.mode));
     let t2 = Instant::now();
@@ -191,6 +197,35 @@ fn render_command(mut args: impl Iterator<Item = String>) {
     image::RgbImage::from_raw(options.width, options.height, rgb)
         .expect("image size")
         .save(&output)
+        .unwrap_or_else(|e| fail(&format!("{output}: {e}")));
+}
+
+/// Renders with the GPU path tracer and shows the result through the CPU's tone mapping.
+fn render_on_gpu(scene: &Scene, options: &Options, output: &str, t0: Instant) {
+    let t1 = Instant::now();
+    let bvh = far_core::bvh::Bvh::build(scene);
+    let t2 = Instant::now();
+    let rendered = far_gpu::render(scene, &bvh, options, &|| false).unwrap_or_else(|e| fail(&e));
+    let t3 = Instant::now();
+    println!(
+        "primitives={} lights={} load={}ms bvh={}ms render={}ms gpu={}",
+        scene.prims.len(),
+        scene.lights.len() + scene.rect_lights.len() + scene.bulbs.len(),
+        (t1 - t0).as_millis(),
+        (t2 - t1).as_millis(),
+        (t3 - t2).as_millis(),
+        rendered.adapter
+    );
+    for note in &rendered.notes {
+        println!("note: the GPU renderer leaves out {note}");
+    }
+    let rgb: Vec<u8> = rendered.mean.iter()
+        .flat_map(|&mean| far_core::tonemap::display(options.tone_mapping, mean))
+        .map(|v| (v * 255.0 + 0.5).clamp(0.0, 255.0) as u8)
+        .collect();
+    image::RgbImage::from_raw(options.width, options.height, rgb)
+        .expect("image size")
+        .save(output)
         .unwrap_or_else(|e| fail(&format!("{output}: {e}")));
 }
 

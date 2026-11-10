@@ -1,0 +1,13 @@
+[package]
+name = "far-gpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+homepage.workspace = true
+
+[dependencies]
+far-core = { path = "../far-core" }
+wgpu = "30"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "1"

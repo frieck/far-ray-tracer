@@ -828,6 +828,39 @@ and the expensive ones, under indirect light, do not converge with a strict thre
 few hundred passes; a loose one stops pixels with rare bright paths too early. So the app
 renders every pixel equally.
 
+### Rendering on the GPU (first cut)
+
+`far render scene.far -o image.png --enhanced --gpu` path traces on the graphics card. It is
+the start of GPU rendering, on the command line only; the app still renders on the CPU.
+
+One compute shader, written in WGSL and run through wgpu, works on Metal (macOS), DirectX 12
+and Vulkan (Windows and Linux). The scene is packed into flat buffers, with the same BVH the
+CPU walks, and each dispatch adds one sample per pixel to a buffer of sums; the result comes
+back as linear light and goes through the CPU's tone mapping.
+
+| Covered | Not yet (the scene is refused, or rendered without it and a note says so) |
+| --- | --- |
+| Triangles and meshes, spheres, boxes, grounds | Cylinders, tubes, cones, tori (refused) |
+| 2008 materials, GGX roughness and metallic, glass | Textures and maps, bump, clear coat, sheen, anisotropy, subsurface, glass tint and dispersion |
+| 2008 lights, bulbs, panels, indirect light | Spotlight cones and IES, volumes, caustic photons |
+| The environment, reached by bounces | Sampling the environment by importance: a sun in the sky is noisy |
+| Pinhole camera | Depth of field, denoise, bloom, regions |
+
+On an Apple M4 Max at 800 × 600 with 256 samples, against its 16 CPU cores:
+
+| Scene | CPU | GPU |
+| --- | ---: | ---: |
+| Cornell box | 9.6 s | 0.57 s |
+| Rectangular lights | 3.6 s | 0.12 s |
+| Scene B (2008 mesh) | 7.7 s | 0.26 s |
+| Rhino (2008 mesh) | 14.3 s | 0.28 s |
+| Glass | 7.9 s | 0.16 s |
+
+The GPU does less per sample for now (no textures, simpler materials), so part of the gap will
+close as it catches up. Its images agree with the CPU's within noise where the features match
+(the Cornell box differs by an RMSE of 3 at 1024 samples); a test compares their brightness
+on three scenes, and is skipped on machines without a graphics card.
+
 ### Tone mapping (Enhanced)
 
 **Image > Tone mapping** chooses how light becomes screen colors; the command line uses

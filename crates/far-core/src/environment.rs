@@ -145,6 +145,11 @@ impl EnvironmentMap {
         ((direction.x.atan2(direction.z) / (2. * PI) + 0.5).rem_euclid(1.),
          direction.y.clamp(-1., 1.).acos() / PI)
     }
+    /// The map's width, height and pixels, row by row from the top, for a GPU texture.
+    pub fn pixels(&self) -> (usize, usize, &[Color]) {
+        (self.width, self.height, &self.pixels)
+    }
+
     pub fn radiance(&self, direction: Vec3) -> Color {
         let (u, v) = Self::uv(direction);
         let x = u * self.width as f32 - 0.5;

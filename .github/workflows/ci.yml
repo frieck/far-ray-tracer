@@ -41,7 +41,8 @@ jobs:
         with:
           key: ci-${{ matrix.oidn }}
       - name: Test the engine
-        run: cargo test --release -p far-core -p far-cli
+        # far-gpu compares a GPU render with the CPU's where the runner has a graphics card.
+        run: cargo test --release -p far-core -p far-cli -p far-gpu
       - name: Fetch Open Image Denoise
         shell: bash
         run: tools/fetch_oidn.sh ${{ matrix.oidn }}
