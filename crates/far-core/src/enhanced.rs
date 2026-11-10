@@ -18,7 +18,7 @@ use crate::denoise::{self, Guide, Primary};
 use crate::scene::{Scene, Sphere, Material, Primitive};
 use crate::kdtree::KdTree;
 use crate::engine::{self, Context, Image, Mode, Options, PhotonStats, Progress, Ray};
-use crate::tonemap::{self, shoulder, ToneMapping};
+use crate::tonemap::{self, ToneMapping};
 use crate::volume;
 use crate::twister::{Twister, DEFAULT_SEED};
 use crate::vector::{Color, Vec3, EPSILON, PI};
@@ -1370,24 +1370,76 @@ impl<'a> Tracer<'a> {
             }
         }
         // The side that receives no direct light does not bounce light either.
-        if self.indirect && bounces < self.bounces.max && a.diff > 0.0 && r.d.dot(a.original) < 0.0 {
-            acc += self.indirect_light(&a, r.d, depth, bounces);
+        let front = r.d.dot(a.original) < 0.0;
+        let indirect = self.indirect && bounces < self.bounces.max && a.diff > 0.0 && front;
+        let subsurface = match (a.m.subsurface, a.ggx) {
+            (Some(sss), Some(ggx)) if !self.caustics_only && bounces < self.bounces.max && front => Some((sss, ggx)),
+            _ => None,
+        };
+        let deeper = depth < self.ctx.max_depth;
+        let reflects = deeper && a.refl > 0.0;
+        let refracts = deeper && a.refr > 0.0;
+        // Where the camera first hits, every kind of light leaving the surface is traced, since
+        // that is what shows the most. Past it, one kind is drawn at random, weighed by how
+        // much light it carries, and divided by its chance. Tracing all of them at every
+        // bounce made the rays per pixel grow about threefold per level of depth.
+        let lobes = [
+            indirect.then(|| a.diff * a.color.x.max(a.color.y).max(a.color.z)),
+            subsurface.map(|(sss, ggx)| sss.amount * (1.0 - ggx.metallic) * a.color.x.max(a.color.y).max(a.color.z)),
+            reflects.then_some(a.refl),
+            refracts.then_some(a.refr),
+        ];
+        let all = self.fixed || (depth == 1 && bounces == 0);
+        let (chosen, chance) = if all { (None, 1.0) } else { self.pick_lobe(&lobes) };
+        let traced = |k: usize| lobes[k].is_some() && chosen.is_none_or(|c| c == k);
+        let scale = 1.0 / chance;
+        if traced(0) {
+            acc += self.indirect_light(&a, r.d, depth, bounces) * scale;
         }
-        if let (Some(sss), Some(ggx)) = (a.m.subsurface, a.ggx) {
-            if !self.caustics_only && bounces < self.bounces.max && r.d.dot(a.original) < 0.0 {
-                acc += self.subsurface(&a, r.d, sss, ggx, depth, bounces);
-            }
+        if let Some((sss, ggx)) = subsurface.filter(|_| traced(1)) {
+            acc += self.subsurface(&a, r.d, sss, ggx, depth, bounces) * scale;
         }
-        if depth < self.ctx.max_depth {
+        if traced(2) {
             self.first_hit = depth == 1 && bounces == 0;
-            if a.refl > 0.0 {
-                acc += self.reflection(&a, r.d, depth, bounces);
-            }
-            if a.refr > 0.0 {
-                acc += self.refraction(&a, r.d, depth, bounces);
-            }
+            acc += self.reflection(&a, r.d, depth, bounces) * scale;
+        }
+        if traced(3) {
+            self.first_hit = depth == 1 && bounces == 0;
+            acc += self.refraction(&a, r.d, depth, bounces) * scale;
         }
         (acc, a.dist)
+    }
+
+    /// Draws one of the lobes that can be traced, by the light each carries, with every lobe
+    /// keeping at least a small chance so a dim one cannot leave rare, very bright samples.
+    /// Returns the index and its chance; with no lobe, the index is past the end.
+    fn pick_lobe(&mut self, lobes: &[Option<f32>; 4]) -> (Option<usize>, f32) {
+        const LEAST: f32 = 0.1;
+        let count = lobes.iter().flatten().count();
+        if count == 0 {
+            return (Some(lobes.len()), 1.0);
+        }
+        if count == 1 {
+            return (lobes.iter().position(Option::is_some), 1.0);
+        }
+        let total: f32 = lobes.iter().flatten().map(|w| w.max(0.0)).sum();
+        let mut chances = [0.0f32; 4];
+        for (chance, lobe) in chances.iter_mut().zip(lobes) {
+            if let Some(w) = lobe {
+                let share = if total > 0.0 { w.max(0.0) / total } else { 1.0 / count as f32 };
+                *chance = share.max(LEAST);
+            }
+        }
+        let sum: f32 = chances.iter().sum();
+        let mut u = self.random() * sum;
+        let last = chances.iter().rposition(|&c| c > 0.0).unwrap_or(0);
+        for (k, &c) in chances.iter().enumerate() {
+            if c > 0.0 && (u < c || k == last) {
+                return (Some(k), c / sum);
+            }
+            u -= c;
+        }
+        (Some(last), chances[last] / sum)
     }
 }
 
@@ -2095,6 +2147,7 @@ pub fn render_continuing(scene: &Scene, kd: Option<&KdTree>, op: &Options, image
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tonemap::shoulder;
 
     fn example(name: &str) -> Scene {
         Scene::open(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes").join(name)).unwrap()

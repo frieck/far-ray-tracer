@@ -637,3 +637,28 @@ fn every_scene_saved_elsewhere_opens_the_same() {
     }
     let _ = std::fs::remove_dir_all(&out);
 }
+
+/// Between about 10000 and 50000 primitives, the original's build split the root into two
+/// empty boxes, and every object vanished from Fixed and Enhanced renders.
+#[test]
+fn corrected_tree_keeps_a_large_model() {
+    let folder = std::env::temp_dir().join(format!("far-kd-{}", std::process::id()));
+    std::fs::create_dir_all(&folder).unwrap();
+    let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scene-data");
+    let path = folder.join("towel.far");
+    let text = format!(
+        r#"{{"format": 3, "data_folder": {:?}, "camera": {{"position": [0, 3, -9], "target": [0, 1, 0]}},
+        "lights": [{{"type": "sphere", "position": [3, 8, -4], "radius": 0.5, "color": [1, 1, 1], "intensity": 40}}],
+        "objects": [{{"type": "model", "file": "still-life-towel.glb", "position": [0, 0, 0], "material": {{"color": [0.5, 0.5, 0.5]}}}}]}}"#,
+        data.to_str().unwrap()
+    );
+    std::fs::write(&path, text).unwrap();
+    let scene = Scene::open(&path).unwrap();
+    let _ = std::fs::remove_dir_all(&folder);
+    assert!(scene.prims.len() > 10_000);
+    let kd = KdTree::build_corrected(&scene);
+    let mut kept: Vec<u32> = kd.list.clone();
+    kept.sort_unstable();
+    kept.dedup();
+    assert_eq!(kept.len(), scene.prims.len() - scene.grounds.len(), "primitives left out of the tree");
+}

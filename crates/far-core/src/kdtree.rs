@@ -25,6 +25,9 @@ const MIN_PARALLEL: usize = 256;
 /// meshes, choose splits by a sweep over primitive extents. The original's exact counting
 /// tests every primitive at every candidate, which grows with the square of the primitives.
 const LARGE_SCENE: usize = 50_000;
+/// Fixed and Enhanced modes use the sweep from this size: exact counting took seconds for a
+/// single model of 30000 triangles. Classic keeps the original's build up to `LARGE_SCENE`.
+const LARGE_SCENE_CORRECTED: usize = 10_000;
 /// In a large scene, nodes with at least this many primitives use the sweep.
 const SWEEP_FROM: usize = 512;
 
@@ -91,7 +94,8 @@ impl KdTree {
         // The original inserts at the head of a list, hence the reversed order.
         // Infinite planes have no bounds; the traversal tests them on its own.
         let root: Vec<u32> = (0..scene.prims.len() as u32).rev().filter(|&i| !scene.grounds.contains(&(i as usize))).collect();
-        let sweep_from = if scene.prims.len() > LARGE_SCENE { SWEEP_FROM } else { usize::MAX };
+        let large = if corrected { LARGE_SCENE_CORRECTED } else { LARGE_SCENE };
+        let sweep_from = if scene.prims.len() > large { SWEEP_FROM } else { usize::MAX };
         let max_depth = if corrected { corrected_depth(root.len()) } else { MAX_DEPTH };
         let tree = subdivide(scene, corrected, sweep_from, max_depth, root, scene.extends, 0);
         let mut kd = KdTree { nodes: vec![Node { a: 0, b: LEAF_AXIS }], list: Vec::new() };
@@ -397,8 +401,9 @@ fn best_split(scene: &Scene, corrected: bool, sweep_from: usize, list: &[u32], b
 
     let sav = 0.5 / bounds.semi_area();
     // The original starts from a cost of 10000. Past about 10000 primitives no split costs less,
-    // and it splits into two empty boxes, losing everything; large scenes start from infinity.
-    let mut lowest = if sweep_from == usize::MAX { 10000.0f32 } else { f32::INFINITY };
+    // and it splits into two empty boxes, losing everything, so a model of 30000 triangles
+    // vanished. Only Classic mode keeps that, to match the original; it never loaded so much.
+    let mut lowest = if sweep_from == usize::MAX && !corrected { 10000.0f32 } else { f32::INFINITY };
     let mut best = 0.0f32;
     let (mut b1, mut b2) = (Aabb::default(), Aabb::default());
     for (k, &position) in candidates.iter().enumerate() {

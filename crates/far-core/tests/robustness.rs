@@ -73,7 +73,11 @@ fn survives(path: &Path) -> Result<(), String> {
 fn damaged_scenes_and_models_fail_cleanly() {
     let mut sources = Vec::new();
     files(&assets().join("scenes"), &["far"], &mut sources);
-    files(&assets().join("scene-data/meshes"), &["obj", "glb", "gltf"], &mut sources);
+    // Models up to 100 KB: the bigger ones come from the same writers, and each damaged copy
+    // opens as a whole scene, so they would only make the test slow.
+    let mut models = Vec::new();
+    files(&assets().join("scene-data/meshes"), &["obj", "glb", "gltf"], &mut models);
+    sources.extend(models.into_iter().filter(|m| std::fs::metadata(m).is_ok_and(|d| d.len() <= 100_000)));
     let work = std::env::temp_dir().join(format!("far-damaged-{}", std::process::id()));
     std::fs::create_dir_all(&work).unwrap();
     let mut crashes = Vec::new();
