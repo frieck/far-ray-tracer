@@ -184,15 +184,18 @@ which runs both Fixed and Enhanced.
 
 ## Validation
 
-The 2008 stage is checked against the original engine, built from `reference/cpp` with
-the fixes it needs to run on 64-bit systems and a native JSON scene loader:
+The 2008 stage is kept to show how the program was. Matching the original pixel by pixel
+was a requirement of the port and is no longer one: later versions may let it drift. For as
+long as it holds, the 2008 stage can be compared with the original engine, built from
+`reference/cpp` with the fixes it needs to run on 64-bit systems and a native JSON scene
+loader:
 
 ```bash
 npm run validate
 ```
 
-The script renders the historical corpus in `reference/scenes.txt` with both engines and compares every pixel. On Apple
-Silicon all 18 scenes match exactly, with the same ray counts. It skips
+The script renders the historical corpus in `reference/scenes.txt` with both engines and compares every pixel. As of
+3.0, on Apple Silicon, all 18 scenes match exactly, with the same ray counts. It skips
 `assets/scenes/debug` and ignores the first row and column, which the original program
 never writes.
 

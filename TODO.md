@@ -63,7 +63,25 @@ Visual gain for the effort:
   in quality at few samples. Low to medium, but needs a native library.
 - [ ] **Bidirectional path tracing or progressive photon mapping**: hard caustics, such as
   light seen through glass. High.
-- [ ] **GPU rendering (wgpu)**: much faster. Very high.
+- [ ] **GPU rendering (wgpu)**: path tracing in compute shaders (WGSL), one code for Metal,
+  DirectX 12 and Vulkan, with the CPU engine as the reference and the fallback. Very high.
+  After 3.0, in this order:
+  1. A flattened BVH on the CPU for every mode, replacing both KD-Trees; the 2008 stage no
+     longer has to match the original, so its tree and the code kept only for that match
+     (`--exact`, the ordered random numbers, `npm run validate`) can go. Faster on the CPU by
+     itself.
+  2. The scene in flat buffers the GPU reads: primitives, materials, lights and a texture array.
+  3. The GPU for previews first, camera movement and the material ball: triangles, spheres,
+     solids, GGX, direct light with light picking, the environment and indirect light.
+  4. Parity, feature by feature, each compared with the CPU against a reference: glass with
+     absorption, bump and normal maps, depth of field, coat, sheen, subsurface, volumes.
+  5. Final renders on the GPU, as a Device setting; scenes using what the GPU lacks (caustic
+     photons, dispersion, the displaced ground) fall back to the CPU and say so.
+
+  Risks: two renderers to keep equal; no recursion in shaders; Windows stops a GPU command
+  after 2 seconds, so work goes in small slices; CI has no GPU, only a software renderer;
+  GPU and CPU agree within noise, not bit for bit. No hardware ray tracing at first: its
+  support in wgpu is experimental.
 
 ## Geometry and scenes
 

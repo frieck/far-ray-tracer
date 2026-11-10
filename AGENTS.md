@@ -32,10 +32,13 @@ The README explains every feature and the scene format; `TODO.md` lists what is 
   messages, release notes. Talk to the user in the user's language.
 - **Writing.** Plain, complete sentences. Comments say why, not what the line already says.
   Name things for what they are; no abbreviations a reader must decode.
-- **The 2008 renderer is history.** Classic mode must stay pixel-identical to the original C++
-  program: `npm run validate` must report `same=18 different=0`. New features go into the
-  Enhanced mode only. The code in `reference/cpp` keeps its original Portuguese comments and
-  is changed only to make it build.
+- **The 2008 renderer is history, not a constraint.** Classic mode stays in the app, in the
+  Evolution group, to show how the program was, and `reference/cpp` keeps the original C++
+  with its Portuguese comments, changed only to make it build. Classic no longer has to match
+  the original pixel by pixel: `npm run validate` still compares them, as a curiosity, but a
+  change may fail it. Until the code that exists only for that match is removed (the
+  original KD-Tree and its quirks, planned with the BVH), leave Classic working. New features
+  go into the Enhanced mode only.
 - **The original project folder outside this repository is read-only.**
 - **Scene files are strict.** New `.far` fields go in `crates/far-core/src/scene_file.rs`, with
   `deny_unknown_fields`, validation and an error message that says what is wrong and what is
@@ -59,7 +62,6 @@ Before calling a change done, run what it touches:
 | --- | --- |
 | Engine and command line tests | `cargo test --release -p far-core -p far-cli` |
 | App crate tests | `cargo test -p far-app` |
-| 2008 renderer against the C++ original (macOS) | `npm run validate` |
 | Whole workspace compiles | `cargo check --workspace` |
 | Interface types | `npx tsc --noEmit` |
 | Every example renders and is denoised by Open Image Denoise | `tools/smoke.sh` |
