@@ -122,6 +122,11 @@ value can go beyond it, and the field turns amber to show it. Settings with a re
 it: roughness, metallic and the layers stay in 0 to 1, IOR in 1 to 3, threads up to the cores,
 and nothing that cannot be negative goes below zero. **Search settings** finds any setting in every group.
 
+**Render > Sampling** also has **Reflection depth** and **Glass depth**, limits within Ray
+depth for mirror and glossy reflections and for crossings of glass: glassware seen through
+glass needs several levels, while reflections between metals can stop early and save time.
+They follow Ray depth until set lower, and are saved with the scene.
+
 Quality sets the passes, which are samples per pixel: Draft is 16, Good is 64, High is 256
 and Custom takes any number up to 4096. Resolution offers common display sizes up to 8K,
 and Custom takes any size up to 8192 pixels per side. The original image plane is 4:3, so

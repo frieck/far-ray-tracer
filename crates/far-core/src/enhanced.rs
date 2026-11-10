@@ -411,6 +411,32 @@ struct Tracer<'a> {
     sequence: Option<(u32, u32)>,
     /// How many numbers this camera sample has drawn from its sequences.
     dimension: u32,
+    limits: Limits,
+}
+
+/// Separate limits for mirror-like reflections and for crossings of glass, within the ray
+/// depth, so glassware can go deep while reflections between metals stop early.
+#[derive(Clone, Copy)]
+struct Limits {
+    glossy_max: i32,
+    transmission_max: i32,
+    /// Reflection and transmission levels of the ray being traced.
+    glossy: i32,
+    transmission: i32,
+    /// The chance that a reflection ray is traced at the current hit, for MIS.
+    reflect_chance: f32,
+}
+
+impl Limits {
+    fn new(glossy_max: Option<i32>, transmission_max: Option<i32>) -> Self {
+        Self {
+            glossy_max: glossy_max.unwrap_or(i32::MAX),
+            transmission_max: transmission_max.unwrap_or(i32::MAX),
+            glossy: 0,
+            transmission: 0,
+            reflect_chance: 1.0,
+        }
+    }
 }
 
 impl<'a> Tracer<'a> {
@@ -671,7 +697,7 @@ impl<'a> Tracer<'a> {
         self.caustics.is_some() && bounces > 0
     }
 
-    fn direct_light(&mut self, a: &Hit, d: Vec3, depth: i32, bounces: u32) -> Color {
+    fn direct_light(&mut self, a: &Hit, d: Vec3, bounces: u32) -> Color {
         let scene = self.ctx.scene;
         let photons_carry = self.photons_carry(bounces);
         let mut acc = Color::default();
@@ -744,7 +770,7 @@ impl<'a> Tracer<'a> {
             let transmitted = self.visibility(start, shadow * (1.0 / shadow_distance), shadow_distance);
             let radiance = scene.materials[light.proxy.material].color * transmitted * (weight / chance);
             let light_pdf = chance * distance * distance / (light.area * emission_cos);
-            self.shade_area_light(&mut acc, a, d, depth, l, dot, radiance, Some(light_pdf), photons_carry);
+            self.shade_area_light(&mut acc, a, d, l, dot, radiance, Some(light_pdf), photons_carry);
         }
         for (index, light) in scene.bulbs.iter().enumerate() {
             if !chosen(scene.rect_lights.len() + index) { continue; }
@@ -774,7 +800,7 @@ impl<'a> Tracer<'a> {
             let reach = if self.fixed { shadow_length - light.radius } else { shadow_length };
             let transmitted = self.visibility(start, shadow * (1.0 / shadow_length), reach);
             let radiance = scene.materials[light.material].color * transmitted * (weight * aimed);
-            self.shade_area_light(&mut acc, a, d, depth, l, dot, radiance, light_pdf, photons_carry);
+            self.shade_area_light(&mut acc, a, d, l, dot, radiance, light_pdf, photons_carry);
         }
         if !self.fixed {
             if let Some(environment) = scene.environment.as_ref().filter(|e| e.active()) {
@@ -785,7 +811,7 @@ impl<'a> Tracer<'a> {
                     let transmitted = self.visibility(a.pos + a.geo * SURFACE_OFFSET, l, MAX_DISTANCE);
                     let response = if let Some(ggx) = a.ggx {
                         ggx.evaluate(a.smooth, -d, l, a.color, a.m.ior,
-                            (depth < self.ctx.max_depth).then_some(pdf))
+                            self.mis_light_pdf(pdf))
                     } else {
                         a.color * (a.diff * cosine / PI)
                     };
@@ -799,7 +825,7 @@ impl<'a> Tracer<'a> {
     /// Adds the response of the surface to light arriving from an emitter sample.
     /// `light_pdf` is the solid-angle density of that sample, for MIS with GGX.
     #[allow(clippy::too_many_arguments)]
-    fn shade_area_light(&self, acc: &mut Color, a: &Hit, d: Vec3, depth: i32, l: Vec3, dot: f32,
+    fn shade_area_light(&self, acc: &mut Color, a: &Hit, d: Vec3, l: Vec3, dot: f32,
         radiance: Color, light_pdf: Option<f32>, photons_carry: bool) {
         if !self.fixed {
             if let Some(ggx) = a.ggx {
@@ -807,7 +833,7 @@ impl<'a> Tracer<'a> {
                     *acc += if photons_carry {
                         ggx.evaluate_diffuse(a.smooth, -d, l, a.color, a.m.ior)
                     } else {
-                        ggx.evaluate(a.smooth, -d, l, a.color, a.m.ior, light_pdf.filter(|_| depth < self.ctx.max_depth))
+                        ggx.evaluate(a.smooth, -d, l, a.color, a.m.ior, light_pdf.and_then(|pdf| self.mis_light_pdf(pdf)))
                     } * radiance * PI;
                 }
                 return;
@@ -855,6 +881,9 @@ impl<'a> Tracer<'a> {
     fn reflection(&mut self, a: &Hit, d: Vec3, depth: i32, bounces: u32) -> Color {
         if !self.fixed {
             if let Some(ggx) = a.ggx {
+                // The chance this reflection was drawn at all: MIS weighs it against light
+                // sampling by the density it was really drawn with.
+                let chance = self.limits.reflect_chance;
                 let (u, v) = self.pair();
                 let Some((dir, weight)) = ggx.sample(a.smooth, -d, u, v, self.random(), a.color, a.m.ior) else { return Color::default(); };
                 if dir.dot(a.geo) <= 0.0 { return Color::default(); }
@@ -863,7 +892,7 @@ impl<'a> Tracer<'a> {
                 let mut mis = 1.0;
                 if distance == MAX_DISTANCE {
                     if let Some(environment) = self.ctx.scene.environment.as_ref().filter(|e| e.active()) {
-                        mis = crate::ggx::power_weight(ggx.pdf(a.smooth, -d, dir, a.color, a.m.ior), environment.pdf(dir));
+                        mis = crate::ggx::power_weight(chance * ggx.pdf(a.smooth, -d, dir, a.color, a.m.ior), environment.pdf(dir));
                     }
                 }
                 let scene = self.ctx.scene;
@@ -871,7 +900,7 @@ impl<'a> Tracer<'a> {
                     if let Some(hit) = light.intersect(ray.o, dir, distance + SURFACE_OFFSET) {
                         if (hit - distance).abs() < SURFACE_OFFSET && -dir.dot(light.normal) > 0.0 {
                             let light_pdf = emitter_probability(scene, a.pos, index) * hit * hit / (light.area * -dir.dot(light.normal));
-                            mis = crate::ggx::power_weight(ggx.pdf(a.smooth, -d, dir, a.color, a.m.ior), light_pdf);
+                            mis = crate::ggx::power_weight(chance * ggx.pdf(a.smooth, -d, dir, a.color, a.m.ior), light_pdf);
                         }
                     }
                 }
@@ -881,7 +910,7 @@ impl<'a> Tracer<'a> {
                         if (hit - distance).abs() < SURFACE_OFFSET && cosine > 0.0 {
                             let light_pdf = emitter_probability(scene, a.pos, scene.rect_lights.len() + index)
                                 * hit * hit / (2.0 * PI * light.sq_radius * cosine);
-                            mis = crate::ggx::power_weight(ggx.pdf(a.smooth, -d, dir, a.color, a.m.ior), light_pdf);
+                            mis = crate::ggx::power_weight(chance * ggx.pdf(a.smooth, -d, dir, a.color, a.m.ior), light_pdf);
                         }
                     }
                 }
@@ -1172,7 +1201,7 @@ impl<'a> Tracer<'a> {
             pos, dist: 0.0, color: Color::new(1.0, 1.0, 1.0), geo: n, smooth: n, original: n, entering: false,
             diff: 1.0, refl: 0.0, refr: 0.0, m: matte, ggx: None, emission: Color::default(),
         };
-        let mut light = self.direct_light(&at, -n, depth, bounces);
+        let mut light = self.direct_light(&at, -n, bounces);
         if self.indirect && bounces < self.bounces.max {
             light += self.indirect_light(&at, -n, depth, bounces);
         }
@@ -1360,15 +1389,6 @@ impl<'a> Tracer<'a> {
         if self.first_hit {
             self.primary = Primary { albedo: a.color.array(), normal: a.smooth.array(), depth: dist };
         }
-        let mut acc = if self.caustics_only { Color::default() } else { self.direct_light(&a, r.d, depth, bounces) + a.emission };
-        if let Some(map) = self.caustics {
-            if bounces == 0 && a.diff > 0.0 && r.d.dot(a.original) < 0.0 {
-                let (light, found) = map.irradiance(a.pos, a.original);
-                self.photon_lookups += 1;
-                self.photons_gathered += found as u64;
-                acc += (self.caustic_strength * a.diff) * a.color * light;
-            }
-        }
         // The side that receives no direct light does not bounce light either.
         let front = r.d.dot(a.original) < 0.0;
         let indirect = self.indirect && bounces < self.bounces.max && a.diff > 0.0 && front;
@@ -1377,70 +1397,97 @@ impl<'a> Tracer<'a> {
             _ => None,
         };
         let deeper = depth < self.ctx.max_depth;
-        let reflects = deeper && a.refl > 0.0;
-        let refracts = deeper && a.refr > 0.0;
-        // Where the camera first hits, every kind of light leaving the surface is traced, since
-        // that is what shows the most. Past it, one kind is drawn at random, weighed by how
-        // much light it carries, and divided by its chance. Tracing all of them at every
-        // bounce made the rays per pixel grow about threefold per level of depth.
+        let reflects = deeper && a.refl > 0.0 && self.limits.glossy < self.limits.glossy_max;
+        let refracts = deeper && a.refr > 0.0 && self.limits.transmission < self.limits.transmission_max;
+        // What the camera sees, directly or through glass and mirrors, traces every kind of
+        // light leaving the surface, since that is what shows the most; such a chain grows
+        // only by one ray per level. After the first diffuse bounce, one kind is drawn at
+        // random, weighed by how much light it carries, and divided by its chance. Tracing all
+        // of them at every bounce made the rays per pixel grow about threefold per level.
+        let brightest = a.color.x.max(a.color.y).max(a.color.z);
         let lobes = [
-            indirect.then(|| a.diff * a.color.x.max(a.color.y).max(a.color.z)),
-            subsurface.map(|(sss, ggx)| sss.amount * (1.0 - ggx.metallic) * a.color.x.max(a.color.y).max(a.color.z)),
+            indirect.then(|| a.diff * brightest),
+            subsurface.map(|(sss, ggx)| sss.amount * (1.0 - ggx.metallic) * brightest),
             reflects.then_some(a.refl),
             refracts.then_some(a.refr),
         ];
-        let all = self.fixed || (depth == 1 && bounces == 0);
-        let (chosen, chance) = if all { (None, 1.0) } else { self.pick_lobe(&lobes) };
-        let traced = |k: usize| lobes[k].is_some() && chosen.is_none_or(|c| c == k);
-        let scale = 1.0 / chance;
+        let all = self.fixed || bounces == 0;
+        let chances = if all { lobes.map(|l| if l.is_some() { 1.0 } else { 0.0 }) } else { lobe_chances(&lobes) };
+        // Light sampling here is weighed against the reflection ray by its chance to be drawn.
+        self.limits.reflect_chance = chances[2];
+        let mut acc = if self.caustics_only { Color::default() } else { self.direct_light(&a, r.d, bounces) + a.emission };
+        if let Some(map) = self.caustics {
+            if bounces == 0 && a.diff > 0.0 && r.d.dot(a.original) < 0.0 {
+                let (light, found) = map.irradiance(a.pos, a.original);
+                self.photon_lookups += 1;
+                self.photons_gathered += found as u64;
+                acc += (self.caustic_strength * a.diff) * a.color * light;
+            }
+        }
+        let chosen = if all { None } else { Some(self.pick(&chances)) };
+        let traced = |k: usize| chances[k] > 0.0 && chosen.is_none_or(|c| c == k);
+        let scale = |k: usize| 1.0 / chances[k];
         if traced(0) {
-            acc += self.indirect_light(&a, r.d, depth, bounces) * scale;
+            acc += self.indirect_light(&a, r.d, depth, bounces) * scale(0);
         }
         if let Some((sss, ggx)) = subsurface.filter(|_| traced(1)) {
-            acc += self.subsurface(&a, r.d, sss, ggx, depth, bounces) * scale;
+            acc += self.subsurface(&a, r.d, sss, ggx, depth, bounces) * scale(1);
         }
         if traced(2) {
             self.first_hit = depth == 1 && bounces == 0;
-            acc += self.reflection(&a, r.d, depth, bounces) * scale;
+            self.limits.reflect_chance = chances[2];
+            self.limits.glossy += 1;
+            acc += self.reflection(&a, r.d, depth, bounces) * scale(2);
+            self.limits.glossy -= 1;
         }
         if traced(3) {
             self.first_hit = depth == 1 && bounces == 0;
-            acc += self.refraction(&a, r.d, depth, bounces) * scale;
+            self.limits.transmission += 1;
+            acc += self.refraction(&a, r.d, depth, bounces) * scale(3);
+            self.limits.transmission -= 1;
         }
         (acc, a.dist)
     }
 
-    /// Draws one of the lobes that can be traced, by the light each carries, with every lobe
-    /// keeping at least a small chance so a dim one cannot leave rare, very bright samples.
-    /// Returns the index and its chance; with no lobe, the index is past the end.
-    fn pick_lobe(&mut self, lobes: &[Option<f32>; 4]) -> (Option<usize>, f32) {
-        const LEAST: f32 = 0.1;
-        let count = lobes.iter().flatten().count();
-        if count == 0 {
-            return (Some(lobes.len()), 1.0);
-        }
-        if count == 1 {
-            return (lobes.iter().position(Option::is_some), 1.0);
-        }
-        let total: f32 = lobes.iter().flatten().map(|w| w.max(0.0)).sum();
-        let mut chances = [0.0f32; 4];
-        for (chance, lobe) in chances.iter_mut().zip(lobes) {
-            if let Some(w) = lobe {
-                let share = if total > 0.0 { w.max(0.0) / total } else { 1.0 / count as f32 };
-                *chance = share.max(LEAST);
-            }
-        }
-        let sum: f32 = chances.iter().sum();
-        let mut u = self.random() * sum;
+    /// Light sampling's density for MIS against the reflection ray, which is drawn with only
+    /// `reflect_chance`; with no reflection ray, light sampling takes all the weight.
+    fn mis_light_pdf(&self, pdf: f32) -> Option<f32> {
+        let chance = self.limits.reflect_chance;
+        (chance > 0.0).then(|| pdf / chance)
+    }
+
+    /// Draws one lobe by its chance.
+    fn pick(&mut self, chances: &[f32; 4]) -> usize {
+        let mut u = self.random();
         let last = chances.iter().rposition(|&c| c > 0.0).unwrap_or(0);
         for (k, &c) in chances.iter().enumerate() {
             if c > 0.0 && (u < c || k == last) {
-                return (Some(k), c / sum);
+                return k;
             }
             u -= c;
         }
-        (Some(last), chances[last] / sum)
+        last
     }
+}
+
+/// The chance of each lobe that can be traced, by the light it carries, with every lobe
+/// keeping at least a small chance so a dim one cannot leave rare, very bright samples.
+fn lobe_chances(lobes: &[Option<f32>; 4]) -> [f32; 4] {
+    const LEAST: f32 = 0.1;
+    let count = lobes.iter().flatten().count();
+    let total: f32 = lobes.iter().flatten().map(|w| w.max(0.0)).sum();
+    let mut chances = [0.0f32; 4];
+    for (chance, lobe) in chances.iter_mut().zip(lobes) {
+        if let Some(w) = lobe {
+            let share = if total > 0.0 { w.max(0.0) / total } else { 1.0 / count as f32 };
+            *chance = if count == 1 { 1.0 } else { share.max(LEAST) };
+        }
+    }
+    let sum: f32 = chances.iter().sum();
+    if sum > 0.0 {
+        chances.iter_mut().for_each(|c| *c /= sum);
+    }
+    chances
 }
 
 /// A light and the sphere around a glass or mirror object that photons aim at.
@@ -1533,6 +1580,7 @@ fn build_photon_map(scene: &Scene, kd: Option<&KdTree>, op: &Options, progress: 
             wavelength: None,
             sequence: None,
             dimension: 0,
+            limits: Limits::new(op.glossy_depth, op.transmission_depth),
         };
         loop {
             let batch = next_batch.fetch_add(1, Relaxed) as u32;
@@ -2013,6 +2061,7 @@ pub fn render_continuing(scene: &Scene, kd: Option<&KdTree>, op: &Options, image
                 wavelength: None,
                 sequence: None,
                 dimension: 0,
+                limits: Limits::new(op.glossy_depth, op.transmission_depth),
             };
             loop {
                 if progress.cancel.load(Relaxed) {
@@ -2343,7 +2392,7 @@ mod tests {
             ctx: Context::with_fixes(scene, None, 5), fixed: true,
             has_glass: false, indirect: false, bounces: Bounces::for_scene(scene), caustics: None, caustic_strength: 1.0,
             caustics_only: false, photon_lookups: 0, photons_gathered: 0,
-            stratum: (0.0, 0.0), grid: 1.0, first_hit: false, primary: Primary::default(), wavelength: None, sequence: None, dimension: 0,
+            stratum: (0.0, 0.0), grid: 1.0, first_hit: false, primary: Primary::default(), wavelength: None, sequence: None, dimension: 0, limits: Limits::new(None, None),
         };
         tracer.trace(&Ray { o: Vec3::new(0.0, 0.0, -5.0), d: Vec3::new(0.0, 0.0, 1.0) }, 1, 0, allow_emission).0
     }
@@ -2353,7 +2402,7 @@ mod tests {
             ctx: Context::with_fixes(scene, None, depth), fixed: false,
             has_glass: false, indirect: false, bounces: Bounces::for_scene(scene), caustics: None, caustic_strength: 1.,
             caustics_only: false, photon_lookups: 0, photons_gathered: 0,
-            stratum: (0., 0.), grid: 1., first_hit: false, primary: Primary::default(), wavelength: None, sequence: None, dimension: 0,
+            stratum: (0., 0.), grid: 1., first_hit: false, primary: Primary::default(), wavelength: None, sequence: None, dimension: 0, limits: Limits::new(None, None),
         }
     }
 

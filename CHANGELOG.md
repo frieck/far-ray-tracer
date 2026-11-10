@@ -20,6 +20,11 @@ and moves under its version when that version is released.
 - A **Still life** example: a wine glass, a decanter, grapes in a glazed bowl, a pear, a copper
   cup and a candle on an oak table by a window at sunset. `tools/still_life.py` generates its
   meshes and textures.
+- Separate depth limits for mirror-like reflections and for glass crossings in Enhanced mode,
+  within Ray depth, so glassware can go deep while reflections between metals stop early:
+  **Reflection depth** and **Glass depth** under Render > Sampling, saved with the scene, and
+  `--glossy-depth N` and `--transmission-depth N` on the command line. The still life opens with
+  depth 12, reflections 3 and glass 10.
 
 ### Changed
 
@@ -48,11 +53,13 @@ and moves under its version when that version is released.
 
 ### Fixed
 
-- Enhanced renders that slowed down sharply with ray depth. Past the camera's first hit, each
-  bounce traced every kind of light leaving the surface (bounced light, subsurface,
-  reflection, refraction), so rays per pixel grew about threefold per level. Now each bounce
-  draws one at random, weighted by the light it carries. The image is the same and scenes
-  with subsurface or fog render 3 to 6 times faster.
+- Enhanced renders that slowed down sharply with ray depth. Every bounce traced every kind of
+  light leaving the surface (bounced light, subsurface, reflection, refraction), so rays per
+  pixel grew about threefold per level. What the camera sees, directly or through glass and
+  mirrors, still traces them all; after the first diffuse bounce one is drawn at random,
+  weighted by the light it carries. The image converges to the same result, and scenes with
+  subsurface, coatings or fog render 2.5 to 4 times faster, with less noise in the same time.
+  MIS between light sampling and reflection rays accounts for how often a reflection is drawn.
 - Models of about 10 000 to 50 000 triangles vanished in Fixed and Enhanced renders, with
   everything else in the scene: the KD-Tree build split them into two empty boxes. Such
   scenes now also build in a fraction of a second instead of several.

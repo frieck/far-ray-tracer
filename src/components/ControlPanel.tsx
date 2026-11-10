@@ -239,6 +239,18 @@ function RenderTab({ props, update, enhanced }: TabContext) {
         <ScrubRow label="Ray depth" keywords="reflection refraction" value={settings.depth} min={1} max={8} hard={[1, 64]} step={1}
           hint="Reflection and refraction depth. At 1, reflection and refraction bounces are disabled."
           onChange={(depth) => update({ depth })} />
+        {enhanced && (
+          <>
+            <ScrubRow label="Reflection depth" keywords="glossy mirror depth" value={Math.min(settings.glossyDepth ?? settings.depth, settings.depth)}
+              min={0} max={settings.depth} step={1} strict format={(v) => (v >= settings.depth ? "Ray depth" : String(v))}
+              hint="Most mirror and glossy reflections in a path, within Ray depth. Lower is faster where reflections face each other."
+              onChange={(v) => update({ glossyDepth: v >= settings.depth ? null : v })} />
+            <ScrubRow label="Glass depth" keywords="transmission refraction depth" value={Math.min(settings.transmissionDepth ?? settings.depth, settings.depth)}
+              min={0} max={settings.depth} step={1} strict format={(v) => (v >= settings.depth ? "Ray depth" : String(v))}
+              hint="Most crossings of glass and other transparent surfaces in a path, within Ray depth. Glass behind glass needs several."
+              onChange={(v) => update({ transmissionDepth: v >= settings.depth ? null : v })} />
+          </>
+        )}
       </Section>
       <Section id="resolution" title="Resolution">
         <ChoiceRow<Resolution> label="Size" value={settings.resolution} onChange={(resolution) => update({ resolution })}>

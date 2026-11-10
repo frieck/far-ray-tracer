@@ -172,6 +172,11 @@ struct RenderRequest {
     width: u32,
     height: u32,
     depth: i32,
+    /// Limits within `depth` for reflections and for glass crossings; absent follows `depth`.
+    #[serde(default)]
+    glossy_depth: Option<i32>,
+    #[serde(default)]
+    transmission_depth: Option<i32>,
     threads: usize,
     use_kd: bool,
     samples: u32,
@@ -866,6 +871,8 @@ fn render_scene(
         height: request.height,
         use_kd: request.use_kd,
         max_depth: request.depth,
+        glossy_depth: request.glossy_depth,
+        transmission_depth: request.transmission_depth,
         threads: request.threads.max(1),
         continuous_rng: false,
         region: request.region.map(|[x0, y0, x1, y1]| far_core::engine::Region { x0, y0, x1, y1 }),
@@ -882,7 +889,7 @@ fn render_scene(
         request.focus_distance, request.blades, request.blade_rotation, request.indirect, request.indirect_strength,
         request.max_bounces, request.indirect_clamp, request.caustics, request.photons, request.caustic_radius,
         request.caustic_strength, request.width, request.height, request.use_kd, request.depth, request.region,
-        request.noise_threshold));
+        request.noise_threshold) + &format!("|{:?}|{:?}", request.glossy_depth, request.transmission_depth));
     // A new kept render replaces what was kept, which frees its memory early.
     let previous = reuse_key.as_ref().and_then(|key| match state.accumulation.lock().unwrap().take() {
         Some((kept, accumulation)) if &kept == key => Some(accumulation),

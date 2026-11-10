@@ -130,6 +130,9 @@ export interface RenderRequest {
   width: number;
   height: number;
   depth: number;
+  /** Most mirror and glossy reflections, and most glass crossings, in a path; null is Ray depth. */
+  glossy_depth?: number | null;
+  transmission_depth?: number | null;
   threads: number;
   use_kd: boolean;
   samples: number;
@@ -198,6 +201,9 @@ export interface Settings {
   customWidth: number;
   customHeight: number;
   depth: number;
+  /** Reflection and transmission limits within `depth`; null follows it. */
+  glossyDepth: number | null;
+  transmissionDepth: number | null;
   threads: number;
   indirect: boolean;
   /** Indirect light settings chosen by hand; null follows the scene's lights. */

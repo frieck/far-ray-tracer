@@ -104,6 +104,10 @@ pub struct Options {
     pub height: u32,
     pub use_kd: bool,
     pub max_depth: i32,
+    /// Enhanced: most mirror-like reflections and glass crossings in a path, each within
+    /// `max_depth`; `None` leaves only `max_depth`.
+    pub glossy_depth: Option<i32>,
+    pub transmission_depth: Option<i32>,
     pub threads: usize,
     /// Uses a single random sequence in tile order, like the original.
     /// It only makes sense with one thread and exists for pixel-exact comparison.
@@ -137,6 +141,8 @@ impl Default for Options {
             height: 600,
             use_kd: true,
             max_depth: 3,
+            glossy_depth: None,
+            transmission_depth: None,
             threads: std::thread::available_parallelism().map_or(1, |n| n.get()),
             continuous_rng: false,
             region: None,

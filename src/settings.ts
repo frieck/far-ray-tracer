@@ -173,6 +173,8 @@ export function defaultSettings(cores: number): Settings {
     customWidth: 1920,
     customHeight: 1080,
     depth: DEFAULT_DEPTH.enhanced,
+    glossyDepth: null,
+    transmissionDepth: null,
     threads: cores,
     indirect: true,
     bounces: null,
@@ -233,7 +235,8 @@ function causticValues(settings: Settings) {
 
 /** Render settings saved with a scene, so it opens looking as it was saved. */
 const SAVED_SETTINGS = [
-  "quality", "customPasses", "resolution", "customWidth", "customHeight", "depth", "exposure", "toneMapping",
+  "quality", "customPasses", "resolution", "customWidth", "customHeight", "depth", "glossyDepth", "transmissionDepth",
+  "exposure", "toneMapping",
   "denoise", "bloom", "indirect", "bounces", "caustics", "causticPreset", "photonMillions", "causticRadius",
   "causticStrength", "dofPreset", "dofPasses",
 ] as const satisfies readonly (keyof Settings)[];
@@ -252,6 +255,8 @@ export function withSavedRenderSettings(settings: Settings, saved: unknown): Set
     const current = settings[key];
     const sameKind = key === "bounces"
       ? value === null || (typeof value === "object" && value !== null)
+      : key === "glossyDepth" || key === "transmissionDepth"
+      ? value === null || (typeof value === "number" && value >= 1)
       : typeof value === typeof current || (key === "quality" && (typeof value === "number" || value === "custom"));
     if (value !== undefined && sameKind) next[key] = value;
   }
@@ -306,6 +311,8 @@ export function buildRequest(settings: Settings, mode: Mode, keep: boolean): Ren
     width,
     height,
     depth: settings.depth,
+    glossy_depth: mode === "enhanced" ? settings.glossyDepth : null,
+    transmission_depth: mode === "enhanced" ? settings.transmissionDepth : null,
     threads: settings.threads,
     use_kd: settings.useKd,
     samples: effectivePasses(settings),

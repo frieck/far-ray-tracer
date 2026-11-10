@@ -3409,6 +3409,8 @@
   "quality": 256,
   "toneMapping": "agx_punchy",
   "denoise": true,
-  "depth": 5
+  "depth": 12,
+  "glossyDepth": 3,
+  "transmissionDepth": 10
  }
 }

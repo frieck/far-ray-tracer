@@ -805,7 +805,8 @@ def main():
         "objects": objects,
         # How the app first renders it: film tone mapping and the denoiser. Ray depth stays at the
         # app's 5, which the glassware is built for; each extra level costs about three times more.
-        "render": {"app": 1, "quality": 256, "toneMapping": "agx_punchy", "denoise": True, "depth": 5},
+        "render": {"app": 1, "quality": 256, "toneMapping": "agx_punchy", "denoise": True, "depth": 12,
+                   "glossyDepth": 3, "transmissionDepth": 10},
     }
     SCENE.write_text(json.dumps(scene, indent=1) + "\n")
     print(SCENE)

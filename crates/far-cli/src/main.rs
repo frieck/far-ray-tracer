@@ -12,6 +12,9 @@ usage:
       --width N       image width (default 800)
       --height N      image height (default 600)
       --depth N       recursion depth (default 3)
+      --glossy-depth N        in enhanced mode, most mirror-like reflections in a path
+      --transmission-depth N  in enhanced mode, most glass crossings in a path; both stay
+                      within --depth, so --depth 12 --glossy-depth 3 lets glass go deep
       --threads N     thread count (default: all cores)
       --no-kd         do not use the KD-Tree
       --exact         1 thread and the same random sequence as the original
@@ -79,6 +82,8 @@ fn render_command(mut args: impl Iterator<Item = String>) {
             "--width" => options.width = number(&mut args, &a),
             "--height" => options.height = number(&mut args, &a),
             "--depth" => options.max_depth = number(&mut args, &a),
+            "--glossy-depth" => options.glossy_depth = Some(number(&mut args, &a)),
+            "--transmission-depth" => options.transmission_depth = Some(number(&mut args, &a)),
             "--threads" => options.threads = number(&mut args, &a),
             "--no-kd" => options.use_kd = false,
             "--fixed" => options.mode = Mode::Fixed,
