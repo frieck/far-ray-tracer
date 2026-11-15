@@ -866,8 +866,9 @@ Enhanced integrator step by step, so the two give the same image within noise.
 | --- | --- |
 | Every shape: meshes, spheres, boxes, cylinders, tubes, cones, tori, grounds | Displacement of the ground |
 | 2008 materials, GGX, glass with absorption and roughness, color textures | Roughness, metallic, emission and alpha maps; bump and normal maps; clear coat, sheen, anisotropy, subsurface; dispersion |
-| 2008 lights, bulbs, panels, one picked of many; indirect light with the 2008-light limits | Spotlight cones and IES, volumes, caustic photons |
+| 2008 lights, bulbs, panels, one picked of many; indirect light with the 2008-light limits | Spotlight cones and IES, caustic photons |
 | HDR environments and the sun and sky, drawn by their light; MIS for GGX reflections | |
+| Fog, height fog and smoke (up to eight volumes), with light shafts | More than eight volumes |
 | Depth of field and bokeh shapes, denoise and bloom (on the CPU, from the GPU's sums) | Regions and adaptive sampling (the whole image is rendered) |
 
 On an Apple M4 Max at 800 × 600 with 256 samples, against its 16 CPU cores:
@@ -884,11 +885,14 @@ On an Apple M4 Max at 800 × 600 with 256 samples, against its 16 CPU cores:
 | Showcase | 30.8 s | 1.2 s |
 | Christmas (46 lights) | 43.3 s | 2.6 s |
 
-The GPU is 15 to 35 times faster. A test renders eight example scenes on both and checks that
-their brightness agrees within 5%; it is skipped on machines without a graphics card. At
-512 samples and 320 × 200 the images differ by an RMSE of 1 to 8 (of 255), which is the noise
-of both. The Rhino is the exception, with the same brightness but an RMSE of 21; the cause is
-not found yet.
+With fog, at 320 × 200 and 256 samples: light shafts 10.9 s against 0.30 s, smoke (marched
+through noise) 42.5 s against 3.7 s.
+
+The GPU is 15 to 35 times faster. A test renders ten example scenes on both, fog and smoke
+among them, and checks that their brightness agrees within 5%; it is skipped on machines
+without a graphics card. At 512 samples and 320 × 200 the images differ by an RMSE of 1 to 8
+(of 255), which is the noise of both. The Rhino is the exception, with the same brightness but
+an RMSE of 21; the cause is not found yet.
 Russian roulette on the GPU ends a path by everything it carries rather than by the last
 surface alone, so the same image comes with shorter paths, which suits how GPUs run.
 

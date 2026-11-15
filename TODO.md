@@ -82,7 +82,7 @@ Visual gain for the effort:
      denoise and bloom. Left: the material ball.
   4. Parity, feature by feature, each compared with the CPU against a reference. Left: maps
      (roughness, metallic, emission, alpha), bump and normal maps, coat, sheen, anisotropy,
-     subsurface, spotlight cones and IES, volumes, dispersion.
+     subsurface, spotlight cones and IES, dispersion. (Fog and smoke are done.)
   5. ~~Final renders on the GPU, as a Device setting~~ (done: Auto falls back to the CPU for
      scenes using what the GPU lacks, and says so). Left: continuing a longer render from the
      last one, regions and adaptive sampling on the GPU.

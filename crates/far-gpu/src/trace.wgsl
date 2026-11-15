@@ -26,7 +26,10 @@ struct Params {
     // What `accum` holds per pixel, in vec4s: `stride` of them, the light first; the first
     // hits next when `features` is set, for the denoiser; the light for bloom at `glow_at`
     // when it is not 0.
-    stride: u32, features: u32, glow_at: u32, pad: u32,
+    stride: u32, features: u32, glow_at: u32,
+    // Fog and smoke: two entries each in `shapes` from `volume_first`, read by volume_shape and
+    // volume_medium.
+    volume_first: u32, volume_count: u32,
 }
 
 struct Node { low: vec3<f32>, first: u32, high: vec3<f32>, count: u32 }
@@ -66,6 +69,8 @@ struct Material {
     refr: f32, absorption_depth: f32, pad1: u32, pad2: u32,
 }
 const NO_TEXTURE: u32 = 0xffffffffu;
+// The kind of a stand-in material for a fog particle, which `respond` answers with its phase.
+const MEDIUM: u32 = 7u;
 // kind 0: a 2008 light, with no falloff. 1: a bulb. 2: a rectangular panel.
 struct Light {
     pos: vec3<f32>, kind: u32,
@@ -460,6 +465,8 @@ fn cosine_direction(n: vec3<f32>) -> vec3<f32> {
 // for MIS with GGX reflections drawn with chance `reflect_chance`.
 fn respond(m: Material, albedo: vec3<f32>, spec: f32, n: vec3<f32>, ng: vec3<f32>, wo: vec3<f32>, l: vec3<f32>,
     light_pdf: f32, reflect_chance: f32) -> vec3<f32> {
+    // A fog particle (MEDIUM), whose anisotropy is in roughness: the phase function instead.
+    if (m.kind == MEDIUM) { return vec3<f32>(phase(-dot(l, wo), m.roughness)); }
     let cosine = dot(l, n);
     if (cosine <= 0.0 || dot(l, ng) <= 0.0) { return vec3<f32>(0.0); }
     if (m.kind == 1u) {
@@ -590,9 +597,17 @@ fn from_light(i: u32, chance: f32, pos: vec3<f32>, m: Material, albedo: vec3<f32
     return f * light.color * passed * (estimate / chance);
 }
 
+// The light that gets from `start` along `l` to `limit`: blocked by surfaces, tinted by glass and
+// dimmed by fog, as the CPU's visibility.
+fn visibility(start: vec3<f32>, l: vec3<f32>, limit: f32) -> vec3<f32> {
+    let passed = surface_visibility(start, l, limit);
+    if (params.volume_count == 0u || all(passed <= vec3<f32>(0.0))) { return passed; }
+    return passed * exp(-optical_depth(start, l, limit));
+}
+
 // The light that gets from `start` along `l` to `limit`, as the CPU's surface_visibility:
 // lamps and opaque surfaces block it; glass lets its share through, absorbing along the way.
-fn visibility(start: vec3<f32>, l: vec3<f32>, limit: f32) -> vec3<f32> {
+fn surface_visibility(start: vec3<f32>, l: vec3<f32>, limit: f32) -> vec3<f32> {
     if (emitter(start, l, limit).t < limit) { return vec3<f32>(0.0); }
     if (params.has_glass == 0u) {
         if (blocked(start, l, limit)) { return vec3<f32>(0.0); }
@@ -678,6 +693,286 @@ fn lamp_pdf(lamp: Lamp, origin: vec3<f32>, o: vec3<f32>, d: vec3<f32>) -> f32 {
     let cosine = -dot(d, (o + d * lamp.t - light.pos) / light.radius);
     if (cosine <= 0.0) { return 0.0; }
     return chance * lamp.t * lamp.t / (2.0 * PI * light.radius * light.radius * cosine);
+}
+
+// Fog and smoke, as far-core's volume.rs: a medium in a box or a sphere, even, thinning with
+// height (`falloff`) or shaped by noise. Where volumes overlap their densities add.
+
+fn volume_shape(i: u32) -> Shape { return shapes[params.volume_first + 2u * i]; }
+
+// The medium: albedo in center; in kind, bit 0 for a falloff and the noise's octaves from bit 8
+// (0 for none); ax holds density, anisotropy and the falloff's base height; ay the falloff's
+// scale, the noise's scale and coverage; material the noise's seed.
+fn volume_medium(i: u32) -> Shape { return shapes[params.volume_first + 2u * i + 1u]; }
+
+fn has_noise(m: Shape) -> bool { return (m.kind >> 8u) != 0u; }
+
+// The part of the ray from `o` along `d`, between 0 and `limit`, inside volume `i`: (near, far),
+// empty when near >= far.
+fn volume_interval(i: u32, o: vec3<f32>, d: vec3<f32>, limit: f32) -> vec2<f32> {
+    let s = volume_shape(i);
+    var near = 0.0;
+    var far = limit;
+    let rel = o - s.center;
+    if (s.kind == 1u) {
+        let b = dot(rel, d);
+        let disc = b * b - (dot(rel, rel) - s.radius * s.radius);
+        if (disc <= 0.0) { return vec2<f32>(1.0, 0.0); }
+        let root = sqrt(disc);
+        near = max(near, -b - root);
+        far = min(far, -b + root);
+    } else {
+        let axes = array<vec3<f32>, 3>(s.ax, s.ay, s.az);
+        for (var k = 0; k < 3; k++) {
+            let start = dot(rel, axes[k]);
+            let speed = dot(d, axes[k]);
+            let size = s.half[k];
+            if (abs(speed) < 1e-12) {
+                if (abs(start) > size) { return vec2<f32>(1.0, 0.0); }
+                continue;
+            }
+            let a = (-size - start) / speed;
+            let b = (size - start) / speed;
+            near = max(near, min(a, b));
+            far = min(far, max(a, b));
+        }
+    }
+    return vec2<f32>(near, far);
+}
+
+fn volume_hash(x: i32, y: i32, z: i32, seed: u32) -> u32 {
+    var h = (u32(x) * 0x8da6b343u) ^ (u32(y) * 0xd8163841u) ^ (u32(z) * 0xcb1ab31fu) ^ (seed * 0x9e3779b9u);
+    h ^= h >> 15u;
+    h *= 0x2c1b3c6du;
+    h ^= h >> 12u;
+    h *= 0x297a2d39u;
+    return h ^ (h >> 15u);
+}
+
+// Perlin's gradient noise, as volume.rs's gradient_noise.
+fn gradient_noise(p: vec3<f32>, seed: u32) -> f32 {
+    let cell = floor(p);
+    let c = vec3<i32>(cell);
+    let t = p - cell;
+    let fade = t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+    var corners: array<f32, 8>;
+    for (var k = 0; k < 8; k++) {
+        let o = vec3<i32>(k & 1, (k >> 1) & 1, (k >> 2) & 1);
+        let h = volume_hash(c.x + o.x, c.y + o.y, c.z + o.z, seed) % 12u;
+        // The twelve gradients of volume.rs, in its order.
+        var g = vec3<f32>(0.0);
+        if (h < 4u) { g = vec3<f32>(select(1.0, -1.0, (h & 1u) == 1u), select(1.0, -1.0, h >= 2u), 0.0); }
+        else if (h < 8u) { g = vec3<f32>(select(1.0, -1.0, (h & 1u) == 1u), 0.0, select(1.0, -1.0, h >= 6u)); }
+        else { g = vec3<f32>(0.0, select(1.0, -1.0, (h & 1u) == 1u), select(1.0, -1.0, h >= 10u)); }
+        corners[k] = dot(g, t - vec3<f32>(o));
+    }
+    let x00 = mix(corners[0], corners[1], fade.x);
+    let x10 = mix(corners[2], corners[3], fade.x);
+    let x01 = mix(corners[4], corners[5], fade.x);
+    let x11 = mix(corners[6], corners[7], fade.x);
+    return mix(mix(x00, x10, fade.y), mix(x01, x11, fade.y), fade.z);
+}
+
+fn smooth_step(t: f32) -> f32 { return t * t * (3.0 - 2.0 * t); }
+
+// The density of volume `i` at a point inside it, as Volume::density_at.
+fn volume_density(i: u32, p: vec3<f32>) -> f32 {
+    let m = volume_medium(i);
+    var density = m.ax.x;
+    if ((m.kind & 1u) != 0u) { density *= exp(-(p.y - m.ax.z) / m.ay.x); }
+    let octaves = m.kind >> 8u;
+    if (octaves != 0u) {
+        let q = p / m.ay.y;
+        var sum = 0.0;
+        var amplitude = 1.0;
+        var frequency = 1.0;
+        var norm = 0.0;
+        for (var k = 0u; k < octaves; k++) {
+            sum += amplitude * gradient_noise(q * frequency, m.material + k * 7919u);
+            norm += amplitude;
+            amplitude *= 0.5;
+            frequency *= 2.03;
+        }
+        let n = clamp(0.5 + 1.6 * sum / norm, 0.0, 1.0);
+        density *= smooth_step(clamp((n - (1.0 - m.ay.z)) / 0.2 + 0.5, 0.0, 1.0));
+        // Thinning out toward the edges, so the box or sphere never shows.
+        let s = volume_shape(i);
+        let rel = p - s.center;
+        if (s.kind == 1u) {
+            density *= smooth_step(clamp((1.0 - length(rel) / s.radius) / 0.35, 0.0, 1.0));
+        } else {
+            density *= smooth_step(clamp((1.0 - abs(dot(rel, s.ax)) / s.half.x) / 0.35, 0.0, 1.0))
+                * smooth_step(clamp((1.0 - abs(dot(rel, s.ay)) / s.half.y) / 0.35, 0.0, 1.0))
+                * smooth_step(clamp((1.0 - abs(dot(rel, s.az)) / s.half.z) / 0.35, 0.0, 1.0));
+        }
+    }
+    return density;
+}
+
+// The optical depth of volume `i`, which has no noise, between distances a and b inside it.
+fn exact_depth(i: u32, o: vec3<f32>, d: vec3<f32>, a: f32, b: f32) -> f32 {
+    let m = volume_medium(i);
+    if ((m.kind & 1u) == 0u) { return m.ax.x * (b - a); }
+    let base = m.ax.z;
+    let scale = m.ay.x;
+    let at_a = exp(-(o.y + d.y * a - base) / scale);
+    if (abs(d.y) < 1e-6) { return m.ax.x * at_a * (b - a); }
+    return m.ax.x * scale / d.y * (at_a - exp(-(o.y + d.y * b - base) / scale));
+}
+
+// Steps through a crossing of smoke, as volume.rs's MARCH_STEPS and the puff size.
+fn march_step(i: u32, crossing: f32) -> f32 {
+    return min(crossing / 48.0, volume_medium(i).ay.y * 0.35);
+}
+
+// Optical depth of every volume along the ray up to `limit`: light keeps exp(-depth).
+fn optical_depth(o: vec3<f32>, d: vec3<f32>, limit: f32) -> f32 {
+    var depth = 0.0;
+    for (var i = 0u; i < params.volume_count; i++) {
+        let span = volume_interval(i, o, d, limit);
+        if (span.x >= span.y) { continue; }
+        if (!has_noise(volume_medium(i))) {
+            depth += exact_depth(i, o, d, span.x, span.y);
+            continue;
+        }
+        let crossing = span.y - span.x;
+        let steps = u32(clamp(ceil(crossing / march_step(i, crossing)), 1.0, 1024.0));
+        let dt = crossing / f32(steps);
+        var sum = 0.0;
+        for (var k = 0u; k < steps; k++) {
+            sum += volume_density(i, o + d * (span.x + (f32(k) + 0.5) * dt));
+        }
+        depth += sum * dt;
+    }
+    return depth;
+}
+
+// The distance after `a` where volume `i`, with no noise, adds optical depth `depth`.
+fn invert_exact(i: u32, o: vec3<f32>, d: vec3<f32>, a: f32, b: f32, depth: f32) -> f32 {
+    let m = volume_medium(i);
+    let share = a + depth / max(exact_depth(i, o, d, a, b), 1e-30) * (b - a);
+    if ((m.kind & 1u) == 0u) { return a + depth / m.ax.x; }
+    let base = m.ax.z;
+    let scale = m.ay.x;
+    let at_a = exp(-(o.y + d.y * a - base) / scale);
+    if (abs(d.y) < 1e-6) { return a + depth / (m.ax.x * at_a); }
+    let inner = at_a - depth * d.y / (m.ax.x * scale);
+    if (inner <= 0.0) { return share; }
+    return clamp((base - scale * log(inner) - o.y) / d.y, a, b);
+}
+
+// Where along the ray the optical depth reaches `wanted`, and in which volume the light
+// scatters there, picked by its share of the density with `pick`: (distance, volume), the
+// distance negative when the ray leaves every volume before `limit` with less depth. As
+// volume.rs's march: crossings are cut where volumes begin and end; parts without noise are
+// integrated exactly, noise at the middle of short steps.
+fn distance_at_depth(o: vec3<f32>, d: vec3<f32>, limit: f32, wanted: f32, pick: f32) -> vec2<f32> {
+    var near: array<f32, 8>;
+    var far: array<f32, 8>;
+    var stops: array<f32, 16>;
+    var count = 0u;
+    for (var i = 0u; i < params.volume_count; i++) {
+        let span = volume_interval(i, o, d, limit);
+        near[i] = span.x;
+        far[i] = span.y;
+        if (span.x < span.y && volume_medium(i).ax.x > 0.0) {
+            stops[count] = span.x;
+            stops[count + 1u] = span.y;
+            count += 2u;
+        } else {
+            far[i] = span.x - 1.0;
+        }
+    }
+    for (var k = 1u; k < count; k++) {
+        let value = stops[k];
+        var j = k;
+        while (j > 0u && stops[j - 1u] > value) {
+            stops[j] = stops[j - 1u];
+            j--;
+        }
+        stops[j] = value;
+    }
+    var depth = 0.0;
+    for (var k = 0u; k + 1u < count; k++) {
+        let start = stops[k];
+        let end = stops[k + 1u];
+        if (end <= start) { continue; }
+        let middle = 0.5 * (start + end);
+        var inside = 0u;
+        var exact = true;
+        var step = FAR;
+        var only = 0u;
+        for (var i = 0u; i < params.volume_count; i++) {
+            if (near[i] <= middle && middle < far[i]) {
+                inside++;
+                only = i;
+                if (has_noise(volume_medium(i))) {
+                    exact = false;
+                    step = min(step, march_step(i, far[i] - near[i]));
+                }
+            }
+        }
+        if (inside == 0u) { continue; }
+        var steps = 1u;
+        if (!exact) { steps = u32(clamp(ceil((end - start) / step), 1.0, 1024.0)); }
+        let dt = (end - start) / f32(steps);
+        for (var s = 0u; s < steps; s++) {
+            let a = start + f32(s) * dt;
+            let b = a + dt;
+            let p = o + d * (0.5 * (a + b));
+            var added = 0.0;
+            var total = 0.0;
+            for (var i = 0u; i < params.volume_count; i++) {
+                if (!(near[i] <= middle && middle < far[i])) { continue; }
+                let density = volume_density(i, p);
+                total += density;
+                if (exact) { added += exact_depth(i, o, d, a, b); } else { added += density * (b - a); }
+            }
+            if (depth + added >= wanted && added > 0.0) {
+                var t = a + (wanted - depth) / added * (b - a);
+                if (exact && inside == 1u) { t = invert_exact(only, o, d, a, b, wanted - depth); }
+                var left = pick * total;
+                var chosen = only;
+                for (var i = 0u; i < params.volume_count; i++) {
+                    if (!(near[i] <= middle && middle < far[i])) { continue; }
+                    chosen = i;
+                    left -= volume_density(i, p);
+                    if (left < 0.0) { break; }
+                }
+                return vec2<f32>(t, f32(chosen));
+            }
+            depth += added;
+        }
+    }
+    return vec2<f32>(-1.0, 0.0);
+}
+
+// Henyey-Greenstein: the density of scattering by an angle of cosine `cosine`, as volume.rs's phase.
+fn phase(cosine: f32, g: f32) -> f32 {
+    let denom = max(1.0 + g * g - 2.0 * g * cosine, 1e-6);
+    return (1.0 - g * g) / (4.0 * PI * denom * sqrt(denom));
+}
+
+// A direction scattered from travel direction `d`, distributed by the phase function.
+fn sample_phase(d: vec3<f32>, g: f32, u: f32, v: f32) -> vec3<f32> {
+    var cosine = 1.0 - 2.0 * u;
+    if (abs(g) >= 1e-3) {
+        let s = (1.0 - g * g) / (1.0 - g + 2.0 * g * u);
+        cosine = clamp((1.0 + g * g - s * s) / (2.0 * g), -1.0, 1.0);
+    }
+    let sine = sqrt(max(0.0, 1.0 - cosine * cosine));
+    let angle = 2.0 * PI * v;
+    let frame = basis(d);
+    return frame[0] * (sine * cos(angle)) + frame[1] * (sine * sin(angle)) + d * cosine;
+}
+
+// The light a particle of volume `i` at `pos`, met by a ray going along `d`, scatters back along
+// the ray from every light, before its albedo, as the CPU's in_scattered without the rebound.
+fn in_scattered(i: u32, pos: vec3<f32>, d: vec3<f32>) -> vec3<f32> {
+    var particle: Material;
+    particle.kind = MEDIUM;
+    particle.roughness = volume_medium(i).ax.y;
+    return direct(pos, particle, vec3<f32>(1.0), 0.0, vec3<f32>(0.0), vec3<f32>(0.0), -d, 0.0);
 }
 
 // The share of light glass of material `m` keeps over `distance`, as the CPU's absorption.
@@ -875,6 +1170,55 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
             absorbing = NO_TEXTURE;
         }
         let lamp = emitter(o, d, hit.t);
+        if (params.volume_count > 0u) {
+            // What the camera ray meets first guides the denoiser even when it scatters in fog.
+            if (segment == 0u && hit.t < FAR) {
+                first_albedo = materials[hit.material].color;
+                first_normal = hit.ns;
+                first_depth = hit.t;
+            }
+            let closest = min(hit.t, lamp.t);
+            let fog = optical_depth(o, d, closest);
+            if (fog > 0.0) {
+                // As the CPU's trace: camera rays, and mirror and glass rays from them, gather the
+                // light the fog scatters toward them every time, from a particle drawn among
+                // those the ray would first meet, so shafts come out smooth; then the path goes
+                // on into the fog or to the surface by the chance light gets through. After a
+                // diffuse rebound, the distance drawn decides: a particle, or the surface.
+                let kept = exp(-fog);
+                let camera = diffuse_bounces == 0u;
+                var reach = 1.0;
+                if (camera) { reach = 1.0 - kept; }
+                let found = distance_at_depth(o, d, closest, -log(max(1.0 - rand() * reach, 1e-30)), rand());
+                let may_scatter = diffuse_bounces < params.max_bounces;
+                if (found.x >= 0.0) {
+                    let v = u32(found.y);
+                    let medium = volume_medium(v);
+                    let pos = o + d * found.x;
+                    var share = 1.0;
+                    if (camera) { share = reach; }
+                    light += capped(through * medium.center * (share * in_scattered(v, pos, d)), rebound);
+                    if (!camera || (may_scatter && rand() >= kept)) {
+                        if (!may_scatter) { break; }
+                        // A rebound in the fog, by the phase function, weighed as the CPU's.
+                        d = sample_phase(d, medium.ax.y, rand(), rand());
+                        o = pos;
+                        through = survived(through * medium.center * params.strength, &luck, diffuse_bounces);
+                        if (all(through <= vec3<f32>(0.0))) { break; }
+                        rebound = through;
+                        sees_lights = false;
+                        mis_pdf = -1.0;
+                        diffuse_bounces++;
+                        continue;
+                    }
+                    // On to the surface; drawn with chance `kept` when the fog could have
+                    // been followed instead, which makes up for the dimming.
+                    if (!may_scatter) { through *= kept; }
+                } else if (camera) {
+                    through *= kept;
+                }
+            }
+        }
         if (lamp.t < hit.t) {
             if (sees_lights) {
                 var weight = 1.0;

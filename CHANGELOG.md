@@ -13,15 +13,15 @@ and moves under its version when that version is released.
   both glass and reflective objects. Includes an Environment caustics example. Scenes with
   infinite reflective grounds still use path tracing for the environment.
 
-- Rendering on the graphics card, in the app (**System > Device**: Auto, GPU or CPU) and on
-  the command line (`far render … --gpu`). Auto takes the card for scenes it renders as the
-  CPU does. The image builds up live and is denoised and bloomed by the CPU's filters. One
-  compute shader runs on Metal, DirectX 12 and Vulkan, 15 to 35 times faster than 16 CPU
-  cores, and gives the same image as the CPU's Enhanced mode within noise. It covers every shape, the
-  2008 material, GGX, glass with absorption, color textures, every kind of light, HDR
-  environments and the sun and sky, and depth of field. Maps, bump, coatings, subsurface,
-  spotlights, volumes and dispersion are still the CPU's, and a note says when a scene uses
-  them; Auto renders those scenes on the CPU. Software renderers are not used.
+- Rendering on the graphics card, in the app (**System > Device**: Auto, GPU or CPU) and on the
+  command line (`far render … --gpu`). Auto takes the card for scenes it renders as the CPU
+  does. The image builds up live and is denoised and bloomed by the CPU's filters. One compute
+  shader runs on Metal, DirectX 12 and Vulkan, 15 to 35 times faster than 16 CPU cores, and
+  gives the same image as the CPU's Enhanced mode within noise. It covers every shape, the 2008
+  material, GGX, glass with absorption, color textures, every kind of light, HDR environments
+  and the sun and sky, fog and smoke with light shafts, and depth of field. Maps, bump,
+  coatings, subsurface, spotlights and dispersion are still the CPU's, and a note says when a
+  scene uses them; Auto renders those scenes on the CPU. Software renderers are not used.
 
 ### Changed
 

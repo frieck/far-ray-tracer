@@ -5,8 +5,8 @@
 //!
 //! It follows the CPU's Enhanced integrator: every shape, the 2008 material, GGX and glass with
 //! absorption, color textures, every kind of light with one picked of many, the environment
-//! drawn by its light, MIS for GGX reflections, and depth of field. `render` reports what a
-//! scene uses beyond that (maps, bump, coat, sheen, subsurface, spotlights, volumes, dispersion),
+//! drawn by its light, MIS for GGX reflections, fog and smoke, and depth of field. `render` reports what a
+//! scene uses beyond that (maps, bump, coat, sheen, subsurface, spotlights, dispersion),
 //! and the CPU engine remains the reference.
 
 use bytemuck::{Pod, Zeroable};
@@ -31,7 +31,8 @@ struct Params {
     forward: [f32; 3], blades: u32,
     blade_rotation: f32, has_glass: u32, strength: f32, clamp: f32,
     max_depth: u32, glossy_max: u32, transmission_max: u32, env_tables: u32,
-    stride: u32, features: u32, glow_at: u32, pad: u32,
+    stride: u32, features: u32, glow_at: u32, volume_first: u32,
+    volume_count: u32, pad: [u32; 3],
 }
 
 #[repr(C)]
@@ -88,9 +89,11 @@ struct Packed {
     nodes: Vec<Node>,
     refs: Vec<u32>,
     tris: Vec<Tri>,
-    /// Grounds first, then the shapes the BVH holds.
+    /// Grounds first, then the shapes the BVH holds, then two entries per volume.
     shapes: Vec<GpuShape>,
     plane_count: u32,
+    volume_first: u32,
+    volume_count: u32,
     /// For each texture its first texel, width and height, then the texels as RGB bytes.
     texels: Vec<u32>,
     materials: Vec<Material>,
@@ -100,6 +103,8 @@ struct Packed {
 }
 
 const SHAPE: u32 = 0x8000_0000;
+/// Volumes the shader takes; its arrays for where a ray crosses them have this size.
+const MAX_VOLUMES: usize = 8;
 
 fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
     let mut notes = Vec::new();
@@ -203,7 +208,32 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
             u: l.edge_u.array(), area: l.area, v: l.edge_v.array(), pad1: 0, normal: l.normal.array(), pad2: 0,
         });
     }
-    if !scene.volumes.is_empty() { note("fog and volumes"); }
+
+    // Each volume as two entries after the shapes, never reached through the BVH: its shape
+    // (kind 0 a box with its axes and half sizes, 1 a sphere), then its medium, as trace.wgsl's
+    // volume functions read them.
+    let volume_first = shapes.len() as u32;
+    if scene.volumes.len() > MAX_VOLUMES { note("volumes past the eighth"); }
+    let volumes: Vec<_> = scene.volumes.iter().take(MAX_VOLUMES).collect();
+    for v in &volumes {
+        shapes.push(match v.shape {
+            far_core::volume::Shape::Box { center, axes, half } => GpuShape {
+                center: center.array(), kind: 0, ax: axes[0].array(), material: 0, ay: axes[1].array(), radius: 0.0,
+                az: axes[2].array(), pad1: 0, half: half.array(), pad2: 0,
+            },
+            far_core::volume::Shape::Sphere { center, radius } => GpuShape {
+                center: center.array(), kind: 1, radius, ..Zeroable::zeroed()
+            },
+        });
+        let (base, scale) = v.falloff.unwrap_or((0.0, 0.0));
+        let noise = v.noise.unwrap_or(far_core::volume::Noise { scale: 1.0, octaves: 0, coverage: 0.0, seed: 0 });
+        shapes.push(GpuShape {
+            center: v.albedo.array(), kind: v.falloff.is_some() as u32 | noise.octaves << 8,
+            ax: [v.density.max(0.0), v.anisotropy, base], material: noise.seed,
+            ay: [scale, noise.scale, noise.coverage], ..Zeroable::zeroed()
+        });
+    }
+    let volume_count = volumes.len() as u32;
 
     // Texels as the CPU stores them, which are bytes over 256.
     let mut texels: Vec<u32> = Vec::with_capacity(3 * scene.textures.len());
@@ -216,7 +246,7 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
         let byte = |x: f32| (x * 256.0).round().clamp(0.0, 255.0) as u32;
         texels.extend(t.image.iter().map(|c| byte(c.x) | byte(c.y) << 8 | byte(c.z) << 16));
     }
-    Packed { nodes, refs, tris, shapes, plane_count, texels, materials, lights, notes }
+    Packed { nodes, refs, tris, shapes, plane_count, volume_first, volume_count, texels, materials, lights, notes }
 }
 
 /// What the scene uses that the GPU renderer leaves out, as `Rendered::notes` reports it.
@@ -397,7 +427,8 @@ impl Gpu {
             glossy_max: op.glossy_depth.map_or(u32::MAX, |d| d.max(0) as u32),
             transmission_max: op.transmission_depth.map_or(u32::MAX, |d| d.max(0) as u32),
             env_tables: 0,
-            stride, features: features as u32, glow_at, pad: 0,
+            stride, features: features as u32, glow_at,
+            volume_first: packed.volume_first, volume_count: packed.volume_count, pad: [0; 3],
         };
 
         // The environment's sampling tables go after the texels, as float bits.
@@ -550,7 +581,9 @@ mod tests {
     fn the_gpu_lights_a_scene_as_the_cpu_does() {
         // 2008 lights, panels, solids, glass, GGX, textures with many lights, and the sky.
         for name in ["cornell-box.far", "2008/scene-b.far", "techniques/rectangular-lights.far", "techniques/primitives.far",
-            "materials/glass.far", "materials/ggx-materials.far", "christmas.far", "techniques/sun-and-sky.far"] {
+            "materials/glass.far", "materials/ggx-materials.far", "christmas.far", "techniques/sun-and-sky.far",
+            // Even fog, and smoke shaped by noise.
+            "techniques/light-shafts.far", "techniques/smoke.far"] {
             let Some((cpu, gpu)) = brightness(name) else { return };
             assert!(cpu > 0.02, "{name}: the CPU image is black");
             assert!((gpu - cpu).abs() < 0.05 * cpu + 0.005, "{name}: CPU {cpu} against GPU {gpu}");
@@ -559,8 +592,8 @@ mod tests {
 
     #[test]
     fn what_the_gpu_leaves_out_is_reported() {
-        let scene = Scene::open(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/techniques/smoke.far")).unwrap();
+        let scene = Scene::open(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/materials/bump-maps.far")).unwrap();
         let notes = pack(&scene, &Bvh::build(&scene)).notes;
-        assert!(notes.iter().any(|n| n.contains("volumes")), "{notes:?}");
+        assert!(notes.iter().any(|n| n.contains("bump")), "{notes:?}");
     }
 }
