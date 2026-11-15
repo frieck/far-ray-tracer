@@ -33,7 +33,7 @@ export function CausticStats({ report }: { report: CausticReport }) {
         <Row
           label="Emitted"
           value={count(report.emitted)}
-          hint="Photons sent from the lights toward glass and mirrors."
+          hint="Photons actually traced from supported lights and environments."
         />
         <Row
           label="Stored"
@@ -57,7 +57,11 @@ export function CausticStats({ report }: { report: CausticReport }) {
           hint="Average photons found around each point. More is smoother."
         />
       </dl>
-      {perLookup < LOW_PHOTONS_PER_LOOKUP && (
+      {report.emitted === 0 ? (
+        <p className="note">No photons were traced. Check for a supported light source and bounded reflective or glass objects. Environment photons do not support infinite reflective grounds.</p>
+      ) : report.stored === 0 ? (
+        <p className="note">No photons reached a diffuse surface after reflection or refraction. Check the lighting and scene geometry.</p>
+      ) : perLookup < LOW_PHOTONS_PER_LOOKUP && (
         <p className="note">Few photons per lookup: surfaces may look blotchy. Add photons or raise the radius.</p>
       )}
     </div>

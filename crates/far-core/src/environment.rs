@@ -150,6 +150,19 @@ impl EnvironmentMap {
         (self.width, self.height, &self.pixels)
     }
 
+    /// The sampling tables of `sample` for a GPU, in single precision: the share of light up
+    /// to the top of each row (height + 1 values), then for each row the share of that row up
+    /// to the left of each texel (width + 1 values per row). Kept per row, they keep their
+    /// precision in maps of millions of texels.
+    pub fn sampling_tables(&self) -> Vec<f32> {
+        let mut tables: Vec<f32> = self.rows.iter().map(|&r| r as f32).collect();
+        for y in 0..self.height {
+            let (start, mass) = (self.rows[y], (self.rows[y + 1] - self.rows[y]).max(f64::MIN_POSITIVE));
+            tables.extend((0..=self.width).map(|x| ((self.cdf[y * self.width + x] - start) / mass) as f32));
+        }
+        tables
+    }
+
     pub fn radiance(&self, direction: Vec3) -> Color {
         let (u, v) = Self::uv(direction);
         let x = u * self.width as f32 - 0.5;

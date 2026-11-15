@@ -33,8 +33,8 @@ bugs and the gain from new techniques can be seen separately.
 | **Smoke**: noise volumes and fog thinning with height | **Light shafts**: sunlight through a window |
 | ![Six-bladed bokeh](docs/images/bokeh.jpg) | ![OBJ and glTF models](docs/images/models.jpg) |
 | **Bokeh**: a six-bladed aperture | **Models**: an OBJ vase and a glTF table |
-| ![Still life: glassware, wine and fruit by a window](docs/images/still-life.jpg) | |
-| **Still life**: glassware, wine and fruit by a window at sunset | |
+| ![Still life: glassware, wine and fruit by a window](docs/images/still-life.jpg) | ![Glass and metal caustics from the physical sky](docs/images/environment-caustics.jpg) |
+| **Still life**: glassware, wine and fruit by a window at sunset | **Environment caustics**: sky light refracted by glass and reflected by metal |
 
 Each image is an example in the app, rendered by `tools/screenshots.sh` with AgX Punchy and
 Denoise.
@@ -252,9 +252,11 @@ Enhanced builds the image in passes, one sample per pixel each. Pixel position, 
 on the light and the reflection direction all vary per sample, so a single mechanism gives
 antialiasing, soft shadows and glossy reflection.
 
-Caustics are off by default. They work with glass and mirror objects, except that a light
-inside an object's bounding sphere, such as one above a large mirror floor, sends no photons
-at it. `assets/scenes/2008/caustics.far` shows the effect.
+Caustics are off by default. They work with glass and reflective objects, using local legacy
+lights, rectangular panels and environment lighting on the CPU. A legacy light inside an
+object's bounding sphere, such as one above a large mirror floor, sends no photons at it.
+`assets/scenes/2008/caustics.far` and `assets/scenes/techniques/environment-caustics.far`
+show the effect.
 
 | Preset | Photons | Radius | Look |
 | --- | ---: | ---: | --- |
@@ -634,8 +636,10 @@ Rules for all scenes:
 - Memory grows with the image: about 700 MB at 4096 × 4096 with Denoise, and about 2.6 GB at
   the largest size, 8192 × 8192. Caustics take at most 50 million photons and a model at most
   20 million triangles.
-- Volumes with noise are slow, and caustic photons come only from rectangular and legacy
-  lights, not from spherical lights, spotlights or the environment.
+- Volumes with noise are slow. CPU caustic photons come from rectangular and legacy
+  lights, HDRI maps and the physical sky, but not modern spherical lights or spotlights.
+  Photon tracing does not account for volumes or support infinite reflective grounds
+  as environment caustic sources.
 - The C++ reference reads `.far` scenes containing spheres, planes and meshes; it reports
   unsupported modern primitives and lights explicitly. Its JSON loader uses vendored
   nlohmann/json 3.12.0. It keeps its original Portuguese comments and file
@@ -828,38 +832,46 @@ and the expensive ones, under indirect light, do not converge with a strict thre
 few hundred passes; a loose one stops pixels with rare bright paths too early. So the app
 renders every pixel equally.
 
-### Rendering on the GPU (first cut)
+### Rendering on the GPU (command line)
 
 `far render scene.far -o image.png --enhanced --gpu` path traces on the graphics card. It is
-the start of GPU rendering, on the command line only; the app still renders on the CPU.
+on the command line only for now; the app still renders on the CPU.
 
 One compute shader, written in WGSL and run through wgpu, works on Metal (macOS), DirectX 12
 and Vulkan (Windows and Linux). The scene is packed into flat buffers, with the same BVH the
 CPU walks, and each dispatch adds one sample per pixel to a buffer of sums; the result comes
-back as linear light and goes through the CPU's tone mapping.
+back as linear light and goes through the CPU's tone mapping. The shader follows the CPU's
+Enhanced integrator step by step, so the two give the same image within noise.
 
-| Covered | Not yet (the scene is refused, or rendered without it and a note says so) |
+| Covered | Not yet (rendered without it, and a note says so) |
 | --- | --- |
-| Triangles and meshes, spheres, boxes, grounds | Cylinders, tubes, cones, tori (refused) |
-| 2008 materials, GGX roughness and metallic, glass | Textures and maps, bump, clear coat, sheen, anisotropy, subsurface, glass tint and dispersion |
-| 2008 lights, bulbs, panels, indirect light | Spotlight cones and IES, volumes, caustic photons |
-| The environment, reached by bounces | Sampling the environment by importance: a sun in the sky is noisy |
-| Pinhole camera | Depth of field, denoise, bloom, regions |
+| Every shape: meshes, spheres, boxes, cylinders, tubes, cones, tori, grounds | Displacement of the ground |
+| 2008 materials, GGX, glass with absorption and roughness, color textures | Roughness, metallic, emission and alpha maps; bump and normal maps; clear coat, sheen, anisotropy, subsurface; dispersion |
+| 2008 lights, bulbs, panels, one picked of many; indirect light with the 2008-light limits | Spotlight cones and IES, volumes, caustic photons |
+| HDR environments and the sun and sky, drawn by their light; MIS for GGX reflections | |
+| Depth of field and bokeh shapes | Denoise, bloom, regions |
 
 On an Apple M4 Max at 800 × 600 with 256 samples, against its 16 CPU cores:
 
 | Scene | CPU | GPU |
 | --- | ---: | ---: |
-| Cornell box | 9.6 s | 0.57 s |
-| Rectangular lights | 3.6 s | 0.12 s |
-| Scene B (2008 mesh) | 7.7 s | 0.26 s |
-| Rhino (2008 mesh) | 14.3 s | 0.28 s |
-| Glass | 7.9 s | 0.16 s |
+| Cornell box | 9.7 s | 0.48 s |
+| Rectangular lights | 3.9 s | 0.21 s |
+| Scene B (2008 mesh) | 8.1 s | 0.49 s |
+| Rhino (2008 mesh, textured glass) | 15.9 s | 0.97 s |
+| Glass | 9.2 s | 0.26 s |
+| Primitives (every solid) | 7.4 s | 0.29 s |
+| Sun and sky | 8.6 s | 0.30 s |
+| Showcase | 30.8 s | 1.2 s |
+| Christmas (46 lights) | 43.3 s | 2.6 s |
 
-The GPU does less per sample for now (no textures, simpler materials), so part of the gap will
-close as it catches up. Its images agree with the CPU's within noise where the features match
-(the Cornell box differs by an RMSE of 3 at 1024 samples); a test compares their brightness
-on three scenes, and is skipped on machines without a graphics card.
+The GPU is 15 to 35 times faster. A test renders eight example scenes on both and checks that
+their brightness agrees within 5%; it is skipped on machines without a graphics card. At
+512 samples and 320 × 200 the images differ by an RMSE of 1 to 8 (of 255), which is the noise
+of both. The Rhino is the exception, with the same brightness but an RMSE of 21; the cause is
+not found yet.
+Russian roulette on the GPU ends a path by everything it carries rather than by the last
+surface alone, so the same image comes with shorter paths, which suits how GPUs run.
 
 ### Tone mapping (Enhanced)
 
@@ -986,9 +998,26 @@ between environment and reflection samples. Loading builds the sampling table
 once; intensity and rotation edits reuse it. Classic and Fixed ignore environments,
 and the historical C++ reference rejects them explicitly.
 
-Environment lighting does not emit caustic photons in this version: photon mapping
-still uses local sphere and rectangle lights. Hiding the background produces black,
-not a transparent PNG.
+In Enhanced CPU rendering, **Caustics** traces photons from HDRI maps and the physical
+sky as well as local legacy sphere and rectangle lights. Both reflection and refraction
+can carry them onto diffuse surfaces. Environment intensity and rotation apply to photons;
+hiding the background does not turn off their illumination. Hiding the background produces
+black, not a transparent PNG.
+
+Environment photons start on a disk enclosing the bounded scene, with directions sampled
+from the environment brightness. Large scenes with small glass objects may need more photons.
+An infinite reflective ground cannot be enclosed, so scenes containing one retain path-traced
+environment lighting and skip environment photon emission. A diffuse infinite ground is supported.
+Empty maps are not queried, and the Photon map panel reports the number actually traced.
+
+Open **Techniques → Environment caustics** for glass and metal lit only by the sky.
+The scene is generated by `python3 tools/environment_caustics.py`; its saved settings enable
+Caustics. On the command line, use:
+
+```bash
+far render assets/scenes/techniques/environment-caustics.far -o out/environment-caustics.png \
+  --enhanced --caustics --photons 6000000 --caustic-radius 0.12 --samples 256 --denoise
+```
 
 #### Physical sun and sky
 

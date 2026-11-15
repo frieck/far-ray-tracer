@@ -18,6 +18,7 @@ SHOTS=(
   "coatings|materials/coatings.far|256|"
   "subsurface|materials/subsurface.far|256|"
   "spotlights|techniques/spotlights.far|256|"
+  "environment-caustics|techniques/environment-caustics.far|256|--caustics --photons 6000000 --caustic-radius 0.12"
   "sun-and-sky|techniques/sun-and-sky.far|256|"
   "smoke|techniques/smoke.far|192|"
   "light-shafts|techniques/light-shafts.far|192|"

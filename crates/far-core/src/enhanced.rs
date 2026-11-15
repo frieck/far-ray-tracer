@@ -809,9 +809,13 @@ impl<'a> Tracer<'a> {
                 let cosine = l.dot(a.original);
                 if cosine > 0. && l.dot(a.geo) > 0. && pdf > 0. {
                     let transmitted = self.visibility(a.pos + a.geo * SURFACE_OFFSET, l, MAX_DISTANCE);
+                    let environment_carried = self.caustics.is_some_and(|map| map.environment) && bounces > 0;
                     let response = if let Some(ggx) = a.ggx {
-                        ggx.evaluate(a.smooth, -d, l, a.color, a.m.ior,
-                            self.mis_light_pdf(pdf))
+                        if environment_carried {
+                            ggx.evaluate_diffuse(a.smooth, -d, l, a.color, a.m.ior)
+                        } else {
+                            ggx.evaluate(a.smooth, -d, l, a.color, a.m.ior, self.mis_light_pdf(pdf))
+                        }
                     } else {
                         a.color * (a.diff * cosine / PI)
                     };
@@ -1377,7 +1381,8 @@ impl<'a> Tracer<'a> {
                 if let Some(environment) = &self.ctx.scene.environment {
                     // Only camera misses obey background visibility. Reflection/refraction
                     // still see the environment; diffuse misses are estimated by NEE.
-                    if environment.config.visible || depth > 1 || bounces > 0 {
+                    let carried = self.caustics.is_some_and(|map| map.environment) && bounces > 0;
+                    if !carried && (environment.config.visible || depth > 1 || bounces > 0) {
                         color = environment.radiance(r.d);
                     }
                 }
@@ -1547,14 +1552,20 @@ fn photon_targets(scene: &Scene) -> Vec<PhotonTarget<'_>> {
 /// Legacy spheres aim photons at specular objects with their historical no-falloff
 /// weighting. Rectangular panels emit from uniform positions and cosine-weighted
 /// directions over their front hemisphere, with power proportional to their area.
-fn build_photon_map(scene: &Scene, kd: Option<&KdTree>, op: &Options, progress: &Progress) -> PhotonMap {
+/// Environments emit inward through a scene-sized disk, weighted by their direction PDF.
+fn build_photon_map(scene: &Scene, kd: Option<&KdTree>, op: &Options, progress: &Progress) -> (PhotonMap, u32) {
     let targets = photon_targets(scene);
     let sphere_area: f32 = targets.iter().map(|t| PI * t.radius * t.radius).sum();
     let rectangle_area: f32 = scene.rect_lights.iter().map(|light| PI * light.area).sum();
-    let total_area = sphere_area + rectangle_area;
+    let aperture = crate::photon_emission::EnvironmentAperture::for_scene(scene);
+    // Area-weighted source selection preserves the old local-light distribution;
+    // each environment photon is additionally divided by its direction density.
+    let environment_area = aperture.as_ref().map_or(0., |a| a.area());
+    let total_area = sphere_area + rectangle_area + environment_area;
+    let emitted = AtomicUsize::new(0);
     let radius = op.caustic_radius.max(1e-3);
     if total_area <= 0.0 || op.photons == 0 {
-        return PhotonMap::new(Vec::new(), radius);
+        return (PhotonMap::new(Vec::new(), radius), 0);
     }
     let power_per_photon = total_area / op.photons as f32;
     let batches = op.photons.div_ceil(PHOTON_BATCH);
@@ -1590,9 +1601,23 @@ fn build_photon_map(scene: &Scene, kd: Option<&KdTree>, op: &Options, progress: 
             t.ctx.rng = Twister::new(DEFAULT_SEED ^ (batch + 1).wrapping_mul(0x85eb_ca6b));
             let count = PHOTON_BATCH.min(op.photons - batch * PHOTON_BATCH);
             let mut photons = Vec::new();
+            let mut traced = 0;
             for photon_index in 0..count {
                 if photon_index % 64 == 0 && progress.cancel.load(Relaxed) { break; }
-                let mut pick = t.random() * total_area;
+                traced += 1;
+                let mut pick = t.random().min(f32::from_bits(0x3f7fffff)) * total_area;
+                if let Some(aperture) = &aperture {
+                    if pick >= sphere_area + rectangle_area {
+                        let environment = scene.environment.as_ref().unwrap();
+                        let (direction, radiance, pdf) = environment.sample(t.random(), t.random());
+                        let origin = aperture.origin(direction, t.random(), t.random());
+                        // Flux / (source probability * position PDF * direction PDF * count).
+                        // The gather omits Lambert's 1/PI, so include it here.
+                        let power = radiance * (power_per_photon / (PI * pdf));
+                        t.trace_photon(Ray { o: origin, d: -direction }, power, &mut photons);
+                        continue;
+                    }
+                }
                 // The legacy RNG can round to 1.0. At the upper endpoint a
                 // sphere-only scene must still select its last spherical target.
                 if !scene.rect_lights.is_empty() && pick >= sphere_area {
@@ -1636,6 +1661,7 @@ fn build_photon_map(scene: &Scene, kd: Option<&KdTree>, op: &Options, progress: 
                 let color = scene.materials[target.light.material].color;
                 t.trace_photon(Ray { o: start, d: dir }, color * power_per_photon, &mut photons);
             }
+            emitted.fetch_add(traced, Relaxed);
             finished.lock().unwrap().push((batch, photons));
         }
         progress.rays.fetch_add(t.ctx.rays, Relaxed);
@@ -1648,10 +1674,14 @@ fn build_photon_map(scene: &Scene, kd: Option<&KdTree>, op: &Options, progress: 
         worker();
     });
 
-    if progress.cancel.load(Relaxed) { return PhotonMap::new(Vec::new(), radius); }
+    if progress.cancel.load(Relaxed) {
+        return (PhotonMap::new(Vec::new(), radius), emitted.load(Relaxed) as u32);
+    }
     let mut batches = finished.into_inner().unwrap();
     batches.sort_by_key(|(batch, _)| *batch);
-    PhotonMap::new(batches.into_iter().flat_map(|(_, photons)| photons).collect(), radius)
+    let mut map = PhotonMap::new(batches.into_iter().flat_map(|(_, photons)| photons).collect(), radius);
+    map.environment = aperture.is_some();
+    (map, emitted.load(Relaxed) as u32)
 }
 
 /// Stride that walks the pixel strata in a scattered order, so a partial image
@@ -1976,9 +2006,9 @@ pub fn render_continuing(scene: &Scene, kd: Option<&KdTree>, op: &Options, image
     progress.photons_gathered.store(0, Relaxed);
     let photon_map = (op.caustics && !fixed).then(|| {
         let start = Instant::now();
-        let map = build_photon_map(scene, kd, op, progress);
+        let (map, emitted) = build_photon_map(scene, kd, op, progress);
         *progress.photon_stats.lock().unwrap() = Some(PhotonStats {
-            emitted: op.photons,
+            emitted,
             stored: map.len(),
             trace_ms: start.elapsed().as_millis() as u64,
             memory_bytes: map.memory_bytes(),
@@ -2000,6 +2030,8 @@ pub fn render_continuing(scene: &Scene, kd: Option<&KdTree>, op: &Options, image
         ..crate::camera::Camera::default()
     };
     let caustics_only = op.caustics_only && photon_map.is_some();
+    // Empty maps must not trigger millions of pointless gathers or suppress light paths.
+    let photon_map = photon_map.filter(|map| !map.is_empty());
     // With caustics, photons carry the light that goes through glass, so shadow rays
     // must not let it through as well.
     let has_glass = !fixed && photon_map.is_none() && scene.materials.iter().any(|m| m.refr > 0.0);
@@ -2676,6 +2708,101 @@ mod tests {
         assert_eq!(run(display, &last), 128);
         // Without an HDR environment, a sample is capped at 6 before the average.
         assert_eq!(run(Display { cap: Some(MAX_SAMPLE_RADIANCE), ..display }, &first), 48);
+    }
+
+    #[test]
+    fn environment_photons_reflect_refract_and_preserve_energy() {
+        let base = r#"{"lights":[],"objects":[
+            {"type":"ground","position":[0,-1,0],"normal":[0,1,0],"material":{"specular":0}},
+            {"type":"sphere","center":[0,0,5],"radius":1,"material":MATERIAL}]}"#;
+        for material in [
+            r#"{"color":[1,1,1],"diffuse":0,"specular":0,"refraction":1,"ior":1.5}"#,
+            r#"{"color":[1,1,1],"diffuse":0,"specular":0,"reflection":1}"#,
+            r#"{"color":[1,1,1],"surface":{"preset":"metal","roughness":0.1}}"#,
+        ] {
+            let mut scene = test_scene(&base.replace("MATERIAL", material));
+            set_constant_environment(&mut scene, false);
+            let options = Options { photons: 40_000, threads: 1, ..Options::default() };
+            let (map, emitted) = build_photon_map(&scene, None, &options, &Progress::default());
+            assert_eq!(emitted, options.photons);
+            assert!(map.len() > 100 && map.environment);
+            let power = map.total_power().x;
+            let (more, _) = build_photon_map(&scene, None,
+                &Options { photons: 80_000, threads: 4, ..options.clone() }, &Progress::default());
+            assert!((more.total_power().x / power - 1.).abs() < 0.08);
+            scene.environment.as_mut().unwrap().config.intensity = 2.;
+            let (brighter, _) = build_photon_map(&scene, None, &options, &Progress::default());
+            assert!((brighter.total_power().x / power - 2.).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn infinite_reflectors_keep_environment_paths_instead_of_an_incomplete_map() {
+        let mut scene = test_scene(r#"{"lights":[],"objects":[
+            {"type":"ground","material":{"reflection":1}},
+            {"type":"sphere","center":[0,2,5],"radius":1,"material":{"refraction":1}}
+        ]}"#);
+        set_constant_environment(&mut scene, true);
+        let options = Options { photons: 1000, ..Options::default() };
+        let (map, emitted) = build_photon_map(&scene, None, &options, &Progress::default());
+        assert!(map.is_empty() && !map.environment);
+        assert_eq!(emitted, 0);
+    }
+
+    #[test]
+    fn sky_and_hdr_photons_are_deterministic_and_cancellable() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/techniques");
+        let mut scene = Scene::open(&root.join("environment-caustics.far")).unwrap();
+        let hdr = Scene::open(&root.join("hdri-studio.far")).unwrap();
+        let sky = scene.environment.clone();
+        for environment in [sky, hdr.environment] {
+            scene.environment = environment;
+            let options = Options { photons: 40_000, threads: 1, ..Options::default() };
+            let (map, emitted) = build_photon_map(&scene, None, &options, &Progress::default());
+            assert_eq!(emitted, options.photons);
+            assert!(map.environment && !map.is_empty());
+            let (parallel, _) = build_photon_map(&scene, None,
+                &Options { threads: 4, ..options.clone() }, &Progress::default());
+            assert_eq!(parallel.len(), map.len());
+            assert_eq!(parallel.total_power(), map.total_power());
+            let progress = Progress::default();
+            progress.cancel.store(true, Relaxed);
+            let (cancelled, count) = build_photon_map(&scene, None, &options, &progress);
+            assert!(cancelled.is_empty());
+            assert_eq!(count, 0);
+            scene.environment.as_mut().unwrap().config.intensity = 0.;
+            let (disabled, count) = build_photon_map(&scene, None, &options, &Progress::default());
+            assert!(disabled.is_empty());
+            assert_eq!(count, 0);
+        }
+    }
+
+    #[test]
+    fn empty_photon_pass_reports_zero_without_lookups() {
+        let scene = test_scene(r#"{"lights":[],"objects":[]}"#);
+        let options = Options { mode: Mode::Enhanced, caustics: true, photons: 1000,
+            width: 8, height: 8, samples: 1, ..Options::default() };
+        let image = Image::new(8, 8);
+        let progress = Progress::default();
+        render(&scene, None, &options, &image, &progress);
+        let stats = progress.photon_stats.lock().unwrap().unwrap();
+        assert_eq!(stats.emitted, 0);
+        assert_eq!(stats.stored, 0);
+        assert_eq!(stats.memory_bytes, 0);
+        assert_eq!(progress.photon_lookups.load(Relaxed), 0);
+    }
+
+    #[test]
+    fn environment_photon_paths_replace_only_secondary_environment_light() {
+        let mut scene = test_scene(r#"{"lights":[],"objects":[]}"#);
+        set_constant_environment(&mut scene, true);
+        let mut map = PhotonMap::new(Vec::new(), 0.1);
+        map.environment = true;
+        let mut tracer = environment_tracer(&scene, 5);
+        tracer.caustics = Some(&map);
+        let ray = Ray { o: Vec3::default(), d: Vec3::new(0., 0., 1.) };
+        assert_eq!(tracer.trace(&ray, 2, 0, true).0, Color::new(0.25, 0.25, 0.25));
+        assert_eq!(tracer.trace(&ray, 2, 1, true).0, Color::default());
     }
 
     #[test]

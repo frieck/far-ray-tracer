@@ -12,6 +12,7 @@ pub mod ggx;
 pub mod surface;
 pub mod camera;
 pub mod caustics;
+mod photon_emission;
 pub mod denoise;
 pub mod enhanced;
 pub mod engine;

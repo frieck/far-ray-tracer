@@ -31,6 +31,9 @@ Visual gain for the effort:
 
 ## Light and atmosphere
 
+- [x] **Environment caustics on the CPU**: emit photons from HDRI maps and the physical sky,
+  through bounded reflective and refractive objects onto diffuse surfaces.
+
 - [x] **Volumes**: fog, smoke and light shafts through the air, in boxes and spheres of even
   density. Medium to high.
 - [x] **Uneven volumes**: smoke and clouds from a density grid or noise, and fog that thins with
@@ -70,15 +73,15 @@ Visual gain for the effort:
      2008 stage still walks its own KD-Tree; since it no longer has to match the original, it
      can move to the BVH, and the KD-Tree and the code kept only for that match (`--exact`,
      the ordered random numbers, `npm run validate`) can go.
-  2. ~~The scene in flat buffers the GPU reads~~ (done in `crates/far-gpu`: the BVH, triangles,
-     spheres and boxes, grounds, materials, lights and the environment; textures still to come).
+  2. ~~The scene in flat buffers the GPU reads~~ (done in `crates/far-gpu`: the BVH, every
+     shape, grounds, materials, color textures, lights and the environment's sampling tables).
   3. The GPU for previews first, camera movement and the material ball. Done so far: a compute
-     shader path tracer behind `far render --gpu`, with diffuse, GGX-like and glass materials,
-     every light and indirect light. Left: the other solids (cylinder, tube, cone, torus),
-     picking one light of many, sampling the environment by importance (a sun in the sky is
-     noisy now), textures, and using it from the app.
-  4. Parity, feature by feature, each compared with the CPU against a reference: glass with
-     absorption, bump and normal maps, depth of field, coat, sheen, subsurface, volumes.
+     shader path tracer behind `far render --gpu` that follows the Enhanced integrator (every
+     shape, 2008, GGX with MIS, glass with absorption, textures, light picking, environment
+     sampling, depth of field). Left: using it from the app.
+  4. Parity, feature by feature, each compared with the CPU against a reference. Left: maps
+     (roughness, metallic, emission, alpha), bump and normal maps, coat, sheen, anisotropy,
+     subsurface, spotlight cones and IES, volumes, dispersion.
   5. Final renders on the GPU, as a Device setting; scenes using what the GPU lacks (caustic
      photons, dispersion, the displaced ground) fall back to the CPU and say so.
 

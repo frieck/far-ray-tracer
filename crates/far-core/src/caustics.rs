@@ -15,6 +15,8 @@ pub struct Photon {
 
 /// Photons sorted into a hashed grid, so a lookup only reads nearby ones.
 pub struct PhotonMap {
+    /// Whether environment paths are represented, for avoiding duplicate light.
+    pub(crate) environment: bool,
     photons: Vec<Photon>,
     /// `bucket_start[b]..bucket_start[b + 1]` are the photons of bucket `b`.
     bucket_start: Vec<u32>,
@@ -59,6 +61,9 @@ impl PhotonMap {
     }
 
     pub fn new(mut photons: Vec<Photon>, radius: f32) -> Self {
+        if photons.is_empty() {
+            return Self { photons, bucket_start: Vec::new(), radius, cell: 2. * radius, environment: false };
+        }
         // With cells twice the radius, a lookup touches at most two cells per axis.
         let cell = 2.0 * radius;
         let buckets = photons.len().next_power_of_two().max(1024);
@@ -74,7 +79,12 @@ impl PhotonMap {
         for i in 0..buckets {
             bucket_start[i + 1] += bucket_start[i];
         }
-        Self { photons, bucket_start, radius, cell }
+        Self { photons, bucket_start, radius, cell, environment: false }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn total_power(&self) -> Color {
+        self.photons.iter().fold(Color::default(), |sum, photon| sum + photon.power)
     }
 
     pub fn len(&self) -> usize {

@@ -9,18 +9,29 @@ and moves under its version when that version is released.
 
 ### Added
 
-- A first cut of rendering on the graphics card, on the command line: `far render … --gpu`.
-  One compute shader runs on Metal, DirectX 12 and Vulkan, 17 to 50 times faster than 16 CPU
-  cores on the scenes it covers. It traces triangles, spheres, boxes and grounds, with
-  diffuse, GGX-like and glass materials and every kind of light; textures, cylinders and the
-  other solids, volumes, coatings and subsurface are still the CPU's, and the app does not use
-  it yet.
+- Caustics from HDRI maps and the physical sun and sky in Enhanced CPU rendering, through
+  both glass and reflective objects. Includes an Environment caustics example. Scenes with
+  infinite reflective grounds still use path tracing for the environment.
+
+- Rendering on the graphics card, on the command line: `far render … --gpu`. One compute
+  shader runs on Metal, DirectX 12 and Vulkan, 15 to 35 times faster than 16 CPU cores, and
+  gives the same image as the CPU's Enhanced mode within noise. It covers every shape, the
+  2008 material, GGX, glass with absorption, color textures, every kind of light, HDR
+  environments and the sun and sky, and depth of field. Maps, bump, coatings, subsurface,
+  spotlights, volumes and dispersion are still the CPU's, and a note says when a scene uses
+  them; the app does not use the GPU yet.
 
 ### Changed
 
 - Fixed and Enhanced modes find what a ray hits with a bounding volume hierarchy (BVH) instead
   of the KD-Tree: scenes are ready 20 to 90 times sooner, and meshes render 10% to 35% faster.
   It is also the first step toward rendering on the GPU. The 2008 stage keeps its KD-Tree.
+
+### Fixed
+
+- The Photon map panel now reports photons actually traced instead of the requested count,
+  and explains empty maps without recommending more photons. Empty maps no longer cause
+  unnecessary lookups or suppress lighting. This affected the beta releases and 3.0.0-rc.1.
 
 ## [3.0.0-rc.1] - 2026-11-09
 

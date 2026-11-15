@@ -3,9 +3,11 @@
 //! dispatch adds one camera sample per pixel to a buffer of sums, which is read back as linear
 //! light; tone mapping and denoising stay with the CPU engine.
 //!
-//! This is the first cut, for previews: triangles, spheres, boxes and grounds; diffuse, GGX-like
-//! and glass materials without textures; every kind of light; the environment by bounces only.
-//! `render` reports what a scene uses beyond that, and the CPU engine remains the reference.
+//! It follows the CPU's Enhanced integrator: every shape, the 2008 material, GGX and glass with
+//! absorption, color textures, every kind of light with one picked of many, the environment
+//! drawn by its light, MIS for GGX reflections, and depth of field. `render` reports what a
+//! scene uses beyond that (maps, bump, coat, sheen, subsurface, spotlights, volumes, dispersion),
+//! and the CPU engine remains the reference.
 
 use bytemuck::{Pod, Zeroable};
 use far_core::bvh::Bvh;
@@ -24,6 +26,11 @@ struct Params {
     dy: [f32; 3], max_bounces: u32,
     plane_count: u32, light_count: u32, has_env: u32, env_visible: u32,
     exposure: f32, cap: f32, env_intensity: f32, env_rotation: f32,
+    right: [f32; 3], aperture: f32,
+    up: [f32; 3], focus: f32,
+    forward: [f32; 3], blades: u32,
+    blade_rotation: f32, has_glass: u32, strength: f32, clamp: f32,
+    max_depth: u32, glossy_max: u32, transmission_max: u32, env_tables: u32,
 }
 
 #[repr(C)]
@@ -34,11 +41,12 @@ struct Node { low: [f32; 3], first: u32, high: [f32; 3], count: u32 }
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Tri {
     p0: [f32; 3], material: u32,
-    e1: [f32; 3], pad1: u32,
-    e2: [f32; 3], pad2: u32,
-    n0: [f32; 3], pad3: u32,
-    n1: [f32; 3], pad4: u32,
-    n2: [f32; 3], pad5: u32,
+    e1: [f32; 3], u0: f32,
+    e2: [f32; 3], v0: f32,
+    n0: [f32; 3], u1: f32,
+    n1: [f32; 3], v1: f32,
+    n2: [f32; 3], u2: f32,
+    v2: f32, pad: [u32; 3],
 }
 
 #[repr(C)]
@@ -53,16 +61,16 @@ struct GpuShape {
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct Plane { point: [f32; 3], material: u32, normal: [f32; 3], pad: u32 }
-
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
 struct Material {
     color: [f32; 3], kind: u32,
     emission: [f32; 3], roughness: f32,
     metallic: f32, ior: f32, diff: f32, refl: f32,
-    spec: f32, pad: [u32; 3],
+    spec: f32, texture: u32, u_scale: f32, v_scale: f32,
+    refr: f32, absorption_depth: f32, pad: [u32; 2],
 }
+
+/// No texture, in Material::texture.
+const NO_TEXTURE: u32 = u32::MAX;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -79,8 +87,11 @@ struct Packed {
     nodes: Vec<Node>,
     refs: Vec<u32>,
     tris: Vec<Tri>,
+    /// Grounds first, then the shapes the BVH holds.
     shapes: Vec<GpuShape>,
-    planes: Vec<Plane>,
+    plane_count: u32,
+    /// For each texture its first texel, width and height, then the texels as RGB bytes.
+    texels: Vec<u32>,
     materials: Vec<Material>,
     lights: Vec<Light>,
     /// What the scene uses that this renderer leaves out.
@@ -89,7 +100,7 @@ struct Packed {
 
 const SHAPE: u32 = 0x8000_0000;
 
-fn pack(scene: &Scene, bvh: &Bvh) -> Result<Packed, String> {
+fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
     let mut notes = Vec::new();
     let mut note = |text: &str| {
         if !notes.iter().any(|n| n == text) {
@@ -98,20 +109,32 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Result<Packed, String> {
     };
     // Where each primitive went: a triangle index, or a shape index with the top bit set.
     let mut slot = vec![u32::MAX; scene.prims.len()];
-    let (mut tris, mut shapes, mut planes) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut tris, mut shapes) = (Vec::new(), Vec::new());
+    // Grounds, as shapes of kind 6 with their texture axes, ahead of the others.
+    for prim in &scene.prims {
+        if let Primitive::Ground(g) = prim {
+            shapes.push(GpuShape {
+                center: g.point.array(), kind: 6, ax: g.normal.array(), material: g.material as u32,
+                ay: g.u_axis.array(), radius: 0.0, az: g.v_axis.array(), pad1: 0, half: [0.0; 3], pad2: 0,
+            });
+        }
+    }
+    let plane_count = shapes.len() as u32;
     for (i, prim) in scene.prims.iter().enumerate() {
         match prim {
             Primitive::Triangle(t) => {
-                let [a, b, c] = t.vertices.map(|v| scene.vertices[v as usize].pos);
+                let [va, vb, vc] = t.vertices.map(|v| scene.vertices[v as usize]);
+                let (a, b, c) = (va.pos, vb.pos, vc.pos);
                 let normals = scene.corner_normals.get(i).copied().unwrap_or_default().map(|n| {
                     if n.x.is_finite() && n.y.is_finite() && n.z.is_finite() { n.array() } else { [0.0; 3] }
                 });
                 slot[i] = tris.len() as u32;
                 tris.push(Tri {
                     p0: a.array(), material: t.material as u32,
-                    e1: (b - a).array(), pad1: 0,
-                    e2: (c - a).array(), pad2: 0,
-                    n0: normals[0], pad3: 0, n1: normals[1], pad4: 0, n2: normals[2], pad5: 0,
+                    e1: (b - a).array(), u0: va.u,
+                    e2: (c - a).array(), v0: va.v,
+                    n0: normals[0], u1: vb.u, n1: normals[1], v1: vb.v, n2: normals[2], u2: vc.u,
+                    v2: vc.v, pad: [0; 3],
                 });
             }
             Primitive::Sphere(s) => {
@@ -121,30 +144,31 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Result<Packed, String> {
                     ay: [0.0, 1.0, 0.0], radius: s.radius, az: [0.0, 0.0, 1.0], pad1: 0, half: [s.radius; 3], pad2: 0,
                 });
             }
-            Primitive::Solid(s) => match s.shape {
-                Shape::Box { half } => {
-                    let [ax, ay, az] = s.axes().map(|a| a.array());
-                    slot[i] = SHAPE | shapes.len() as u32;
-                    shapes.push(GpuShape {
-                        center: s.center.array(), kind: 1, ax, material: s.material as u32,
-                        ay, radius: 0.0, az, pad1: 0, half: half.array(), pad2: 0,
-                    });
-                }
-                _ => return Err("the GPU renderer does not trace cylinders, tubes, cones and tori yet".into()),
-            },
-            Primitive::Ground(g) => planes.push(Plane {
-                point: g.point.array(), material: g.material as u32, normal: g.normal.array(), pad: 0,
-            }),
+            Primitive::Solid(s) => {
+                // The kinds and fields trace.wgsl reads: see its Shape.
+                let (kind, radius, half) = match s.shape {
+                    Shape::Box { half } => (1, 0.0, half.array()),
+                    Shape::Cylinder { radius, half_height } => (2, radius, [0.0, half_height, 0.0]),
+                    Shape::Tube { radius, inner_radius, half_height } => (3, radius, [inner_radius, half_height, 0.0]),
+                    Shape::Cone { radius, half_height } => (4, radius, [0.0, half_height, 0.0]),
+                    Shape::Torus { major_radius, minor_radius } => (5, major_radius, [minor_radius, minor_radius, 0.0]),
+                };
+                let [ax, ay, az] = s.axes().map(|a| a.array());
+                slot[i] = SHAPE | shapes.len() as u32;
+                shapes.push(GpuShape { center: s.center.array(), kind, ax, material: s.material as u32, ay, radius, az, pad1: 0, half, pad2: 0 });
+            }
+            Primitive::Ground(_) => {}
         }
     }
     let nodes = bvh.nodes.iter().map(|n| Node { low: n.min, first: n.first, high: n.max, count: n.count }).collect();
     let refs = bvh.prims.iter().map(|&p| slot[p as usize]).collect();
 
     let materials = scene.materials.iter().map(|m| {
-        if m.texture.is_some() || m.maps != Default::default() { note("textures and maps"); }
+        if m.maps != Default::default() { note("roughness, metallic, emission and alpha maps"); }
         if m.bump.is_some() { note("bump and normal maps"); }
         if m.subsurface.is_some() { note("subsurface scattering"); }
         if m.displacement.is_some() { note("displacement of the ground"); }
+        if m.glass.is_some_and(|g| g.abbe.is_some()) { note("dispersion in glass"); }
         let emission = m.maps.emission.map_or([0.0; 3], |e| e.color.array());
         let (kind, roughness, metallic) = match (&m.ggx, m.refr > 0.0) {
             (_, true) => (2, m.glass.map_or(0.0, |g| g.roughness), 0.0),
@@ -156,9 +180,11 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Result<Packed, String> {
         };
         // A 2008 material may reflect and scatter more light than arrives; the CPU scales its
         // parts down by the same factor.
-        let k = if kind == 0 { 1.0 / (m.diff + m.refl + m.refr).max(1.0).sqrt() } else { 1.0 };
+        let k = if m.ggx.is_none() { 1.0 / (m.diff + m.refl + m.refr).max(1.0).sqrt() } else { 1.0 };
         Material { color: m.color.array(), kind, emission, roughness, metallic, ior: m.ior, diff: m.diff * k, refl: m.refl * k,
-            spec: if kind == 0 { m.spec } else { 0.0 }, pad: [0; 3] }
+            spec: if kind == 0 { m.spec } else { 0.0 }, texture: m.texture.map_or(NO_TEXTURE, |t| t as u32),
+            u_scale: m.ru_scale, v_scale: m.rv_scale, refr: m.refr * k,
+            absorption_depth: m.glass.and_then(|g| g.absorption_depth).unwrap_or(0.0), pad: [0; 2] }
     }).collect();
 
     let color = |material: usize| scene.materials[material].color.array();
@@ -177,7 +203,19 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Result<Packed, String> {
         });
     }
     if !scene.volumes.is_empty() { note("fog and volumes"); }
-    Ok(Packed { nodes, refs, tris, shapes, planes, materials, lights, notes })
+
+    // Texels as the CPU stores them, which are bytes over 256.
+    let mut texels: Vec<u32> = Vec::with_capacity(3 * scene.textures.len());
+    let mut first = 3 * scene.textures.len() as u32;
+    for t in &scene.textures {
+        texels.extend([first, t.width as u32, t.height as u32]);
+        first += t.image.len() as u32;
+    }
+    for t in &scene.textures {
+        let byte = |x: f32| (x * 256.0).round().clamp(0.0, 255.0) as u32;
+        texels.extend(t.image.iter().map(|c| byte(c.x) | byte(c.y) << 8 | byte(c.z) << 16));
+    }
+    Packed { nodes, refs, tris, shapes, plane_count, texels, materials, lights, notes }
 }
 
 /// What a GPU render gives back.
@@ -203,7 +241,7 @@ pub fn render(scene: &Scene, bvh: &Bvh, op: &Options, cancel: &dyn Fn() -> bool)
 }
 
 async fn render_async(scene: &Scene, bvh: &Bvh, op: &Options, cancel: &dyn Fn() -> bool) -> Result<Rendered, String> {
-    let packed = pack(scene, bvh)?;
+    let packed = pack(scene, bvh);
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() })
@@ -229,13 +267,14 @@ async fn render_async(scene: &Scene, bvh: &Bvh, op: &Options, cancel: &dyn Fn() 
     let pose = op.pose.unwrap_or(scene.camera.pose());
     let view = View::new(&pose, w, h);
     let environment = scene.environment.as_ref().filter(|e| e.active());
+    let bounces = far_core::Bounces::resolve(scene, op);
     let mut params = Params {
         origin: view.origin.array(), width: w,
         corner: view.plane_point(-1.0, 1.0).array(), height: h,
         dx: (view.right * (2.0 * view.half_width / w as f32)).array(), pass_index: 0,
         dy: (view.up * (-2.0 * view.half_height / h as f32)).array(),
-        max_bounces: op.max_bounces.unwrap_or(far_core::Bounces::for_scene(scene).max).min(64),
-        plane_count: packed.planes.len() as u32, light_count: packed.lights.len() as u32,
+        max_bounces: bounces.max,
+        plane_count: packed.plane_count, light_count: packed.lights.len() as u32,
         has_env: environment.is_some() as u32,
         env_visible: environment.is_some_and(|e| e.config.visible) as u32,
         // The CPU's compensation for 2008 lights, which add up with no falloff.
@@ -243,7 +282,25 @@ async fn render_async(scene: &Scene, bvh: &Bvh, op: &Options, cancel: &dyn Fn() 
         cap: if environment.is_some() { 1e9 } else { 6.0 },
         env_intensity: environment.map_or(0.0, |e| e.config.intensity),
         env_rotation: environment.map_or(0.0, |e| e.config.rotation.rem_euclid(360.0).to_radians()),
+        right: view.right.array(), aperture: op.aperture.unwrap_or(scene.camera.aperture),
+        up: view.up.array(), focus: op.focus_distance.unwrap_or(scene.camera.focus_distance),
+        forward: view.forward.array(), blades: op.blades.unwrap_or(scene.camera.blades),
+        blade_rotation: op.blade_rotation.unwrap_or(scene.camera.blade_rotation).to_radians(),
+        has_glass: scene.materials.iter().any(|m| m.refr > 0.0) as u32,
+        strength: bounces.strength, clamp: bounces.clamp,
+        // Mirror-like and glass segments of a path, as the CPU counts depth from 1.
+        max_depth: op.max_depth.max(1) as u32 - 1,
+        glossy_max: op.glossy_depth.map_or(u32::MAX, |d| d.max(0) as u32),
+        transmission_max: op.transmission_depth.map_or(u32::MAX, |d| d.max(0) as u32),
+        env_tables: 0,
     };
+
+    // The environment's sampling tables go after the texels, as float bits.
+    let mut texels = packed.texels;
+    if let Some(e) = environment {
+        params.env_tables = texels.len() as u32;
+        texels.extend(e.map.sampling_tables().iter().map(|v| v.to_bits()));
+    }
 
     // The environment as a texture; a single black texel when there is none.
     let (env_w, env_h, env_data): (u32, u32, Vec<f32>) = match environment {
@@ -280,7 +337,7 @@ async fn render_async(scene: &Scene, bvh: &Bvh, op: &Options, cancel: &dyn Fn() 
         storage(&device, "refs", &packed.refs),
         storage(&device, "tris", &packed.tris),
         storage(&device, "shapes", &packed.shapes),
-        storage(&device, "planes", &packed.planes),
+        storage(&device, "texels", &texels),
         storage(&device, "materials", &packed.materials),
         storage(&device, "lights", &packed.lights),
     ];
@@ -393,18 +450,19 @@ mod tests {
 
     #[test]
     fn the_gpu_lights_a_scene_as_the_cpu_does() {
-        for name in ["cornell-box.far", "2008/scene-b.far", "techniques/rectangular-lights.far"] {
+        // 2008 lights, panels, solids, glass, GGX, textures with many lights, and the sky.
+        for name in ["cornell-box.far", "2008/scene-b.far", "techniques/rectangular-lights.far", "techniques/primitives.far",
+            "materials/glass.far", "materials/ggx-materials.far", "christmas.far", "techniques/sun-and-sky.far"] {
             let Some((cpu, gpu)) = brightness(name) else { return };
             assert!(cpu > 0.02, "{name}: the CPU image is black");
-            assert!((gpu - cpu).abs() < 0.08 * cpu + 0.005, "{name}: CPU {cpu} against GPU {gpu}");
+            assert!((gpu - cpu).abs() < 0.05 * cpu + 0.005, "{name}: CPU {cpu} against GPU {gpu}");
         }
     }
 
     #[test]
-    fn unsupported_shapes_are_refused_with_a_reason() {
-        let scene = Scene::open(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/techniques/primitives.far")).unwrap();
-        let op = Options { width: 16, height: 12, samples: 1, ..Options::default() };
-        let error = render(&scene, &Bvh::build(&scene), &op, &|| false).err().unwrap();
-        assert!(error.contains("cylinders"), "{error}");
+    fn what_the_gpu_leaves_out_is_reported() {
+        let scene = Scene::open(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/techniques/smoke.far")).unwrap();
+        let notes = pack(&scene, &Bvh::build(&scene)).notes;
+        assert!(notes.iter().any(|n| n.contains("volumes")), "{notes:?}");
     }
 }
