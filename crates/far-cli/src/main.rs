@@ -219,10 +219,15 @@ fn render_on_gpu(scene: &Scene, options: &Options, output: &str, t0: Instant) {
     for note in &rendered.notes {
         println!("note: the GPU renderer leaves out {note}");
     }
-    let rgb: Vec<u8> = rendered.mean.iter()
-        .flat_map(|&mean| far_core::tonemap::display(options.tone_mapping, mean))
-        .map(|v| (v * 255.0 + 0.5).clamp(0.0, 255.0) as u8)
-        .collect();
+    // Shown as the CPU shows its own light: tone mapping, then the denoiser and bloom.
+    let options = Options { region: None, ..options.clone() };
+    let image = far_core::Image::new(options.width, options.height);
+    let progress = far_core::Progress::default();
+    far_core::enhanced::redisplay(&rendered.sums.accumulation(&options), scene, &options, &image, &progress);
+    if let Some(denoiser) = *progress.denoiser.lock().unwrap() {
+        println!("denoiser={}", if denoiser == far_core::engine::Denoiser::Oidn { "oidn" } else { "builtin" });
+    }
+    let rgb: Vec<u8> = image.rgba().chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
     image::RgbImage::from_raw(options.width, options.height, rgb)
         .expect("image size")
         .save(output)

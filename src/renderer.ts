@@ -44,7 +44,9 @@ function summarize(result: RenderResult, mode: string): string {
   } else {
     if (result.kd_ms !== null) parts.push(`${structureName(mode)} ${formatTime(result.kd_ms)}`);
     if (result.continued_from) parts.push(`Continued from pass ${result.continued_from}`);
-    parts.push(`Render ${formatTime(result.render_ms)}`, formatRays(result.rays));
+    parts.push(`Render ${formatTime(result.render_ms)}`, result.gpu ? `GPU: ${result.gpu}` : formatRays(result.rays));
+    if (result.gpu && result.gpu_notes?.length) parts.push(`The GPU leaves out ${result.gpu_notes.join(", ")}`);
+    if (result.cpu_reason) parts.push(result.cpu_reason);
   }
   if (result.denoiser) parts.push(result.denoiser === "oidn" ? "Denoised by Open Image Denoise" : "Denoised");
   return (result.cancelled ? "Cancelled · " : "") + parts.join(" · ");

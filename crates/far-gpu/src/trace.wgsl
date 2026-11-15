@@ -23,6 +23,10 @@ struct Params {
     max_depth: u32, glossy_max: u32, transmission_max: u32,
     // Where the environment's sampling tables start in `texels`: far-core's sampling_tables.
     env_tables: u32,
+    // What `accum` holds per pixel, in vec4s: `stride` of them, the light first; the first
+    // hits next when `features` is set, for the denoiser; the light for bloom at `glow_at`
+    // when it is not 0.
+    stride: u32, features: u32, glow_at: u32, pad: u32,
 }
 
 struct Node { low: vec3<f32>, first: u32, high: vec3<f32>, count: u32 }
@@ -89,6 +93,10 @@ const FAR: f32 = 1e30;
 const OFFSET: f32 = 1e-3;
 
 var<private> rng: u32;
+// What the camera ray met first, which guides the denoiser; zero when it met nothing.
+var<private> first_albedo: vec3<f32>;
+var<private> first_normal: vec3<f32>;
+var<private> first_depth: f32;
 
 fn hash(x: u32) -> u32 {
     var v = x * 747796405u + 2891336453u;
@@ -894,6 +902,11 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
         let front = dot(d, hit.ns) < 0.0;
         var ns = hit.ns;
         if (dot(ns, ng) < 0.0) { ns = -ns; }
+        if (segment == 0u) {
+            first_albedo = m.color;
+            first_normal = ns;
+            first_depth = hit.t;
+        }
         let wo = -d;
         light += capped(through * m.emission, rebound);
         mis_pdf = -1.0;
@@ -1095,8 +1108,23 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         origin = params.origin + params.right * lens.x + params.up * lens.y;
         d = normalize(focus - origin);
     }
-    var sample = trace(origin, d);
-    // Drops a NaN or infinite sample, and caps the brightest ones in scenes without an HDR sky.
-    sample = clamp(sample, vec3<f32>(0.0), vec3<f32>(params.cap));
-    accum[pixel] += vec4<f32>(sample * params.exposure, 1.0);
+    first_albedo = vec3<f32>(0.0);
+    first_normal = vec3<f32>(0.0);
+    first_depth = 0.0;
+    var raw = trace(origin, d);
+    // Drops a NaN or infinite sample.
+    if (any(raw != raw) || any(abs(raw) > vec3<f32>(3e38))) { raw = vec3<f32>(0.0); }
+    // Caps the brightest samples in scenes without an HDR sky, as the CPU does.
+    let sample = clamp(raw, vec3<f32>(0.0), vec3<f32>(params.cap)) * params.exposure;
+    let luma = dot(sample, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let base = pixel * params.stride;
+    accum[base] += vec4<f32>(sample, luma * luma);
+    if (params.features != 0u) {
+        accum[base + 1u] += vec4<f32>(first_albedo, first_depth);
+        accum[base + 2u] += vec4<f32>(first_normal, 0.0);
+    }
+    if (params.glow_at != 0u) {
+        // far-core's BLOOM_THRESHOLD and BLOOM_MAX, on the light before the cap.
+        accum[base + params.glow_at] += vec4<f32>(clamp(raw * params.exposure - vec3<f32>(1.0), vec3<f32>(0.0), vec3<f32>(64.0)), 0.0);
+    }
 }

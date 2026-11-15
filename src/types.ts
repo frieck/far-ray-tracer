@@ -115,7 +115,11 @@ export interface Area { x0: number; y0: number; x1: number; y1: number }
 /** How light becomes screen colors; see crates/far-core/src/tonemap.rs. */
 export type ToneMapping = "standard" | "agx" | "agx_punchy" | "aces";
 
+/** Where Enhanced renders run: Auto takes the graphics card for scenes it renders as the CPU does. */
+export type Device = "auto" | "gpu" | "cpu";
+
 export interface RenderRequest {
+  device: Device;
   /** Renders only this rectangle, in pixels: [x0, y0, x1, y1], the end excluded. */
   region?: [number, number, number, number] | null;
   environment: EnvironmentConfig | null;
@@ -173,6 +177,12 @@ export interface RenderResult {
   redisplayed?: boolean;
   /** The render continued from this many passes of the last one. */
   continued_from?: number | null;
+  /** The graphics card that rendered, when it was not the CPU. */
+  gpu?: string | null;
+  /** What the scene uses that the graphics card left out. */
+  gpu_notes?: string[];
+  /** Why the CPU rendered although the graphics card was asked for. */
+  cpu_reason?: string | null;
 }
 
 export interface Settings {
@@ -209,6 +219,7 @@ export interface Settings {
   /** Indirect light settings chosen by hand; null follows the scene's lights. */
   bounces: Bounces | null;
   useKd: boolean;
+  device: Device;
   evolution: boolean;
   mode: Mode;
   comparison: Comparison;

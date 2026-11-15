@@ -832,10 +832,29 @@ and the expensive ones, under indirect light, do not converge with a strict thre
 few hundred passes; a loose one stops pixels with rare bright paths too early. So the app
 renders every pixel equally.
 
-### Rendering on the GPU (command line)
+### Rendering on the GPU
 
-`far render scene.far -o image.png --enhanced --gpu` path traces on the graphics card. It is
-on the command line only for now; the app still renders on the CPU.
+In the app, **System > Device** chooses where Enhanced renders run:
+
+- **Auto**, the default, uses the graphics card when it gives the CPU's image. It uses the
+  CPU when the scene has something the GPU leaves out, and the status line says what.
+- **GPU** always uses the card and lists what it left out.
+- **CPU** always uses the CPU engine.
+
+The 2008 and Fixed stages and caustics always run on the CPU. So does a machine that has
+only a software renderer (WARP, llvmpipe), which would be slower than the CPU engine. The
+status line names the card after a GPU render.
+
+The image builds up in the window as on the CPU, five times a second. The finished image
+goes through the CPU's denoiser and bloom. The GPU also returns, for each pixel, what the
+camera ray first hit (albedo, normal, depth) and the squared luminance, which is what the
+denoiser needs. Changing the exposure, tone mapping, denoise or bloom afterwards shows the
+image again without rendering, as it does for the CPU. A region renders the whole image on
+the GPU, and adaptive sampling is left to the CPU. A longer render on the GPU starts over
+rather than continuing from the last one; it is fast enough that this costs little.
+
+On the command line, `far render scene.far -o image.png --enhanced --gpu` does the same,
+with `--denoise` and `--bloom`.
 
 One compute shader, written in WGSL and run through wgpu, works on Metal (macOS), DirectX 12
 and Vulkan (Windows and Linux). The scene is packed into flat buffers, with the same BVH the
@@ -849,7 +868,7 @@ Enhanced integrator step by step, so the two give the same image within noise.
 | 2008 materials, GGX, glass with absorption and roughness, color textures | Roughness, metallic, emission and alpha maps; bump and normal maps; clear coat, sheen, anisotropy, subsurface; dispersion |
 | 2008 lights, bulbs, panels, one picked of many; indirect light with the 2008-light limits | Spotlight cones and IES, volumes, caustic photons |
 | HDR environments and the sun and sky, drawn by their light; MIS for GGX reflections | |
-| Depth of field and bokeh shapes | Denoise, bloom, regions |
+| Depth of field and bokeh shapes, denoise and bloom (on the CPU, from the GPU's sums) | Regions and adaptive sampling (the whole image is rendered) |
 
 On an Apple M4 Max at 800 × 600 with 256 samples, against its 16 CPU cores:
 

@@ -179,6 +179,7 @@ export function defaultSettings(cores: number): Settings {
     indirect: true,
     bounces: null,
     useKd: true,
+    device: "auto",
     evolution: false,
     mode: "enhanced",
     comparison: "off",
@@ -315,6 +316,7 @@ export function buildRequest(settings: Settings, mode: Mode, keep: boolean): Ren
     transmission_depth: mode === "enhanced" ? settings.transmissionDepth : null,
     threads: settings.threads,
     use_kd: settings.useKd,
+    device: settings.device,
     samples: effectivePasses(settings),
     indirect: settings.indirect,
     ...(settings.bounces && {

@@ -1880,6 +1880,26 @@ impl Accumulation {
     pub fn passes(&self) -> u32 {
         self.passes
     }
+
+    /// Light gathered by another renderer, as the GPU does, for `redisplay` to show: per pixel
+    /// of the whole image, sums over `passes` samples taken at `op`'s exposure with the scene's
+    /// light compensation, capped as `render` caps them. `luminance2` and `primary` feed the
+    /// denoiser, and `glow` bloom, which `redisplay` skips when they are missing.
+    pub fn gathered(op: &Options, passes: u32, light: &[[f32; 3]], luminance2: &[f32],
+        primary: Option<&[Primary]>, glow: Option<&[[f32; 3]]>) -> Self {
+        let atomics = |values: &[[f32; 3]]| values.iter().flatten().map(|v| AtomicU32::new(v.to_bits())).collect::<Vec<_>>();
+        Self {
+            width: op.width,
+            height: op.height,
+            rendered: engine::Region { x0: 0, y0: 0, x1: op.width, y1: op.height },
+            passes,
+            sum: atomics(light),
+            counts: (0..light.len()).map(|_| AtomicU32::new(passes)).collect(),
+            guide: primary.map(|p| Guide::from_sums(luminance2, p)),
+            glow: glow.map(atomics),
+            exposure: op.exposure,
+        }
+    }
 }
 
 /// The part of the image a render traces: the whole of it, or a region and a ring of tiles

@@ -11,6 +11,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 far-core = { path = "../crates/far-core" }
+far-gpu = { path = "../crates/far-gpu" }
 image = { version = "0.25", default-features = false, features = ["png"] }
 serde = { version = "1", features = ["derive"] }
 # Also used by the generated context for the updater settings.

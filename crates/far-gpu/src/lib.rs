@@ -31,6 +31,7 @@ struct Params {
     forward: [f32; 3], blades: u32,
     blade_rotation: f32, has_glass: u32, strength: f32, clamp: f32,
     max_depth: u32, glossy_max: u32, transmission_max: u32, env_tables: u32,
+    stride: u32, features: u32, glow_at: u32, pad: u32,
 }
 
 #[repr(C)]
@@ -218,14 +219,50 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
     Packed { nodes, refs, tris, shapes, plane_count, texels, materials, lights, notes }
 }
 
+/// What the scene uses that the GPU renderer leaves out, as `Rendered::notes` reports it.
+pub fn leaves_out(scene: &Scene, bvh: &Bvh) -> Vec<String> {
+    pack(scene, bvh).notes
+}
+
+/// What the samples of a GPU render add up to, per pixel of the whole image, row by row.
+pub struct Sums {
+    pub width: u32,
+    pub height: u32,
+    /// Samples each pixel has.
+    pub passes: u32,
+    /// Exposed light, capped as the CPU caps it.
+    pub light: Vec<[f32; 3]>,
+    /// The squared luminance of that light.
+    pub luminance2: Vec<f32>,
+    /// What camera rays met first, when the render was asked to denoise.
+    pub primary: Option<Vec<far_core::denoise::Primary>>,
+    /// The light over the bloom threshold, when the render was asked for bloom.
+    pub glow: Option<Vec<[f32; 3]>>,
+}
+
+impl Sums {
+    /// Mean linear light of each pixel: what the tone mapping takes.
+    pub fn mean(&self) -> Vec<[f32; 3]> {
+        let n = self.passes.max(1) as f32;
+        self.light.iter().map(|l| [l[0] / n, l[1] / n, l[2] / n]).collect()
+    }
+
+    /// The same light, as far-core's display, denoiser and bloom take it.
+    pub fn accumulation(&self, op: &Options) -> far_core::enhanced::Accumulation {
+        far_core::enhanced::Accumulation::gathered(op, self.passes, &self.light, &self.luminance2,
+            self.primary.as_deref(), self.glow.as_deref())
+    }
+}
+
 /// What a GPU render gives back.
 pub struct Rendered {
-    /// Mean linear light of each pixel, exposed, row by row: what the tone mapping takes.
-    pub mean: Vec<[f32; 3]>,
+    pub sums: Sums,
     /// The graphics card and API that rendered.
     pub adapter: String,
     /// What the scene uses that the GPU renderer leaves out for now.
     pub notes: Vec<String>,
+    /// It stopped early, and `sums` has the passes done by then.
+    pub cancelled: bool,
 }
 
 /// A buffer the shader reads; an empty list still needs one element to bind.
@@ -237,186 +274,246 @@ fn storage<T: Pod + Zeroable>(device: &wgpu::Device, label: &str, data: &[T]) ->
 
 /// Renders `op.samples` passes of the scene on the GPU. `cancel` is checked between passes.
 pub fn render(scene: &Scene, bvh: &Bvh, op: &Options, cancel: &dyn Fn() -> bool) -> Result<Rendered, String> {
-    pollster::block_on(render_async(scene, bvh, op, cancel))
+    Gpu::new()?.render(scene, bvh, op, cancel, None, &mut |_| {})
 }
 
-async fn render_async(scene: &Scene, bvh: &Bvh, op: &Options, cancel: &dyn Fn() -> bool) -> Result<Rendered, String> {
-    let packed = pack(scene, bvh);
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() })
-        .await
-        .map_err(|e| format!("no graphics card for rendering: {e}"))?;
-    let info = adapter.get_info();
-    let limits = adapter.limits();
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            label: Some("far-gpu"),
-            required_limits: wgpu::Limits {
-                max_storage_buffers_per_shader_stage: 8,
-                max_storage_buffer_binding_size: limits.max_storage_buffer_binding_size,
-                max_buffer_size: limits.max_buffer_size,
-                ..wgpu::Limits::default()
+/// The graphics card, ready to render: made once and kept, since compiling the shader takes a
+/// moment the first time.
+pub struct Gpu {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    layout: wgpu::BindGroupLayout,
+    pipeline: wgpu::ComputePipeline,
+    adapter: String,
+}
+
+impl Gpu {
+    /// The fastest graphics card, or why there is none to render with.
+    pub fn new() -> Result<Self, String> {
+        pollster::block_on(Self::open())
+    }
+
+    /// The graphics card and API, such as "Apple M2 (Metal)".
+    pub fn adapter(&self) -> &str {
+        &self.adapter
+    }
+
+    async fn open() -> Result<Self, String> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() })
+            .await
+            .map_err(|e| format!("no graphics card for rendering: {e}"))?;
+        let info = adapter.get_info();
+        // A software renderer (WARP, llvmpipe) is slower than the CPU engine, and WARP has
+        // crashed on this shader.
+        if info.device_type == wgpu::DeviceType::Cpu {
+            return Err(format!("no graphics card for rendering: only a software renderer ({})", info.name));
+        }
+        let limits = adapter.limits();
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("far-gpu"),
+                required_limits: wgpu::Limits {
+                    max_storage_buffers_per_shader_stage: 8,
+                    max_storage_buffer_binding_size: limits.max_storage_buffer_binding_size,
+                    max_buffer_size: limits.max_buffer_size,
+                    ..wgpu::Limits::default()
+                },
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| format!("the graphics card refused the renderer: {e}"))?;
+
+        let buffer_entry = |binding: u32, ty: wgpu::BufferBindingType| wgpu::BindGroupLayoutEntry {
+            binding, visibility: wgpu::ShaderStages::COMPUTE, count: None,
+            ty: wgpu::BindingType::Buffer { ty, has_dynamic_offset: false, min_binding_size: None },
+        };
+        let mut layout_entries = vec![buffer_entry(0, wgpu::BufferBindingType::Uniform)];
+        for binding in 1..=7 {
+            layout_entries.push(buffer_entry(binding, wgpu::BufferBindingType::Storage { read_only: true }));
+        }
+        layout_entries.push(buffer_entry(8, wgpu::BufferBindingType::Storage { read_only: false }));
+        layout_entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 9, visibility: wgpu::ShaderStages::COMPUTE, count: None,
+            // Read texel by texel, so the float texture needs no filtering support.
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2, multisampled: false,
             },
-            ..Default::default()
-        })
-        .await
-        .map_err(|e| format!("the graphics card refused the renderer: {e}"))?;
-
-    let (w, h) = (op.width, op.height);
-    let pose = op.pose.unwrap_or(scene.camera.pose());
-    let view = View::new(&pose, w, h);
-    let environment = scene.environment.as_ref().filter(|e| e.active());
-    let bounces = far_core::Bounces::resolve(scene, op);
-    let mut params = Params {
-        origin: view.origin.array(), width: w,
-        corner: view.plane_point(-1.0, 1.0).array(), height: h,
-        dx: (view.right * (2.0 * view.half_width / w as f32)).array(), pass_index: 0,
-        dy: (view.up * (-2.0 * view.half_height / h as f32)).array(),
-        max_bounces: bounces.max,
-        plane_count: packed.plane_count, light_count: packed.lights.len() as u32,
-        has_env: environment.is_some() as u32,
-        env_visible: environment.is_some_and(|e| e.config.visible) as u32,
-        // The CPU's compensation for 2008 lights, which add up with no falloff.
-        exposure: op.exposure / (scene.lights.len().max(1) as f32).powf(0.35),
-        cap: if environment.is_some() { 1e9 } else { 6.0 },
-        env_intensity: environment.map_or(0.0, |e| e.config.intensity),
-        env_rotation: environment.map_or(0.0, |e| e.config.rotation.rem_euclid(360.0).to_radians()),
-        right: view.right.array(), aperture: op.aperture.unwrap_or(scene.camera.aperture),
-        up: view.up.array(), focus: op.focus_distance.unwrap_or(scene.camera.focus_distance),
-        forward: view.forward.array(), blades: op.blades.unwrap_or(scene.camera.blades),
-        blade_rotation: op.blade_rotation.unwrap_or(scene.camera.blade_rotation).to_radians(),
-        has_glass: scene.materials.iter().any(|m| m.refr > 0.0) as u32,
-        strength: bounces.strength, clamp: bounces.clamp,
-        // Mirror-like and glass segments of a path, as the CPU counts depth from 1.
-        max_depth: op.max_depth.max(1) as u32 - 1,
-        glossy_max: op.glossy_depth.map_or(u32::MAX, |d| d.max(0) as u32),
-        transmission_max: op.transmission_depth.map_or(u32::MAX, |d| d.max(0) as u32),
-        env_tables: 0,
-    };
-
-    // The environment's sampling tables go after the texels, as float bits.
-    let mut texels = packed.texels;
-    if let Some(e) = environment {
-        params.env_tables = texels.len() as u32;
-        texels.extend(e.map.sampling_tables().iter().map(|v| v.to_bits()));
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("trace"), entries: &layout_entries });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("trace"), source: wgpu::ShaderSource::Wgsl(include_str!("trace.wgsl").into()),
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("trace"), bind_group_layouts: &[Some(&layout)], immediate_size: 0,
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("trace"), layout: Some(&pipeline_layout), module: &shader, entry_point: Some("main"),
+            compilation_options: Default::default(), cache: None,
+        });
+        Ok(Self { device, queue, layout, pipeline, adapter: format!("{} ({:?})", info.name, info.backend) })
     }
 
-    // The environment as a texture; a single black texel when there is none.
-    let (env_w, env_h, env_data): (u32, u32, Vec<f32>) = match environment {
-        Some(e) => {
-            let (width, height, pixels) = e.map.pixels();
-            (width as u32, height as u32, pixels.iter().flat_map(|p| [p.x, p.y, p.z, 1.0]).collect())
+    /// Renders `op.samples` passes of the whole image; `op.region` and adaptive sampling are
+    /// left to the CPU. `cancel` is checked between passes. With `frames`, `on_frame` gets the
+    /// sums so far about that often, for a progressive display.
+    pub fn render(&self, scene: &Scene, bvh: &Bvh, op: &Options, cancel: &dyn Fn() -> bool,
+        frames: Option<std::time::Duration>, on_frame: &mut dyn FnMut(&Sums)) -> Result<Rendered, String> {
+        let (device, queue) = (&self.device, &self.queue);
+        let packed = pack(scene, bvh);
+        let (w, h) = (op.width, op.height);
+        let pose = op.pose.unwrap_or(scene.camera.pose());
+        let view = View::new(&pose, w, h);
+        let environment = scene.environment.as_ref().filter(|e| e.active());
+        let bounces = far_core::Bounces::resolve(scene, op);
+        // The light per pixel, then the first hits for the denoiser, then the light for bloom.
+        let features = op.denoise;
+        let glow_at = if op.bloom { 1 + 2 * features as u32 } else { 0 };
+        let stride = 1 + 2 * features as u32 + op.bloom as u32;
+        let mut params = Params {
+            origin: view.origin.array(), width: w,
+            corner: view.plane_point(-1.0, 1.0).array(), height: h,
+            dx: (view.right * (2.0 * view.half_width / w as f32)).array(), pass_index: 0,
+            dy: (view.up * (-2.0 * view.half_height / h as f32)).array(),
+            max_bounces: if op.indirect { bounces.max } else { 0 },
+            plane_count: packed.plane_count, light_count: packed.lights.len() as u32,
+            has_env: environment.is_some() as u32,
+            env_visible: environment.is_some_and(|e| e.config.visible) as u32,
+            // The CPU's compensation for 2008 lights, which add up with no falloff.
+            exposure: op.exposure / (scene.lights.len().max(1) as f32).powf(0.35),
+            cap: if environment.is_some() { 1e9 } else { 6.0 },
+            env_intensity: environment.map_or(0.0, |e| e.config.intensity),
+            env_rotation: environment.map_or(0.0, |e| e.config.rotation.rem_euclid(360.0).to_radians()),
+            right: view.right.array(), aperture: op.aperture.unwrap_or(scene.camera.aperture),
+            up: view.up.array(), focus: op.focus_distance.unwrap_or(scene.camera.focus_distance),
+            forward: view.forward.array(), blades: op.blades.unwrap_or(scene.camera.blades),
+            blade_rotation: op.blade_rotation.unwrap_or(scene.camera.blade_rotation).to_radians(),
+            has_glass: scene.materials.iter().any(|m| m.refr > 0.0) as u32,
+            strength: bounces.strength, clamp: bounces.clamp,
+            // Mirror-like and glass segments of a path, as the CPU counts depth from 1.
+            max_depth: op.max_depth.max(1) as u32 - 1,
+            glossy_max: op.glossy_depth.map_or(u32::MAX, |d| d.max(0) as u32),
+            transmission_max: op.transmission_depth.map_or(u32::MAX, |d| d.max(0) as u32),
+            env_tables: 0,
+            stride, features: features as u32, glow_at, pad: 0,
+        };
+
+        // The environment's sampling tables go after the texels, as float bits.
+        let mut texels = packed.texels;
+        if let Some(e) = environment {
+            params.env_tables = texels.len() as u32;
+            texels.extend(e.map.sampling_tables().iter().map(|v| v.to_bits()));
         }
-        None => (1, 1, vec![0.0, 0.0, 0.0, 1.0]),
-    };
-    let env_size = wgpu::Extent3d { width: env_w, height: env_h, depth_or_array_layers: 1 };
-    let env = device.create_texture_with_data(&queue, &wgpu::TextureDescriptor {
-        label: Some("environment"), size: env_size, mip_level_count: 1, sample_count: 1,
-        dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rgba32Float,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[],
-    }, wgpu::util::TextureDataOrder::LayerMajor, bytemuck::cast_slice(&env_data));
-    let env_view = env.create_view(&wgpu::TextureViewDescriptor::default());
 
-    let pixels = (w as usize) * (h as usize);
-    let accum_size = (pixels * 16) as u64;
-    let accum = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("accum"), size: accum_size, mapped_at_creation: false,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-    });
-    let readback = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("readback"), size: accum_size, mapped_at_creation: false,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-    });
-    let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("params"), size: std::mem::size_of::<Params>() as u64, mapped_at_creation: false,
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    });
-    let buffers = [
-        storage(&device, "nodes", &packed.nodes),
-        storage(&device, "refs", &packed.refs),
-        storage(&device, "tris", &packed.tris),
-        storage(&device, "shapes", &packed.shapes),
-        storage(&device, "texels", &texels),
-        storage(&device, "materials", &packed.materials),
-        storage(&device, "lights", &packed.lights),
-    ];
+        // The environment as a texture; a single black texel when there is none.
+        let (env_w, env_h, env_data): (u32, u32, Vec<f32>) = match environment {
+            Some(e) => {
+                let (width, height, pixels) = e.map.pixels();
+                (width as u32, height as u32, pixels.iter().flat_map(|p| [p.x, p.y, p.z, 1.0]).collect())
+            }
+            None => (1, 1, vec![0.0, 0.0, 0.0, 1.0]),
+        };
+        let env_size = wgpu::Extent3d { width: env_w, height: env_h, depth_or_array_layers: 1 };
+        let env = device.create_texture_with_data(queue, &wgpu::TextureDescriptor {
+            label: Some("environment"), size: env_size, mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[],
+        }, wgpu::util::TextureDataOrder::LayerMajor, bytemuck::cast_slice(&env_data));
+        let env_view = env.create_view(&wgpu::TextureViewDescriptor::default());
 
-    let buffer_entry = |binding: u32, ty: wgpu::BufferBindingType| wgpu::BindGroupLayoutEntry {
-        binding, visibility: wgpu::ShaderStages::COMPUTE, count: None,
-        ty: wgpu::BindingType::Buffer { ty, has_dynamic_offset: false, min_binding_size: None },
-    };
-    let mut layout_entries = vec![buffer_entry(0, wgpu::BufferBindingType::Uniform)];
-    for binding in 1..=7 {
-        layout_entries.push(buffer_entry(binding, wgpu::BufferBindingType::Storage { read_only: true }));
-    }
-    layout_entries.push(buffer_entry(8, wgpu::BufferBindingType::Storage { read_only: false }));
-    layout_entries.push(wgpu::BindGroupLayoutEntry {
-        binding: 9, visibility: wgpu::ShaderStages::COMPUTE, count: None,
-        // Read texel by texel, so the float texture needs no filtering support.
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-            view_dimension: wgpu::TextureViewDimension::D2, multisampled: false,
-        },
-    });
-    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("trace"), entries: &layout_entries });
-    let mut entries = vec![wgpu::BindGroupEntry { binding: 0, resource: params_buffer.as_entire_binding() }];
-    for (i, buffer) in buffers.iter().enumerate() {
-        entries.push(wgpu::BindGroupEntry { binding: i as u32 + 1, resource: buffer.as_entire_binding() });
-    }
-    entries.push(wgpu::BindGroupEntry { binding: 8, resource: accum.as_entire_binding() });
-    entries.push(wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(&env_view) });
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("trace"), layout: &layout, entries: &entries });
-
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("trace"), source: wgpu::ShaderSource::Wgsl(include_str!("trace.wgsl").into()),
-    });
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("trace"), bind_group_layouts: &[Some(&layout)], immediate_size: 0,
-    });
-    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("trace"), layout: Some(&pipeline_layout), module: &shader, entry_point: Some("main"),
-        compilation_options: Default::default(), cache: None,
-    });
-
-    // One pass per submission: a long command is killed by the system's GPU watchdog.
-    for pass_index in 0..op.samples.max(1) {
-        if cancel() {
-            return Err("cancelled".into());
+        let pixels = (w as usize) * (h as usize);
+        let accum_size = (pixels * 16 * stride as usize) as u64;
+        let accum = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("accum"), size: accum_size, mapped_at_creation: false,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+        });
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("readback"), size: accum_size, mapped_at_creation: false,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        });
+        let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("params"), size: std::mem::size_of::<Params>() as u64, mapped_at_creation: false,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let buffers = [
+            storage(device, "nodes", &packed.nodes),
+            storage(device, "refs", &packed.refs),
+            storage(device, "tris", &packed.tris),
+            storage(device, "shapes", &packed.shapes),
+            storage(device, "texels", &texels),
+            storage(device, "materials", &packed.materials),
+            storage(device, "lights", &packed.lights),
+        ];
+        let mut entries = vec![wgpu::BindGroupEntry { binding: 0, resource: params_buffer.as_entire_binding() }];
+        for (i, buffer) in buffers.iter().enumerate() {
+            entries.push(wgpu::BindGroupEntry { binding: i as u32 + 1, resource: buffer.as_entire_binding() });
         }
-        params.pass_index = pass_index;
-        queue.write_buffer(&params_buffer, 0, bytemuck::bytes_of(&params));
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
-            pass.set_pipeline(&pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
-        }
-        queue.submit([encoder.finish()]);
-        // Keeps the queue short, so memory and the watchdog see one pass at a time.
-        if pass_index % 8 == 7 {
+        entries.push(wgpu::BindGroupEntry { binding: 8, resource: accum.as_entire_binding() });
+        entries.push(wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(&env_view) });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("trace"), layout: &self.layout, entries: &entries });
+
+        // Copies the sums so far back from the graphics card.
+        let read = |passes: u32| -> Result<Sums, String> {
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            encoder.copy_buffer_to_buffer(&accum, 0, &readback, 0, accum_size);
+            queue.submit([encoder.finish()]);
+            let slice = readback.slice(..);
+            let (sender, receiver) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |result| { let _ = sender.send(result); });
             let _ = device.poll(wgpu::PollType::wait_indefinitely());
-        }
-    }
+            receiver.recv().map_err(|e| e.to_string())?.map_err(|e| format!("could not read the image back: {e}"))?;
+            let data = slice.get_mapped_range().map_err(|e| format!("could not read the image back: {e}"))?;
+            let cells: &[[f32; 4]] = bytemuck::cast_slice(&data);
+            let pixel = |p: usize| &cells[p * stride as usize..(p + 1) * stride as usize];
+            let sums = Sums {
+                width: w, height: h, passes,
+                light: (0..pixels).map(|p| { let c = pixel(p)[0]; [c[0], c[1], c[2]] }).collect(),
+                luminance2: (0..pixels).map(|p| pixel(p)[0][3]).collect(),
+                primary: features.then(|| (0..pixels).map(|p| {
+                    let (a, n) = (pixel(p)[1], pixel(p)[2]);
+                    far_core::denoise::Primary { albedo: [a[0], a[1], a[2]], normal: [n[0], n[1], n[2]], depth: a[3] }
+                }).collect()),
+                glow: (glow_at > 0).then(|| (0..pixels).map(|p| { let g = pixel(p)[glow_at as usize]; [g[0], g[1], g[2]] }).collect()),
+            };
+            drop(data);
+            readback.unmap();
+            Ok(sums)
+        };
 
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    encoder.copy_buffer_to_buffer(&accum, 0, &readback, 0, accum_size);
-    queue.submit([encoder.finish()]);
-    let slice = readback.slice(..);
-    let (sender, receiver) = std::sync::mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |result| { let _ = sender.send(result); });
-    let _ = device.poll(wgpu::PollType::wait_indefinitely());
-    receiver.recv().map_err(|e| e.to_string())?.map_err(|e| format!("could not read the image back: {e}"))?;
-    let data = slice.get_mapped_range().map_err(|e| format!("could not read the image back: {e}"))?;
-    let sums: &[[f32; 4]] = bytemuck::cast_slice(&data);
-    let mean = sums.iter().map(|s| {
-        let n = s[3].max(1.0);
-        [s[0] / n, s[1] / n, s[2] / n]
-    }).collect();
-    drop(data);
-    readback.unmap();
-    Ok(Rendered { mean, adapter: format!("{} ({:?})", info.name, info.backend), notes: packed.notes })
+        let samples = op.samples.max(1);
+        let mut done = 0;
+        let mut last_frame = std::time::Instant::now();
+        let mut cancelled = false;
+        // One pass per submission: a long command is killed by the system's GPU watchdog.
+        while done < samples {
+            if cancel() {
+                cancelled = true;
+                break;
+            }
+            params.pass_index = done;
+            queue.write_buffer(&params_buffer, 0, bytemuck::bytes_of(&params));
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
+            }
+            queue.submit([encoder.finish()]);
+            done += 1;
+            // Keeps the queue short, so memory and the watchdog see one pass at a time.
+            if done % 8 == 0 {
+                let _ = device.poll(wgpu::PollType::wait_indefinitely());
+            }
+            if frames.is_some_and(|every| done < samples && last_frame.elapsed() >= every) {
+                on_frame(&read(done)?);
+                last_frame = std::time::Instant::now();
+            }
+        }
+        Ok(Rendered { sums: read(done)?, adapter: self.adapter.clone(), notes: packed.notes, cancelled })
+    }
 }
 
 #[cfg(test)]
@@ -437,9 +534,10 @@ mod tests {
             }
             Err(e) => panic!("{name}: {e}"),
         };
-        let gpu: f32 = rendered.mean.iter()
+        let mean = rendered.sums.mean();
+        let gpu: f32 = mean.iter()
             .map(|&m| far_core::tonemap::display(op.tone_mapping, m).iter().sum::<f32>() / 3.0)
-            .sum::<f32>() / rendered.mean.len() as f32;
+            .sum::<f32>() / mean.len() as f32;
         let image = Image::new(op.width, op.height);
         far_core::render(&scene, Some(&KdTree::build_corrected(&scene)), &op, &image, &Progress::default());
         let rgba = image.rgba();

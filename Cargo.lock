@@ -893,6 +893,7 @@ name = "far-app"
 version = "3.0.0-rc.1"
 dependencies = [
  "far-core",
+ "far-gpu",
  "image",
  "serde",
  "serde_json",

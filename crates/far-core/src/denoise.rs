@@ -47,6 +47,15 @@ impl Guide {
         Self { sums: (0..pixels * FIELDS).map(|_| AtomicU32::new(0)).collect() }
     }
 
+    /// A guide from sums gathered elsewhere, as the GPU renderer does: per pixel, the squared
+    /// luminance of its samples added up, and its first hits added up.
+    pub fn from_sums(luminance2: &[f32], primary: &[Primary]) -> Self {
+        let sums = luminance2.iter().zip(primary).flat_map(|(&l, p)| {
+            [l, p.albedo[0], p.albedo[1], p.albedo[2], p.normal[0], p.normal[1], p.normal[2], p.depth]
+        });
+        Self { sums: sums.map(|v| AtomicU32::new(v.to_bits())).collect() }
+    }
+
     fn add(&self, index: usize, value: f32) {
         let cell = &self.sums[index];
         cell.store((f32::from_bits(cell.load(Relaxed)) + value).to_bits(), Relaxed);

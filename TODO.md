@@ -78,12 +78,14 @@ Visual gain for the effort:
   3. The GPU for previews first, camera movement and the material ball. Done so far: a compute
      shader path tracer behind `far render --gpu` that follows the Enhanced integrator (every
      shape, 2008, GGX with MIS, glass with absorption, textures, light picking, environment
-     sampling, depth of field). Left: using it from the app.
+     sampling, depth of field), used by the app through a Device setting, with live frames,
+     denoise and bloom. Left: the material ball.
   4. Parity, feature by feature, each compared with the CPU against a reference. Left: maps
      (roughness, metallic, emission, alpha), bump and normal maps, coat, sheen, anisotropy,
      subsurface, spotlight cones and IES, volumes, dispersion.
-  5. Final renders on the GPU, as a Device setting; scenes using what the GPU lacks (caustic
-     photons, dispersion, the displaced ground) fall back to the CPU and say so.
+  5. ~~Final renders on the GPU, as a Device setting~~ (done: Auto falls back to the CPU for
+     scenes using what the GPU lacks, and says so). Left: continuing a longer render from the
+     last one, regions and adaptive sampling on the GPU.
 
   Risks: two renderers to keep equal; no recursion in shaders; Windows stops a GPU command
   after 2 seconds, so work goes in small slices; CI has no GPU, only a software renderer;

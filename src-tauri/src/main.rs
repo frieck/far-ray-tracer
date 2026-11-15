@@ -12,6 +12,8 @@ use far_core::{render, Image, KdTree, Mode, Options, Progress, Scene};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::ipc::{Channel, Response};
@@ -28,6 +30,8 @@ const MAX_IMAGE_SIDE: u32 = 8192;
 const MESSAGE_BUILDING_KD: u32 = 0;
 const MESSAGE_FRAME: u32 = 1;
 const MESSAGE_PHOTON_MAP: u32 = 2;
+/// How often a GPU render reads its image back to show it: each read stalls the card a little.
+const GPU_FRAME_INTERVAL: Duration = Duration::from_millis(200);
 const HEADER_SIZE: usize = 24;
 const MENU_OPEN: &str = "open";
 const MENU_SAVE: &str = "save";
@@ -48,6 +52,8 @@ struct OpenScene {
     /// Built on first use: Classic mode needs the original tree, the others the corrected one.
     kd_classic: OnceLock<KdTree>,
     kd: OnceLock<KdTree>,
+    /// The BVH the GPU renderer walks, built on its first render.
+    bvh: OnceLock<far_core::bvh::Bvh>,
 }
 
 struct FinishedImage {
@@ -78,6 +84,8 @@ struct AppState {
     /// The material preview being rendered, so a newer one can cancel it.
     /// The material previews being rendered, by view, so a newer one in a view can cancel it.
     previews: Mutex<std::collections::HashMap<String, Arc<Progress>>>,
+    /// The graphics card, opened on the first render that asks for it, or why it cannot render.
+    gpu: OnceLock<Result<far_gpu::Gpu, String>>,
 }
 
 #[derive(Serialize)]
@@ -207,6 +215,19 @@ struct RenderRequest {
     /// Adaptive sampling: a pixel stops once its error is below this; 0 samples evenly.
     #[serde(default)]
     noise_threshold: f32,
+    #[serde(default)]
+    device: Device,
+}
+
+/// Where Enhanced renders run. Auto takes the graphics card for scenes it renders as the CPU
+/// does, and the CPU for the rest; the other stages and caustics always run on the CPU.
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq, Default, Debug)]
+#[serde(rename_all = "snake_case")]
+enum Device {
+    Auto,
+    Gpu,
+    #[default]
+    Cpu,
 }
 
 #[derive(Serialize)]
@@ -232,6 +253,12 @@ struct RenderResult {
     redisplayed: bool,
     /// The render continued from this many passes of the last one.
     continued_from: Option<u32>,
+    /// The graphics card that rendered, when it was not the CPU.
+    gpu: Option<String>,
+    /// What the scene uses that the graphics card left out.
+    gpu_notes: Vec<String>,
+    /// Why the CPU rendered although the graphics card was asked for.
+    cpu_reason: Option<String>,
 }
 
 fn open_scene(path: &Path, state: &AppState) -> Result<SceneInfo, String> {
@@ -268,7 +295,7 @@ fn open_scene(path: &Path, state: &AppState) -> Result<SceneInfo, String> {
     };
     let save_to = writable_in_place(path, app_resources(state)).then(|| path.to_path_buf());
     *state.scene.lock().unwrap() = Some(Arc::new(OpenScene {
-        scene, path: path.to_path_buf(), save_to: Mutex::new(save_to), kd_classic: OnceLock::new(), kd: OnceLock::new(),
+        scene, path: path.to_path_buf(), save_to: Mutex::new(save_to), kd_classic: OnceLock::new(), kd: OnceLock::new(), bvh: OnceLock::new(),
     }));
     Ok(info)
 }
@@ -878,6 +905,33 @@ fn render_scene(
         region: request.region.map(|[x0, y0, x1, y1]| far_core::engine::Region { x0, y0, x1, y1 }),
         noise_threshold: request.noise_threshold,
     };
+    // The graphics card renders the Enhanced stage without caustics; Auto also leaves it the
+    // scenes it would render differently.
+    let mut gpu_notes = Vec::new();
+    let mut cpu_reason = None;
+    let gpu = match request.device {
+        Device::Gpu | Device::Auto if mode == Mode::Enhanced => match state.gpu.get_or_init(far_gpu::Gpu::new) {
+            Err(e) => {
+                cpu_reason = Some(format!("Rendered on the CPU: {e}"));
+                None
+            }
+            Ok(_) if request.caustics => {
+                cpu_reason = Some("Rendered on the CPU, which traces caustics".into());
+                None
+            }
+            Ok(gpu) => {
+                let bvh = open.bvh.get_or_init(|| far_core::bvh::Bvh::build(&open.scene));
+                gpu_notes = far_gpu::leaves_out(scene, bvh);
+                if request.device == Device::Auto && !gpu_notes.is_empty() {
+                    cpu_reason = Some(format!("Rendered on the CPU: the GPU leaves out {}", gpu_notes.join(", ")));
+                    None
+                } else {
+                    Some((gpu, bvh))
+                }
+            }
+        },
+        _ => None,
+    };
     let passes = if mode == Mode::Enhanced { request.samples } else { 1 };
     let image = Image::new(options.width, options.height);
     let start = Instant::now();
@@ -889,7 +943,7 @@ fn render_scene(
         request.focus_distance, request.blades, request.blade_rotation, request.indirect, request.indirect_strength,
         request.max_bounces, request.indirect_clamp, request.caustics, request.photons, request.caustic_radius,
         request.caustic_strength, request.width, request.height, request.use_kd, request.depth, request.region,
-        request.noise_threshold) + &format!("|{:?}|{:?}", request.glossy_depth, request.transmission_depth));
+        request.noise_threshold) + &format!("|{:?}|{:?}|{}", request.glossy_depth, request.transmission_depth, gpu.is_some()));
     // A new kept render replaces what was kept, which frees its memory early.
     let previous = reuse_key.as_ref().and_then(|key| match state.accumulation.lock().unwrap().take() {
         Some((kept, accumulation)) if &kept == key => Some(accumulation),
@@ -922,26 +976,35 @@ fn render_scene(
             return Ok(RenderResult {
                 kd_ms, render_ms: start.elapsed().as_millis() as u64, rays: 0, cancelled: false,
                 caustics: None, denoiser, redisplayed: true, continued_from: None,
+                gpu: None, gpu_notes: Vec::new(), cpu_reason: None,
             });
         }
     }
-    // Fewer passes than kept cannot reuse them; more continue from them.
-    let previous = previous.filter(|a| a.passes() < options.samples);
+    // Fewer passes than kept cannot reuse them; more continue from them, on the CPU.
+    let previous = previous.filter(|a| a.passes() < options.samples && gpu.is_none());
     let continued_from = previous.as_ref().map(|a| a.passes());
 
     let frame_interval = FRAME_INTERVAL * (image.width * image.height / PIXELS_PER_FRAME_INTERVAL).max(1);
     let mut accumulated = None;
-    let render_ms = render_with_frames(
-        || {
-            if mode == Mode::Enhanced {
-                accumulated = far_core::enhanced::render_continuing(scene, kd, &options, &image, progress, previous);
-            } else {
-                render(scene, kd, &options, &image, progress);
-            }
-        },
-        frame_interval,
-        || { let _ = send_frame(); },
-    )?;
+    let mut adapter = None;
+    let render_ms = if let Some((gpu, bvh)) = gpu {
+        let (rendered, ms) = render_on_gpu(gpu, bvh, scene, &options, &image, progress, frame_interval, send_frame)?;
+        adapter = Some(rendered.0);
+        accumulated = rendered.1;
+        ms
+    } else {
+        render_with_frames(
+            || {
+                if mode == Mode::Enhanced {
+                    accumulated = far_core::enhanced::render_continuing(scene, kd, &options, &image, progress, previous);
+                } else {
+                    render(scene, kd, &options, &image, progress);
+                }
+            },
+            frame_interval,
+            || { let _ = send_frame(); },
+        )?
+    };
     send_frame().map_err(|e| e.to_string())?;
     if let (Some(key), Some(accumulation)) = (reuse_key, accumulated) {
         *state.accumulation.lock().unwrap() = Some((key, accumulation));
@@ -973,7 +1036,56 @@ fn render_scene(
         denoiser: *progress.denoiser.lock().unwrap(),
         redisplayed: false,
         continued_from,
+        gpu: adapter,
+        gpu_notes,
+        cpu_reason,
     })
+}
+
+/// Renders on the graphics card, showing its image through the CPU's display, denoiser and
+/// bloom as it builds up. Gives back the card's name, what the render accumulated unless it
+/// was cancelled, and how long it took.
+#[allow(clippy::too_many_arguments)]
+fn render_on_gpu(
+    gpu: &far_gpu::Gpu,
+    bvh: &far_core::bvh::Bvh,
+    scene: &Scene,
+    options: &Options,
+    image: &Image,
+    progress: &Progress,
+    frame_interval: Duration,
+    send_frame: impl Fn() -> Result<(), tauri::Error>,
+) -> Result<((String, Option<far_core::enhanced::Accumulation>), u64), String> {
+    // The card renders the whole image and every pass; frames in between skip the filters.
+    let options = Options { region: None, noise_threshold: 0.0, ..options.clone() };
+    let quick = Options { denoise: false, bloom: false, ..options.clone() };
+    progress.tiles_total.store(options.samples.max(1) as usize, Relaxed);
+    progress.tiles_done.store(0, Relaxed);
+    progress.pass_index.store(0, Relaxed);
+    progress.rays.store(0, Relaxed);
+    *progress.denoiser.lock().unwrap() = None;
+    *progress.photon_stats.lock().unwrap() = None;
+    let show = |sums: &far_gpu::Sums, op: &Options| {
+        let accumulation = sums.accumulation(op);
+        far_core::enhanced::redisplay(&accumulation, scene, op, image, progress);
+        progress.pass_index.store(sums.passes as usize, Relaxed);
+        progress.tiles_done.store(sums.passes as usize, Relaxed);
+        accumulation
+    };
+    let mut outcome = Err(String::new());
+    let ms = render_with_frames(
+        || {
+            let cancel = || progress.cancel.load(Relaxed);
+            outcome = gpu.render(scene, bvh, &options, &cancel, Some(GPU_FRAME_INTERVAL), &mut |sums| { show(sums, &quick); })
+                .map(|rendered| {
+                    let accumulation = show(&rendered.sums, &options);
+                    (rendered.adapter, (!rendered.cancelled).then_some(accumulation))
+                });
+        },
+        frame_interval,
+        || { let _ = send_frame(); },
+    )?;
+    outcome.map(|o| (o, ms)).map_err(|e| format!("The GPU render failed: {e}"))
 }
 
 fn main() {
@@ -1063,5 +1175,35 @@ mod tests {
         assert_eq!(result.unwrap_err(), "Render failed: photon regression");
         // A later job can still complete normally.
         assert!(render_with_frames(|| {}, Duration::from_millis(1), || {}).is_ok());
+    }
+
+    #[test]
+    fn a_gpu_render_shows_frames_then_a_denoised_image_it_can_show_again() {
+        let gpu = match far_gpu::Gpu::new() {
+            Ok(gpu) => gpu,
+            Err(e) => return eprintln!("skipped: {e}"),
+        };
+        let scene = Scene::open(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/scenes/cornell-box.far")).unwrap();
+        let bvh = far_core::bvh::Bvh::build(&scene);
+        let options = Options {
+            mode: Mode::Enhanced, width: 640, height: 480, samples: 2048, denoise: true, bloom: true,
+            region: Some(far_core::engine::Region { x0: 0, y0: 0, x1: 32, y1: 32 }), ..Options::default()
+        };
+        let (image, progress) = (Image::new(options.width, options.height), Progress::default());
+        let frames = AtomicUsize::new(0);
+        let ((adapter, accumulation), _) = render_on_gpu(&gpu, &bvh, &scene, &options, &image, &progress,
+            Duration::from_millis(5), || { frames.fetch_add(1, Relaxed); Ok(()) }).unwrap();
+        assert!(!adapter.is_empty());
+        assert!(frames.load(Relaxed) > 1, "no frames while rendering");
+        assert_eq!(progress.pass_index.load(Relaxed), 2048);
+        assert!(progress.denoiser.lock().unwrap().is_some(), "not denoised");
+        // The whole image, whatever the region, and lit.
+        let rgba = image.rgba();
+        let outside: Vec<u8> = rgba.chunks_exact(640 * 4).skip(32).flat_map(|row| row[..3].iter().chain(&row[320 * 4..][..3]).copied()).collect();
+        let mean = outside.iter().map(|&c| c as f32).sum::<f32>() / outside.len() as f32;
+        assert!(mean > 20.0, "the image outside the region is dark: {mean}");
+        // Exposure changes show the kept light again without rendering.
+        let brighter = Options { region: None, exposure: 2.0, bloom: false, ..options.clone() };
+        assert!(far_core::enhanced::redisplay(&accumulation.unwrap(), &scene, &brighter, &image, &progress));
     }
 }

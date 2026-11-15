@@ -24,7 +24,7 @@ import {
   DEFAULT_SUN_TIME,
 } from "../settings";
 import type {
-  Bounces, DofPreset, CausticPreset, CausticReport, Comparison, Mode, Quality, Resolution, Settings, SkyConfig, SunTime, ToneMapping,
+  Bounces, DofPreset, CausticPreset, CausticReport, Comparison, Device, Mode, Quality, Resolution, Settings, SkyConfig, SunTime, ToneMapping,
 } from "../types";
 import { MaterialEditor } from "./MaterialEditor";
 import { CausticStats } from "./CausticStats";
@@ -558,6 +558,19 @@ function SystemTab({ props, update }: TabContext) {
   const { settings, cores } = props;
   return (
     <Section id="performance" title="Performance">
+      <Row label="Device" keywords="gpu graphics card cpu metal directx vulkan"
+        hint="Auto renders on the graphics card when it gives the CPU's image, and on the CPU otherwise. The 2008 and Fixed stages and caustics always use the CPU.">
+        <Segmented<Device>
+          label="Device"
+          value={settings.device}
+          options={[
+            { value: "auto", label: "Auto" },
+            { value: "gpu", label: "GPU" },
+            { value: "cpu", label: "CPU" },
+          ]}
+          onChange={(device) => update({ device })}
+        />
+      </Row>
       <ScrubRow label="Threads" keywords="cores cpu" value={settings.threads} min={1} max={cores} step={1} strict
         onChange={(threads) => update({ threads })} />
       <CheckRow label="Acceleration" keywords="bvh kd-tree"
