@@ -69,6 +69,18 @@ struct Material {
     refr: f32, absorption_depth: f32, pad1: u32, pad2: u32,
 }
 const NO_TEXTURE: u32 = 0xffffffffu;
+
+// What the scene uses, set when the pipeline is made (lib.rs's Features): the compiler drops the
+// code for what is off, which frees registers and lets more threads run at once, as Cycles'
+// specialized kernels do. Each is also checked at run time, so `true` is always correct.
+override HAS_VOLUMES: bool = true;
+override HAS_GLASS: bool = true;
+override HAS_ENV: bool = true;
+override HAS_GGX: bool = true;
+override HAS_TEXTURES: bool = true;
+// Boxes, cylinders, tubes, cones and tori; spheres and grounds are always there.
+override HAS_SOLIDS: bool = true;
+override HAS_LENS: bool = true;
 // The kind of a stand-in material for a fog particle, which `respond` answers with its phase.
 const MEDIUM: u32 = 7u;
 // kind 0: a 2008 light, with no falloff. 1: a bulb. 2: a rectangular panel.
@@ -161,6 +173,7 @@ fn hit_shape(i: u32, o: vec3<f32>, d: vec3<f32>, best: ptr<function, Hit>) {
         *best = Hit(t, n, n, s.material, i | 0x80000000u, vec2<f32>(0.0));
         return;
     }
+    if (!HAS_SOLIDS) { return; }
     // A solid, in its own frame; turning keeps lengths, so t is the same in both.
     let lo = vec3<f32>(dot(rel, s.ax), dot(rel, s.ay), dot(rel, s.az));
     let ld = vec3<f32>(dot(d, s.ax), dot(d, s.ay), dot(d, s.az));
@@ -389,7 +402,7 @@ fn env_texel(x: i32, y: i32) -> vec3<f32> {
 
 // The environment's light from direction `d`, filtered bilinearly as on the CPU.
 fn environment(d: vec3<f32>) -> vec3<f32> {
-    if (params.has_env == 0u) { return vec3<f32>(0.0); }
+    if (!HAS_ENV || params.has_env == 0u) { return vec3<f32>(0.0); }
     let local = env_rotate(d, -1.0);
     let size = vec2<f32>(textureDimensions(env));
     let u = fract(atan2(local.x, local.z) / (2.0 * PI) + 0.5);
@@ -469,7 +482,7 @@ fn respond(m: Material, albedo: vec3<f32>, spec: f32, n: vec3<f32>, ng: vec3<f32
     if (m.kind == MEDIUM) { return vec3<f32>(phase(-dot(l, wo), m.roughness)); }
     let cosine = dot(l, n);
     if (cosine <= 0.0 || dot(l, ng) <= 0.0) { return vec3<f32>(0.0); }
-    if (m.kind == 1u) {
+    if (HAS_GGX && m.kind == 1u) {
         var pdf = -1.0;
         if (light_pdf > 0.0 && reflect_chance > 0.0) { pdf = light_pdf / reflect_chance; }
         return ggx_evaluate(m, n, wo, l, pdf);
@@ -493,7 +506,7 @@ fn direct(pos: vec3<f32>, m: Material, albedo: vec3<f32>, spec: f32, n: vec3<f32
         if (lights[i].kind == 0u) { sum += from_light(i, 1.0, pos, m, albedo, spec, n, ng, wo, reflect_chance); }
         else { emitters++; }
     }
-    if (params.has_env != 0u && (m.kind == 1u || any(albedo > vec3<f32>(0.0)))) {
+    if (HAS_ENV && params.has_env != 0u && (m.kind == 1u || any(albedo > vec3<f32>(0.0)))) {
         let drawn = sample_environment(rand(), rand());
         if (drawn.w > 0.0) {
             // No 2008 highlight from the sky, as on the CPU.
@@ -601,7 +614,7 @@ fn from_light(i: u32, chance: f32, pos: vec3<f32>, m: Material, albedo: vec3<f32
 // dimmed by fog, as the CPU's visibility.
 fn visibility(start: vec3<f32>, l: vec3<f32>, limit: f32) -> vec3<f32> {
     let passed = surface_visibility(start, l, limit);
-    if (params.volume_count == 0u || all(passed <= vec3<f32>(0.0))) { return passed; }
+    if (!HAS_VOLUMES || params.volume_count == 0u || all(passed <= vec3<f32>(0.0))) { return passed; }
     return passed * exp(-optical_depth(start, l, limit));
 }
 
@@ -609,7 +622,7 @@ fn visibility(start: vec3<f32>, l: vec3<f32>, limit: f32) -> vec3<f32> {
 // lamps and opaque surfaces block it; glass lets its share through, absorbing along the way.
 fn surface_visibility(start: vec3<f32>, l: vec3<f32>, limit: f32) -> vec3<f32> {
     if (emitter(start, l, limit).t < limit) { return vec3<f32>(0.0); }
-    if (params.has_glass == 0u) {
+    if (!HAS_GLASS || params.has_glass == 0u) {
         if (blocked(start, l, limit)) { return vec3<f32>(0.0); }
         return vec3<f32>(1.0);
     }
@@ -1165,12 +1178,12 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
     // A path ends at its depth limits, by Russian roulette or at this guard.
     for (var segment = 0u; segment < 160u; segment++) {
         var hit = intersect(o, d, FAR, false);
-        if (absorbing != NO_TEXTURE) {
+        if (HAS_GLASS && absorbing != NO_TEXTURE) {
             through *= absorption(materials[absorbing], hit.t);
             absorbing = NO_TEXTURE;
         }
         let lamp = emitter(o, d, hit.t);
-        if (params.volume_count > 0u) {
+        if (HAS_VOLUMES && params.volume_count > 0u) {
             // What the camera ray meets first guides the denoiser even when it scatters in fog.
             if (segment == 0u && hit.t < FAR) {
                 first_albedo = materials[hit.material].color;
@@ -1222,7 +1235,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
         if (lamp.t < hit.t) {
             if (sees_lights) {
                 var weight = 1.0;
-                if (mis_pdf > 0.0) { weight = power_weight(mis_pdf, lamp_pdf(lamp, mis_from, o, d)); }
+                if (HAS_GGX && mis_pdf > 0.0) { weight = power_weight(mis_pdf, lamp_pdf(lamp, mis_from, o, d)); }
                 light += capped(through * lamp.color * weight, rebound);
             }
             break;
@@ -1231,14 +1244,14 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
             // After a diffuse rebound the environment was drawn already, by its light.
             if (sees_lights && (segment > 0u || params.env_visible != 0u)) {
                 var weight = 1.0;
-                if (mis_pdf > 0.0 && params.has_env != 0u) { weight = power_weight(mis_pdf, environment_pdf(d)); }
+                if (HAS_GGX && mis_pdf > 0.0 && params.has_env != 0u) { weight = power_weight(mis_pdf, environment_pdf(d)); }
                 light += capped(through * environment(d) * weight, rebound);
             }
             break;
         }
         var m = materials[hit.material];
         let pos = o + d * hit.t;
-        if (m.texture != NO_TEXTURE) { m.color *= texture_color(m.texture, texture_uv(hit, pos, m)); }
+        if (HAS_TEXTURES && m.texture != NO_TEXTURE) { m.color *= texture_color(m.texture, texture_uv(hit, pos, m)); }
         var ng = hit.ng;
         let inside = dot(ng, d) > 0.0;
         if (inside) { ng = -ng; }
@@ -1258,7 +1271,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
         let may_reflect = specular < params.max_depth && glossy_count < params.glossy_max;
         let may_bounce = diffuse_bounces < params.max_bounces && front;
 
-        if (m.kind == 1u) {
+        if (HAS_GGX && m.kind == 1u) {
             // GGX: a reflection drawn by its visible microfacets, or a diffuse rebound, each by
             // its chance as the CPU's lobe_chances gives it.
             let a = ggx_alpha(m.roughness);
@@ -1329,7 +1342,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
         let strengths = refr + refl + diff;
         if (strengths <= 0.0) { break; }
         let pick = rand() * strengths;
-        if (pick < refr) {
+        if (HAS_GLASS && pick < refr) {
             // Through: reflect or refract by Fresnel, as the CPU's refract_at, rough glass at a
             // microfacet seen from the ray. Glass takes no color at its surface; it absorbs
             // along the way inside.
@@ -1446,7 +1459,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let target_point = params.corner + params.dx * (f32(id.x) + 0.5 + jx) + params.dy * (f32(id.y) + 0.5 + jy);
     var origin = params.origin;
     var d = normalize(target_point - params.origin);
-    if (params.aperture > 0.0) {
+    if (HAS_LENS && params.aperture > 0.0) {
         let focus = params.origin + d * (params.focus / dot(d, params.forward));
         let lens = lens_point(rand(), rand());
         origin = params.origin + params.right * lens.x + params.up * lens.y;

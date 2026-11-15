@@ -86,6 +86,10 @@ Visual gain for the effort:
   5. ~~Final renders on the GPU, as a Device setting~~ (done: Auto falls back to the CPU for
      scenes using what the GPU lacks, and says so). Left: continuing a longer render from the
      last one, regions and adaptive sampling on the GPU.
+  6. Speed: the shader is specialized per scene (done, up to a third faster on simple scenes).
+     Next, if measurements show divergence costs most in mixed scenes: a wavefront path
+     tracer, with kernels per stage (intersect, shade, shadow, volume) and paths sorted by
+     material, as Cycles does; it needs more than wgpu's 8 storage buffers per stage.
 
   Risks: two renderers to keep equal; no recursion in shaders; Windows stops a GPU command
   after 2 seconds, so work goes in small slices; CI has no GPU, only a software renderer;

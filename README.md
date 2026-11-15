@@ -896,6 +896,13 @@ an RMSE of 21; the cause is not found yet.
 Russian roulette on the GPU ends a path by everything it carries rather than by the last
 surface alone, so the same image comes with shorter paths, which suits how GPUs run.
 
+The shader is compiled for what each scene uses, as Cycles specializes its kernels: override
+constants turn off the code for fog, glass, the environment, GGX, textures, solids or the lens
+when a scene has none, which frees registers so more threads run at once. Each set is compiled
+once and kept. Measured alternately against the shader with everything on, it saves 32% on
+the Cornell box, 20% on the primitives and 8% on the Rhino and the light shafts; scenes that
+use nearly everything, such as Christmas and the showcase, stay the same.
+
 ### Tone mapping (Enhanced)
 
 **Image > Tone mapping** chooses how light becomes screen colors; the command line uses

@@ -313,8 +313,38 @@ pub struct Gpu {
     device: wgpu::Device,
     queue: wgpu::Queue,
     layout: wgpu::BindGroupLayout,
-    pipeline: wgpu::ComputePipeline,
+    shader: wgpu::ShaderModule,
+    pipeline_layout: wgpu::PipelineLayout,
+    /// One pipeline per set of features, made on first use: see `Features`.
+    pipelines: std::sync::Mutex<std::collections::HashMap<u32, wgpu::ComputePipeline>>,
     adapter: String,
+}
+
+/// What a scene uses, for the shader's override constants: the compiler leaves out the code for
+/// the rest, as Cycles specializes its kernels.
+struct Features(u32);
+
+impl Features {
+    /// The constants of trace.wgsl, in the order of their bits.
+    const NAMES: [&'static str; 7] = ["HAS_VOLUMES", "HAS_GLASS", "HAS_ENV", "HAS_GGX", "HAS_TEXTURES", "HAS_SOLIDS", "HAS_LENS"];
+
+    fn of(scene: &Scene, packed: &Packed, environment: bool, aperture: f32) -> Self {
+        let uses = |m: &dyn Fn(&Material) -> bool| packed.materials.iter().any(m);
+        let on = [
+            packed.volume_count > 0,
+            uses(&|m| m.kind == 2 || m.refr > 0.0),
+            environment,
+            uses(&|m| m.kind == 1),
+            uses(&|m| m.texture != NO_TEXTURE) && !scene.textures.is_empty(),
+            packed.shapes.iter().take(packed.volume_first as usize).any(|s| (1..=5).contains(&s.kind)),
+            aperture > 0.0,
+        ];
+        Self(on.iter().enumerate().map(|(i, &b)| (b as u32) << i).sum())
+    }
+
+    fn constants(&self) -> Vec<(&'static str, f64)> {
+        Self::NAMES.iter().enumerate().map(|(i, &name)| (name, (self.0 >> i & 1) as f64)).collect()
+    }
 }
 
 impl Gpu {
@@ -379,11 +409,22 @@ impl Gpu {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("trace"), bind_group_layouts: &[Some(&layout)], immediate_size: 0,
         });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("trace"), layout: Some(&pipeline_layout), module: &shader, entry_point: Some("main"),
-            compilation_options: Default::default(), cache: None,
-        });
-        Ok(Self { device, queue, layout, pipeline, adapter: format!("{} ({:?})", info.name, info.backend) })
+        Ok(Self {
+            device, queue, layout, shader, pipeline_layout, pipelines: Default::default(),
+            adapter: format!("{} ({:?})", info.name, info.backend),
+        })
+    }
+
+    /// The shader compiled for `features`, kept for later renders.
+    fn pipeline(&self, features: &Features) -> wgpu::ComputePipeline {
+        let mut pipelines = self.pipelines.lock().unwrap();
+        pipelines.entry(features.0).or_insert_with(|| {
+            self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("trace"), layout: Some(&self.pipeline_layout), module: &self.shader, entry_point: Some("main"),
+                compilation_options: wgpu::PipelineCompilationOptions { constants: &features.constants(), ..Default::default() },
+                cache: None,
+            })
+        }).clone()
     }
 
     /// Renders `op.samples` passes of the whole image; `op.region` and adaptive sampling are
@@ -432,6 +473,7 @@ impl Gpu {
         };
 
         // The environment's sampling tables go after the texels, as float bits.
+        let uses = Features::of(scene, &packed, environment.is_some(), params.aperture);
         let mut texels = packed.texels;
         if let Some(e) = environment {
             params.env_tables = texels.len() as u32;
@@ -453,6 +495,7 @@ impl Gpu {
             usage: wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[],
         }, wgpu::util::TextureDataOrder::LayerMajor, bytemuck::cast_slice(&env_data));
         let env_view = env.create_view(&wgpu::TextureViewDescriptor::default());
+        let pipeline = self.pipeline(&uses);
 
         let pixels = (w as usize) * (h as usize);
         let accum_size = (pixels * 16 * stride as usize) as u64;
@@ -528,7 +571,7 @@ impl Gpu {
             let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
             {
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
-                pass.set_pipeline(&self.pipeline);
+                pass.set_pipeline(&pipeline);
                 pass.set_bind_group(0, &bind_group, &[]);
                 pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
             }
