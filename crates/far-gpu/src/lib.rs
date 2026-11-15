@@ -194,7 +194,14 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
         let normals = scene.corner_normals.get(i).copied().unwrap_or_default();
         slot[i] = pack_primitive(scene, prim, normals, &mut tris, &mut shapes);
     }
-    let nodes = bvh.nodes.iter().map(|n| Node { low: n.min, first: n.first, high: n.max, count: n.count }).collect();
+    let mut nodes: Vec<Node> = bvh.nodes.iter().map(|n| Node { low: n.min, first: n.first, high: n.max, count: n.count }).collect();
+    // With nothing but grounds the BVH holds an empty root, an inverted box that the shader's
+    // slab test reads as all of space, and an inner node whose children are itself, which it
+    // would walk forever. A leaf holding the zeroed triangle that fills an empty buffer instead
+    // is hit by nothing.
+    if bvh.prims.is_empty() {
+        nodes = vec![Node { low: [0.0; 3], first: 0, high: [0.0; 3], count: 1 }];
+    }
     let refs = bvh.prims.iter().map(|&p| slot[p as usize]).collect();
 
     let texture = |map: Option<usize>| map.map_or(NO_TEXTURE, |t| t as u32);
@@ -721,6 +728,22 @@ mod tests {
             let Some((cpu, gpu)) = brightness(name) else { return };
             assert!(cpu > 0.02, "{name}: the CPU image is black");
             assert!((gpu - cpu).abs() < 0.05 * cpu + 0.005, "{name}: CPU {cpu} against GPU {gpu}");
+        }
+    }
+
+    #[test]
+    fn a_scene_with_only_a_ground_renders() {
+        let text = br#"{"lights":[{"position":[0,5,0],"radius":0.2,"material":{"color":[1,1,1]}}],
+            "objects":[{"type":"ground","position":[0,-0.5,0],"material":{"color":[0.5,0.5,0.5]}}]}"#;
+        let path = std::env::temp_dir().join(format!("far-gpu-ground-{}.far", std::process::id()));
+        std::fs::write(&path, text).unwrap();
+        let scene = Scene::open(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let op = Options { mode: Mode::Enhanced, width: 16, height: 12, samples: 4, ..Options::default() };
+        match render(&scene, &Bvh::build(&scene), &op, &|| false) {
+            Ok(rendered) => assert!(rendered.sums.mean().iter().any(|m| m[0] > 0.0), "the ground is black"),
+            Err(e) if e.contains("no graphics card") => eprintln!("skipped: {e}"),
+            Err(e) => panic!("{e}"),
         }
     }
 
