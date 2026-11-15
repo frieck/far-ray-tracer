@@ -862,10 +862,12 @@ CPU walks, and each dispatch adds one sample per pixel to a buffer of sums; the 
 back as linear light and goes through the CPU's tone mapping. The shader follows the CPU's
 Enhanced integrator step by step, so the two give the same image within noise.
 
+Every example scene renders on the GPU in Auto mode.
+
 | Covered | Not yet (rendered without it, and a note says so) |
 | --- | --- |
 | Every shape: meshes, spheres, boxes, cylinders, tubes, cones, tori, grounds, displaced grounds and objects | |
-| 2008 materials, GGX, glass with absorption and roughness, color textures, bump and normal maps; roughness, metallic, emission and alpha maps (rays look through the holes); clear coat, sheen and anisotropy; dispersion in glass, one wavelength per path | Subsurface |
+| 2008 materials, GGX, glass with absorption and roughness, color textures, bump and normal maps; roughness, metallic, emission and alpha maps (rays look through the holes); clear coat, sheen and anisotropy; dispersion in glass, one wavelength per path; subsurface scattering, a random walk under GGX surfaces | |
 | 2008 lights, bulbs with spotlight cones and IES profiles, panels, one picked of many; indirect light with the 2008-light limits | Caustic photons |
 | HDR environments and the sun and sky, drawn by their light; MIS for GGX reflections | |
 | Fog, height fog and smoke (up to eight volumes), with light shafts | More than eight volumes |
@@ -884,6 +886,7 @@ On an Apple M4 Max at 800 × 600 with 256 samples, against its 16 CPU cores:
 | Sun and sky | 8.6 s | 0.30 s |
 | Showcase (displaced ground) | 28.5 s | 5.1 s |
 | Christmas (46 lights) | 43.3 s | 2.6 s |
+| Still life (art example) | 61.4 s at 300 × 225 and 512 samples | 6.1 s |
 
 With fog, at 320 × 200 and 256 samples: light shafts 10.9 s against 0.30 s, smoke (marched
 through noise) 42.5 s against 3.7 s. Bump and normal maps, at 800 × 600: 14.0 s against 0.60 s;
@@ -896,17 +899,17 @@ At few samples the GPU's image is grainier than the CPU's: the CPU draws its sam
 stratified sequences, the GPU from a hash per pixel and pass. Both converge to the same image
 (an RMSE of 3.4 between them at 1024 samples on the bump-mapped floor).
 
-The GPU is 15 to 35 times faster. A test renders ten example scenes on both, fog and smoke
-among them, and checks that their brightness agrees within 5%; it is skipped on machines
-without a graphics card. At 512 samples and 320 × 200 the images differ by an RMSE of 1 to 8
-(of 255), which is the noise of both. The Rhino is the exception, with the same brightness but
-an RMSE of 21; the cause is not found yet.
+The GPU is 15 to 35 times faster, and 5 to 6 times with a displaced ground. A test renders
+eighteen example scenes on both and checks that their brightness agrees within 5%; it is
+skipped on machines without a graphics card. At 512 samples and 320 × 200 the images differ by
+an RMSE of 1 to 9 (of 255), which is the noise of both.
 Russian roulette on the GPU ends a path by everything it carries rather than by the last
 surface alone, so the same image comes with shorter paths, which suits how GPUs run.
 
 The shader is compiled for what each scene uses, as Cycles specializes its kernels: override
-constants turn off the code for fog, glass, the environment, GGX, textures, solids or the lens
-when a scene has none, which frees registers so more threads run at once. Each set is compiled
+constants turn off the code for fog, glass, the environment, GGX, textures, solids, the lens,
+bump, maps, cutouts, coatings, light profiles, dispersion, displacement or subsurface when a
+scene has none, which frees registers so more threads run at once. Each set is compiled
 once and kept. Measured alternately against the shader with everything on, it saves 32% on
 the Cornell box, 20% on the primitives and 8% on the Rhino and the light shafts; scenes that
 use nearly everything, such as Christmas and the showcase, stay the same.

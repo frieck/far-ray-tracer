@@ -86,6 +86,8 @@ struct Material {
     abbe: f32,
     /// The displacement map and the height white reaches; NO_TEXTURE without one.
     displacement: u32, displacement_height: f32, pad: u32,
+    /// The share of diffuse light that walks under a GGX surface, and the mean step there.
+    subsurface: f32, subsurface_radius: f32, pad2: [u32; 2],
 }
 
 /// In Material::bump, a normal map rather than a height map.
@@ -197,7 +199,6 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
 
     let texture = |map: Option<usize>| map.map_or(NO_TEXTURE, |t| t as u32);
     let materials = scene.materials.iter().map(|m| {
-        if m.subsurface.is_some() { note("subsurface scattering"); }
         let emission = m.maps.emission.map_or([0.0; 3], |e| e.color.array());
         let (kind, roughness, metallic) = match (&m.ggx, m.refr > 0.0) {
             (_, true) => (2, m.glass.map_or(0.0, |g| g.roughness), 0.0),
@@ -222,7 +223,10 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
             anisotropy: m.ggx.map_or(0.0, |g| g.anisotropy), rotation: m.ggx.map_or(0.0, |g| g.rotation),
             abbe: m.glass.and_then(|g| g.abbe).unwrap_or(0.0),
             displacement: texture(m.displacement.map(|d| d.texture)), displacement_height: m.displacement.map_or(0.0, |d| d.height),
-            pad: 0 }
+            pad: 0,
+            // As the CPU, only a GGX surface walks light under it.
+            subsurface: m.subsurface.filter(|_| m.ggx.is_some() && m.refr <= 0.0).map_or(0.0, |s| s.amount),
+            subsurface_radius: m.subsurface.map_or(1.0, |s| s.radius), pad2: [0; 2] }
     }).collect();
 
     let color = |material: usize| scene.materials[material].color.array();
@@ -395,8 +399,9 @@ struct Features(u32);
 
 impl Features {
     /// The constants of trace.wgsl, in the order of their bits.
-    const NAMES: [&'static str; 14] = ["HAS_VOLUMES", "HAS_GLASS", "HAS_ENV", "HAS_GGX", "HAS_TEXTURES", "HAS_SOLIDS",
-        "HAS_LENS", "HAS_BUMP", "HAS_MAPS", "HAS_ALPHA", "HAS_COATS", "HAS_PROFILES", "HAS_DISPERSION", "HAS_DISPLACEMENT"];
+    const NAMES: [&'static str; 15] = ["HAS_VOLUMES", "HAS_GLASS", "HAS_ENV", "HAS_GGX", "HAS_TEXTURES", "HAS_SOLIDS",
+        "HAS_LENS", "HAS_BUMP", "HAS_MAPS", "HAS_ALPHA", "HAS_COATS", "HAS_PROFILES", "HAS_DISPERSION", "HAS_DISPLACEMENT",
+        "HAS_SUBSURFACE"];
 
     fn of(scene: &Scene, packed: &Packed, environment: bool, aperture: f32) -> Self {
         let uses = |m: &dyn Fn(&Material) -> bool| packed.materials.iter().any(m);
@@ -415,6 +420,7 @@ impl Features {
             packed.lights.iter().any(|l| l.pad2 & 2 != 0),
             uses(&|m| m.kind == 2 && m.abbe > 0.0),
             uses(&|m| m.displacement != NO_TEXTURE),
+            uses(&|m| m.subsurface > 0.0),
         ];
         Self(on.iter().enumerate().map(|(i, &b)| (b as u32) << i).sum())
     }
@@ -709,8 +715,9 @@ mod tests {
             "materials/maps.far", "materials/coatings.far",
             // Spotlight cones and an IES profile, in fog; glass that disperses.
             "techniques/spotlights.far", "materials/glass.far",
-            // A displaced ground, spheres and a box.
-            "materials/displacement.far"] {
+            // A displaced ground, spheres and a box; light walking under surfaces; and the art
+            // example, with glass holding wine.
+            "materials/displacement.far", "materials/subsurface.far", "still-life.far"] {
             let Some((cpu, gpu)) = brightness(name) else { return };
             assert!(cpu > 0.02, "{name}: the CPU image is black");
             assert!((gpu - cpu).abs() < 0.05 * cpu + 0.005, "{name}: CPU {cpu} against GPU {gpu}");
@@ -719,8 +726,11 @@ mod tests {
 
     #[test]
     fn what_the_gpu_leaves_out_is_reported() {
-        let scene = Scene::open(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/materials/subsurface.far")).unwrap();
+        // Every example renders on the GPU now; more than eight volumes is what it leaves out.
+        let mut scene = Scene::open(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/techniques/smoke.far")).unwrap();
+        let volume = scene.volumes[0];
+        scene.volumes.resize(9, volume);
         let notes = pack(&scene, &Bvh::build(&scene)).notes;
-        assert!(notes.iter().any(|n| n.contains("subsurface")), "{notes:?}");
+        assert!(notes.iter().any(|n| n.contains("volumes")), "{notes:?}");
     }
 }

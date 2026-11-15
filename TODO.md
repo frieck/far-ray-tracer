@@ -80,10 +80,11 @@ Visual gain for the effort:
      shape, 2008, GGX with MIS, glass with absorption, textures, light picking, environment
      sampling, depth of field), used by the app through a Device setting, with live frames,
      denoise and bloom. Left: the material ball.
-  4. Parity, feature by feature, each compared with the CPU against a reference. Left: the
-     subsurface. (Fog, smoke, bump and normal maps, roughness, metallic, emission and alpha
-     maps, clear coat, sheen, anisotropy, spotlight cones, IES profiles, dispersion and
-     displacement are done.)
+  4. ~~Parity, feature by feature, each compared with the CPU~~ (done: every example renders
+     on the GPU and matches the CPU within noise. Fog, smoke, bump and normal maps,
+     roughness, metallic, emission and alpha maps, clear coat, sheen, anisotropy, spotlight
+     cones, IES profiles, dispersion, displacement and subsurface.) Left on the CPU: caustic
+     photons, more than eight volumes.
   5. ~~Final renders on the GPU, as a Device setting~~ (done: Auto falls back to the CPU for
      scenes using what the GPU lacks, and says so). Left: continuing a longer render from the
      last one, regions and adaptive sampling on the GPU.

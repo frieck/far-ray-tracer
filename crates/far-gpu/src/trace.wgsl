@@ -83,6 +83,8 @@ struct Material {
     abbe: f32,
     // The displacement map and the height white reaches; NO_TEXTURE without one.
     displacement: u32, displacement_height: f32, pad: u32,
+    // The share of diffuse light that walks under a GGX surface, and the mean step there.
+    subsurface: f32, subsurface_radius: f32, pad2: u32, pad3: u32,
 }
 const NORMAL_MAP: u32 = 0x80000000u;
 const NO_TEXTURE: u32 = 0xffffffffu;
@@ -110,6 +112,8 @@ override HAS_PROFILES: bool = true;
 override HAS_DISPERSION: bool = true;
 // Displaced objects and grounds.
 override HAS_DISPLACEMENT: bool = true;
+// Light walking under GGX surfaces.
+override HAS_SUBSURFACE: bool = true;
 // The kind of a stand-in material for a fog particle, which `respond` answers with its phase.
 const MEDIUM: u32 = 7u;
 // kind 0: a 2008 light, with no falloff. 1: a bulb. 2: a rectangular panel.
@@ -180,7 +184,9 @@ fn hit_tri(i: u32, o: vec3<f32>, d: vec3<f32>, best: ptr<function, Hit>) {
     if (v < 0.0 || u + v > 1.0) { return; }
     let t = dot(tri.e2, q) * inv;
     if (t <= OFFSET * 0.1 || t >= (*best).t) { return; }
-    let ng = normalize(cross(tri.e1, tri.e2));
+    // The CPU's Triangle::new takes (c - a) x (b - a): which side is the front decides when a ray
+    // enters glass, and how much it absorbs.
+    let ng = normalize(cross(tri.e2, tri.e1));
     var ns = tri.n0 * (1.0 - u - v) + tri.n1 * u + tri.n2 * v;
     if (dot(ns, ns) < 1e-12) { ns = ng; } else { ns = normalize(ns); }
     *best = Hit(t, ng, ns, tri.material, i, vec2<f32>(u, v));
@@ -752,7 +758,8 @@ fn surface_visibility(start: vec3<f32>, l: vec3<f32>, limit: f32) -> vec3<f32> {
     var passed = vec3<f32>(1.0);
     var traveled = 0.0;
     var entered = -1.0;
-    for (var i = 0; i < 8; i++) {
+    // The CPU's MAX_GLASS_CROSSINGS.
+    for (var i = 0; i < 6; i++) {
         let hit = intersect(o, l, remaining, false);
         if (hit.t >= remaining) { return passed; }
         let m = materials[hit.material];
@@ -869,6 +876,72 @@ fn cauchy_ior(ior: f32, abbe: f32, wavelength: f32) -> f32 {
     let b = (ior - 1.0) / abbe / (f - c);
     let a = ior - b / (587.6 * 587.6 * 1e-6);
     return a + b / (wavelength * wavelength * 1e-6);
+}
+
+// The chance of each lobe that can be traced, by the light it carries, as the CPU's
+// lobe_chances: every lobe keeps at least 0.1. A negative weight is a lobe that cannot be
+// traced. Diffuse, subsurface and reflection.
+fn lobe_chances(diffuse: f32, subsurface: f32, reflection: f32) -> vec3<f32> {
+    let weights = vec3<f32>(diffuse, subsurface, reflection);
+    let present = weights >= vec3<f32>(0.0);
+    let count = dot(select(vec3<f32>(0.0), vec3<f32>(1.0), present), vec3<f32>(1.0));
+    if (count == 0.0) { return vec3<f32>(0.0); }
+    if (count == 1.0) { return select(vec3<f32>(0.0), vec3<f32>(1.0), present); }
+    let clamped = max(weights, vec3<f32>(0.0));
+    let total = dot(select(vec3<f32>(0.0), clamped, present), vec3<f32>(1.0));
+    var shares = vec3<f32>(1.0 / count);
+    if (total > 0.0) { shares = clamped / total; }
+    let chances = select(vec3<f32>(0.0), max(shares, vec3<f32>(0.1)), present);
+    return chances / dot(chances, vec3<f32>(1.0));
+}
+
+// The share of light a scattering inside keeps, from the surface color, as the CPU's
+// scattering_albedo.
+fn scattering_albedo(color: vec3<f32>) -> vec3<f32> {
+    let a = clamp(color, vec3<f32>(0.0), vec3<f32>(0.999));
+    let x = vec3<f32>(4.09712) + 4.20863 * a - sqrt(vec3<f32>(9.59217) + 41.6808 * a + 17.7126 * a * a);
+    return vec3<f32>(1.0) - x * x;
+}
+
+// Where subsurface_walk left the material, facing out, and the light it carried there.
+var<private> subsurface_out: vec3<f32>;
+var<private> subsurface_carried: vec3<f32>;
+
+// Light entering material `m` at `pos` walks inside it, as the CPU's subsurface: steps of a
+// random length set by the radius, each scattering any way and keeping the color's share,
+// with Russian roulette after eight. Gives where it leaves, and in w 0 when it never does.
+fn subsurface_walk(m: Material, pos: vec3<f32>, ns: vec3<f32>, ng: vec3<f32>, wo: vec3<f32>) -> vec4<f32> {
+    let f = ggx_fresnel(m, dot(ns, wo));
+    let enters = (1.0 - m.metallic) * (1.0 - max(max(f.x, f.y), f.z)) * m.subsurface;
+    if (enters <= 0.0) { return vec4<f32>(0.0); }
+    let albedo = scattering_albedo(m.color);
+    var dir = cosine_direction(-ns);
+    if (dot(dir, ng) >= 0.0) { return vec4<f32>(0.0); }
+    var p = pos - ng * OFFSET;
+    var carried = vec3<f32>(enters);
+    for (var step = 0; step < 128; step++) {
+        let length = -log(max(1.0 - rand(), 1e-12)) * m.subsurface_radius;
+        let met = intersect(p, dir, length, false);
+        if (met.t < length) {
+            var out = met.ng;
+            if (dot(out, dir) < 0.0) { out = -out; }
+            subsurface_out = out;
+            subsurface_carried = carried;
+            return vec4<f32>(p + dir * met.t, 1.0);
+        }
+        p += dir * length;
+        carried *= albedo;
+        let z = 1.0 - 2.0 * rand();
+        let ring = sqrt(max(0.0, 1.0 - z * z));
+        let angle = 2.0 * PI * rand();
+        dir = vec3<f32>(ring * cos(angle), ring * sin(angle), z);
+        if (step >= 8) {
+            let survival = clamp(max(max(carried.x, carried.y), carried.z), 0.05, 0.95);
+            if (rand() >= survival) { return vec4<f32>(0.0); }
+            carried /= survival;
+        }
+    }
+    return vec4<f32>(0.0);
 }
 
 struct Lamp {
@@ -1311,7 +1384,8 @@ fn under_coat(m: Material, n: vec3<f32>, wo: vec3<f32>) -> f32 {
 // The diffuse lobes, sheen included, times the incoming cosine `ni`, as Ggx::evaluate_diffuse.
 fn ggx_diffuse(m: Material, n: vec3<f32>, wo: vec3<f32>, wi: vec3<f32>, h: vec3<f32>, ni: f32) -> vec3<f32> {
     let f = ggx_fresnel(m, dot(wo, h));
-    var diffuse = (vec3<f32>(1.0) - f) * m.color * ((1.0 - m.metallic) * ni / PI);
+    // The share that walks under the surface instead is handled apart.
+    var diffuse = (vec3<f32>(1.0) - f) * m.color * ((1.0 - m.metallic) * (1.0 - m.subsurface) * ni / PI);
     if (HAS_COATS && m.sheen > 0.0) {
         diffuse += m.sheen_color * (m.sheen * (1.0 - m.metallic) * pow(1.0 - clamp(dot(wi, h), 0.0, 1.0), 5.0) * ni);
     }
@@ -1748,30 +1822,46 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
         let may_bounce = diffuse_bounces < params.max_bounces && front;
 
         if (HAS_GGX && m.kind == 1u) {
-            // GGX: a reflection drawn by its visible microfacets, or a diffuse rebound, each by
-            // its chance as the CPU's lobe_chances gives it.
+            // GGX: a reflection drawn by its visible microfacets, a diffuse rebound, or a walk
+            // under the surface, each by its chance as the CPU's lobe_chances gives it.
             if (HAS_COATS && m.anisotropy != 0.0) { surface_tangent = texture_tangent(shade_prim, m, shade_pos, ns); }
             let seen = ggx_fresnel(m, dot(ns, wo));
             let diff = (1.0 - m.metallic) * (1.0 - max(max(seen.x, seen.y), seen.z));
             let reflects = may_reflect && m.refl > 0.0;
             let bounces = may_bounce && diff > 0.0;
-            var reflect_chance = 0.0;
-            if (reflects && bounces) {
-                let wd = diff * max(max(m.color.x, m.color.y), m.color.z);
-                let total = wd + m.refl;
-                var cr = 0.5;
-                var cd = 0.5;
-                if (total > 0.0) {
-                    cr = max(m.refl / total, 0.1);
-                    cd = max(wd / total, 0.1);
-                }
-                reflect_chance = cr / (cr + cd);
-            } else if (reflects) {
-                reflect_chance = 1.0;
-            }
+            let scatters = HAS_SUBSURFACE && may_bounce && m.subsurface > 0.0;
+            let brightest = max(max(m.color.x, m.color.y), m.color.z);
+            let chances = lobe_chances(select(-1.0, diff * brightest, bounces),
+                select(-1.0, m.subsurface * (1.0 - m.metallic) * brightest, scatters), select(-1.0, m.refl, reflects));
+            let reflect_chance = chances.z;
             light += capped(through * direct(pos, m, vec3<f32>(0.0), 0.0, ns, ng, wo, reflect_chance), rebound);
-            if (!reflects && !bounces) { break; }
-            if (rand() < reflect_chance) {
+            if (!reflects && !bounces && !scatters) { break; }
+            let pick = rand();
+            if (pick >= chances.x + reflect_chance) {
+                // Into the material, as the CPU's subsurface: a random walk that leaves where it
+                // meets the surface again, gathering the light there as a white matte face.
+                let walked = subsurface_walk(m, pos, ns, ng, wo);
+                if (walked.w == 0.0) { break; }
+                let exit = walked.xyz;
+                let out = subsurface_out;
+                through *= subsurface_carried / chances.y;
+                diffuse_bounces++;
+                var white: Material;
+                white.color = vec3<f32>(1.0);
+                white.diff = 1.0;
+                light += capped(through * direct(exit, white, vec3<f32>(1.0), 0.0, out, out, out, 0.0), rebound);
+                if (diffuse_bounces >= params.max_bounces) { break; }
+                d = cosine_direction(out);
+                o = exit + out * OFFSET;
+                through = survived(through * params.strength, &luck, diffuse_bounces);
+                if (all(through <= vec3<f32>(0.0))) { break; }
+                rebound = through;
+                sees_lights = false;
+                mis_pdf = -1.0;
+                diffuse_bounces++;
+                continue;
+            }
+            if (pick < reflect_chance) {
                 var weight = vec3<f32>(0.0);
                 let drawn = ggx_sample(m, ns, wo, &weight);
                 let wi = drawn.xyz;
@@ -1792,7 +1882,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
             let ni = dot(ns, d);
             if (ni <= 0.0) { break; }
             let weight = ggx_diffuse(m, ns, wo, d, normalize(wo + d), ni) * (PI / ni);
-            through = survived(through * weight * (params.strength / (1.0 - reflect_chance)), &luck, diffuse_bounces);
+            through = survived(through * weight * (params.strength / chances.x), &luck, diffuse_bounces);
             if (all(through <= vec3<f32>(0.0))) { break; }
             rebound = through;
             sees_lights = false;
