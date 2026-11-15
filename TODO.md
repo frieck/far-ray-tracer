@@ -81,9 +81,9 @@ Visual gain for the effort:
      sampling, depth of field), used by the app through a Device setting, with live frames,
      denoise and bloom. Left: the material ball.
   4. Parity, feature by feature, each compared with the CPU against a reference. Left: the
-     displacement of the ground, coat, sheen, anisotropy, subsurface, spotlight cones and IES,
-     dispersion. (Fog, smoke, bump and normal maps, and roughness, metallic, emission and alpha
-     maps are done.)
+     displacement of the ground, subsurface, spotlight cones and IES, dispersion. (Fog, smoke,
+     bump and normal maps, roughness, metallic, emission and alpha maps, clear coat, sheen and
+     anisotropy are done.)
   5. ~~Final renders on the GPU, as a Device setting~~ (done: Auto falls back to the CPU for
      scenes using what the GPU lacks, and says so). Left: continuing a longer render from the
      last one, regions and adaptive sampling on the GPU.

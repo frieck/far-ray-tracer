@@ -72,6 +72,9 @@ struct Material {
     // Maps that scale a GGX surface's roughness and metallic, tint the emission, and cut holes
     // where darker than half gray; NO_TEXTURE where absent.
     roughness_map: u32, metallic_map: u32, emission_map: u32, alpha_map: u32,
+    // The GGX layers: sheen, clear coat, and anisotropy turned by `rotation` radians.
+    sheen_color: vec3<f32>, sheen: f32,
+    clearcoat: f32, clearcoat_roughness: f32, anisotropy: f32, rotation: f32,
 }
 const NORMAL_MAP: u32 = 0x80000000u;
 const NO_TEXTURE: u32 = 0xffffffffu;
@@ -91,6 +94,8 @@ override HAS_BUMP: bool = true;
 // Roughness, metallic and emission maps; alpha maps, which rays look through.
 override HAS_MAPS: bool = true;
 override HAS_ALPHA: bool = true;
+// Clear coat, sheen and anisotropy on GGX surfaces.
+override HAS_COATS: bool = true;
 // The kind of a stand-in material for a fog particle, which `respond` answers with its phase.
 const MEDIUM: u32 = 7u;
 // kind 0: a 2008 light, with no falloff. 1: a bulb. 2: a rectangular panel.
@@ -1045,7 +1050,7 @@ fn ggx_fresnel(m: Material, cosine: f32) -> vec3<f32> {
     return f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - clamp(cosine, 0.0, 1.0), 5.0);
 }
 
-// Smith masking of direction `v`.
+// Smith masking of direction `v`, for an isotropic surface (rough glass).
 fn ggx_g1(a: f32, n: vec3<f32>, v: vec3<f32>) -> f32 {
     let z = dot(n, v);
     if (z <= 0.0) { return 0.0; }
@@ -1053,34 +1058,134 @@ fn ggx_g1(a: f32, n: vec3<f32>, v: vec3<f32>) -> f32 {
     return 2.0 / (1.0 + sqrt(1.0 + slope));
 }
 
-fn ggx_distribution(a: f32, cosine: f32) -> f32 {
-    let z = min(cosine, 1.0);
-    let d = (1.0 - z * z) / (a * a) + z * z;
-    return 1.0 / (PI * a * a * d * d);
+// The surface direction at the hit being shaded, which anisotropic highlights follow: where the
+// texture's u grows, as the CPU's texture_tangent; zero when unknown.
+var<private> surface_tangent: vec3<f32>;
+
+// A GGX lobe in its own frame, as far-core's ggx.rs: the tangent and bitangent around the
+// normal, and the highlight's widths along them.
+struct Lobe { t: vec3<f32>, b: vec3<f32>, ax: f32, ay: f32 }
+
+// The base lobe of material `m` at normal `n`, as Ggx::frame and Ggx::alphas.
+fn base_lobe(m: Material, n: vec3<f32>) -> Lobe {
+    let a = ggx_alpha(m.roughness);
+    if (!HAS_COATS || m.anisotropy == 0.0) {
+        let frame = basis(n);
+        return Lobe(frame[0], frame[1], a, a);
+    }
+    var t = surface_tangent - n * dot(n, surface_tangent);
+    if (dot(t, t) < 1e-8) {
+        var helper = vec3<f32>(1.0, 0.0, 0.0);
+        if (abs(n.z) < 0.999) { helper = vec3<f32>(0.0, 0.0, 1.0); }
+        t = cross(helper, n);
+    }
+    t = normalize(t);
+    var b = cross(n, t);
+    if (m.rotation != 0.0) {
+        t = t * cos(m.rotation) + b * sin(m.rotation);
+        b = cross(n, t);
+    }
+    let aspect = sqrt(1.0 - 0.9 * abs(m.anisotropy));
+    let along = max(a / aspect, 0.001);
+    let across = max(a * aspect, 0.001);
+    if (m.anisotropy > 0.0) { return Lobe(t, b, along, across); }
+    return Lobe(t, b, across, along);
 }
 
-// The density of ggx_normal's reflection toward `wi`, in solid angle.
-fn ggx_pdf(a: f32, n: vec3<f32>, wo: vec3<f32>, wi: vec3<f32>) -> f32 {
+// The clear coat: a smooth isotropic lobe of its own.
+fn coat_lobe(m: Material, n: vec3<f32>) -> Lobe {
+    let frame = basis(n);
+    let a = ggx_alpha(m.clearcoat_roughness);
+    return Lobe(frame[0], frame[1], a, a);
+}
+
+fn to_lobe(l: Lobe, n: vec3<f32>, v: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(dot(v, l.t), dot(v, l.b), dot(v, n));
+}
+
+fn lobe_g1(l: Lobe, v: vec3<f32>) -> f32 {
+    if (v.z <= 0.0) { return 0.0; }
+    let slope = (v.x * v.x * l.ax * l.ax + v.y * v.y * l.ay * l.ay) / (v.z * v.z);
+    return 2.0 / (1.0 + sqrt(1.0 + slope));
+}
+
+fn lobe_distribution(l: Lobe, h: vec3<f32>) -> f32 {
+    let z = min(h.z, 1.0);
+    let d = h.x * h.x / (l.ax * l.ax) + h.y * h.y / (l.ay * l.ay) + z * z;
+    return 1.0 / (PI * l.ax * l.ay * d * d);
+}
+
+// ggx.rs's COAT_F0: varnish of IOR 1.5.
+fn coat_fresnel(cosine: f32) -> f32 {
+    return 0.04 + 0.96 * pow(1.0 - clamp(cosine, 0.0, 1.0), 5.0);
+}
+
+// The share of light the clear coat leaves for the base, seen from `wo`.
+fn under_coat(m: Material, n: vec3<f32>, wo: vec3<f32>) -> f32 {
+    if (!HAS_COATS) { return 1.0; }
+    return 1.0 - m.clearcoat * coat_fresnel(dot(n, wo));
+}
+
+// The diffuse lobes, sheen included, times the incoming cosine `ni`, as Ggx::evaluate_diffuse.
+fn ggx_diffuse(m: Material, n: vec3<f32>, wo: vec3<f32>, wi: vec3<f32>, h: vec3<f32>, ni: f32) -> vec3<f32> {
+    let f = ggx_fresnel(m, dot(wo, h));
+    var diffuse = (vec3<f32>(1.0) - f) * m.color * ((1.0 - m.metallic) * ni / PI);
+    if (HAS_COATS && m.sheen > 0.0) {
+        diffuse += m.sheen_color * (m.sheen * (1.0 - m.metallic) * pow(1.0 - clamp(dot(wi, h), 0.0, 1.0), 5.0) * ni);
+    }
+    return diffuse * under_coat(m, n, wo);
+}
+
+// The chance ggx_sample picks the clear coat rather than the base, as Ggx::coat_chance.
+fn coat_chance(m: Material, n: vec3<f32>, wo: vec3<f32>) -> f32 {
+    if (!HAS_COATS || m.clearcoat <= 0.0) { return 0.0; }
+    let cosine = dot(n, wo);
+    let coat = m.clearcoat * coat_fresnel(cosine);
+    let f = ggx_fresnel(m, cosine);
+    let base = max(max(f.x, f.y), f.z) * (1.0 - coat);
+    if (coat + base <= 0.0) { return 0.0; }
+    return clamp(coat / (coat + base), 0.05, 0.95);
+}
+
+// Density of visible-normal sampling of one lobe toward `wi`.
+fn lobe_pdf(l: Lobe, n: vec3<f32>, wo: vec3<f32>, wi: vec3<f32>) -> f32 {
     let no = dot(n, wo);
     let sum = wo + wi;
     if (no <= 0.0 || dot(n, wi) <= 0.0 || dot(sum, sum) < 1e-12) { return 0.0; }
-    return ggx_distribution(a, dot(n, normalize(sum))) * ggx_g1(a, n, wo) / (4.0 * no);
+    let h = normalize(sum);
+    return lobe_distribution(l, to_lobe(l, n, h)) * lobe_g1(l, to_lobe(l, n, wo)) / (4.0 * no);
 }
 
-// BRDF times the incoming cosine. With `light_pdf` > 0, the specular part is weighed against
-// the reflection ray by MIS.
+// The density of ggx_sample toward `wi`, coat and base together, in solid angle.
+fn ggx_pdf(m: Material, n: vec3<f32>, wo: vec3<f32>, wi: vec3<f32>) -> f32 {
+    let base = lobe_pdf(base_lobe(m, n), n, wo, wi);
+    let chance = coat_chance(m, n, wo);
+    if (chance <= 0.0) { return base; }
+    return chance * lobe_pdf(coat_lobe(m, n), n, wo, wi) + (1.0 - chance) * base;
+}
+
+// BRDF times the incoming cosine, as Ggx::evaluate. With `light_pdf` > 0, the specular part is
+// weighed against the reflection ray by MIS.
 fn ggx_evaluate(m: Material, n: vec3<f32>, wo: vec3<f32>, wi: vec3<f32>, light_pdf: f32) -> vec3<f32> {
     let no = dot(n, wo);
     let ni = dot(n, wi);
     let sum = wo + wi;
     if (no <= 0.0 || ni <= 0.0 || dot(sum, sum) < 1e-12) { return vec3<f32>(0.0); }
     let h = normalize(sum);
-    let a = ggx_alpha(m.roughness);
-    let f = ggx_fresnel(m, dot(wo, h));
-    let diffuse = (vec3<f32>(1.0) - f) * m.color * ((1.0 - m.metallic) * ni / PI);
+    let l = base_lobe(m, n);
+    let lo = to_lobe(l, n, wo);
+    let li = to_lobe(l, n, wi);
+    var specular = ggx_fresnel(m, dot(wo, h)) * (lobe_distribution(l, to_lobe(l, n, h)) * lobe_g1(l, lo) * lobe_g1(l, li)
+        / (4.0 * lo.z)) * under_coat(m, n, wo);
+    if (HAS_COATS && m.clearcoat > 0.0) {
+        let c = coat_lobe(m, n);
+        let co = to_lobe(c, n, wo);
+        specular += vec3<f32>(m.clearcoat * coat_fresnel(dot(wo, h)) * lobe_distribution(c, to_lobe(c, n, h))
+            * lobe_g1(c, co) * lobe_g1(c, to_lobe(c, n, wi)) / (4.0 * co.z));
+    }
     var mis = 1.0;
-    if (light_pdf > 0.0) { mis = power_weight(light_pdf, ggx_pdf(a, n, wo, wi)); }
-    return diffuse + f * (ggx_distribution(a, dot(n, h)) * ggx_g1(a, n, wo) * ggx_g1(a, n, wi) / (4.0 * no)) * mis;
+    if (light_pdf > 0.0) { mis = power_weight(light_pdf, ggx_pdf(m, n, wo, wi)); }
+    return ggx_diffuse(m, n, wo, wi, h, ni) + specular * mis;
 }
 
 fn power_weight(a: f32, b: f32) -> f32 {
@@ -1089,12 +1194,9 @@ fn power_weight(a: f32, b: f32) -> f32 {
     return 1.0 / (1.0 + ratio * ratio);
 }
 
-// A microfacet normal visible from `wo` (Heitz 2018), as the CPU's sample_normal.
-fn ggx_normal(a: f32, n: vec3<f32>, wo: vec3<f32>, u: f32, v: f32) -> vec3<f32> {
-    let frame = basis(n);
-    let t = frame[0];
-    let b = frame[1];
-    let view = normalize(vec3<f32>(a * dot(wo, t), a * dot(wo, b), dot(n, wo)));
+// A microfacet normal of lobe `l` visible from `wo` (Heitz 2018), as the CPU's sample_normal.
+fn lobe_normal(l: Lobe, n: vec3<f32>, wo: vec3<f32>, u: f32, v: f32) -> vec3<f32> {
+    let view = normalize(vec3<f32>(l.ax * dot(wo, l.t), l.ay * dot(wo, l.b), dot(n, wo)));
     let side = view.x * view.x + view.y * view.y;
     var t1 = vec3<f32>(1.0, 0.0, 0.0);
     if (side > 1e-12) { t1 = vec3<f32>(-view.y, view.x, 0.0) / sqrt(side); }
@@ -1105,9 +1207,49 @@ fn ggx_normal(a: f32, n: vec3<f32>, wo: vec3<f32>, u: f32, v: f32) -> vec3<f32> 
     let visible = 0.5 * (1.0 + view.z);
     let p2 = (1.0 - visible) * sqrt(max(0.0, 1.0 - p1 * p1)) + visible * radius * sin(angle);
     let normal = t1 * p1 + t2 * p2 + view * sqrt(max(0.0, 1.0 - p1 * p1 - p2 * p2));
-    let h = t * (a * normal.x) + b * (a * normal.y) + n * max(normal.z, 0.0);
+    let h = l.t * (l.ax * normal.x) + l.b * (l.ay * normal.y) + n * max(normal.z, 0.0);
     if (dot(h, h) < 1e-12) { return n; }
     return normalize(h);
+}
+
+// An isotropic visible normal, for rough glass.
+fn ggx_normal(a: f32, n: vec3<f32>, wo: vec3<f32>, u: f32, v: f32) -> vec3<f32> {
+    let frame = basis(n);
+    return lobe_normal(Lobe(frame[0], frame[1], a, a), n, wo, u, v);
+}
+
+// A specular bounce, as Ggx::sample: the clear coat or the base, each by its visible
+// microfacets. Gives the direction and, in w, 0 when there is none; the weight in `weight`.
+fn ggx_sample(m: Material, n: vec3<f32>, wo: vec3<f32>, weight: ptr<function, vec3<f32>>) -> vec4<f32> {
+    let chance = coat_chance(m, n, wo);
+    let on_coat = rand() < chance;
+    var l = base_lobe(m, n);
+    if (on_coat) { l = coat_lobe(m, n); }
+    let h = lobe_normal(l, n, wo, rand(), rand());
+    let oh = dot(wo, h);
+    let wi = h * (2.0 * oh) - wo;
+    if (oh <= 0.0 || dot(n, wi) <= 0.0) { return vec4<f32>(0.0); }
+    let g1 = lobe_g1(l, to_lobe(l, n, wi));
+    if (on_coat) {
+        *weight = vec3<f32>(m.clearcoat * coat_fresnel(oh) * g1 / chance);
+    } else {
+        *weight = ggx_fresnel(m, oh) * (g1 * under_coat(m, n, wo) / (1.0 - chance));
+    }
+    return vec4<f32>(wi, 1.0);
+}
+
+// The surface direction at `pos`: where the texture's u grows, as bump.rs's texture_tangent.
+fn texture_tangent(prim: u32, m: Material, pos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
+    let at = uv_on(prim, pos, m);
+    let frame = basis(normal);
+    let r1 = uv_rate(prim, m, pos, frame[0], at);
+    let r2 = uv_rate(prim, m, pos, frame[1], at);
+    if (r1.z == 0.0 || r2.z == 0.0) { return vec3<f32>(0.0); }
+    let det = r1.x * r2.y - r2.x * r1.y;
+    if (abs(det) < 1e-12) { return vec3<f32>(0.0); }
+    let along_u = (frame[0] * r2.y - frame[1] * r1.y) / det;
+    if (length(along_u) < 1e-12) { return vec3<f32>(0.0); }
+    return normalize(along_u);
 }
 
 // The environment's density for direction `d`, as the CPU's EnvironmentMap::pdf.
@@ -1400,7 +1542,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
         if (HAS_GGX && m.kind == 1u) {
             // GGX: a reflection drawn by its visible microfacets, or a diffuse rebound, each by
             // its chance as the CPU's lobe_chances gives it.
-            let a = ggx_alpha(m.roughness);
+            if (HAS_COATS && m.anisotropy != 0.0) { surface_tangent = texture_tangent(hit.prim, m, pos, ns); }
             let seen = ggx_fresnel(m, dot(ns, wo));
             let diff = (1.0 - m.metallic) * (1.0 - max(max(seen.x, seen.y), seen.z));
             let reflects = may_reflect && m.refl > 0.0;
@@ -1422,12 +1564,12 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
             light += capped(through * direct(pos, m, vec3<f32>(0.0), 0.0, ns, ng, wo, reflect_chance), rebound);
             if (!reflects && !bounces) { break; }
             if (rand() < reflect_chance) {
-                let h = ggx_normal(a, ns, wo, rand(), rand());
-                let oh = dot(wo, h);
-                let wi = h * (2.0 * oh) - wo;
-                if (oh <= 0.0 || dot(ns, wi) <= 0.0 || dot(wi, ng) <= 0.0) { break; }
-                through *= ggx_fresnel(m, oh) * (ggx_g1(a, ns, wi) / reflect_chance);
-                mis_pdf = reflect_chance * ggx_pdf(a, ns, wo, wi);
+                var weight = vec3<f32>(0.0);
+                let drawn = ggx_sample(m, ns, wo, &weight);
+                let wi = drawn.xyz;
+                if (drawn.w == 0.0 || dot(wi, ng) <= 0.0) { break; }
+                through *= weight / reflect_chance;
+                mis_pdf = reflect_chance * ggx_pdf(m, ns, wo, wi);
                 mis_from = pos;
                 d = wi;
                 o = pos + ng * OFFSET;
@@ -1438,7 +1580,10 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
             d = cosine_direction(ns);
             if (dot(d, ng) <= 0.0) { break; }
             o = pos + ng * OFFSET;
-            let weight = (vec3<f32>(1.0) - ggx_fresnel(m, dot(wo, normalize(wo + d)))) * m.color * (1.0 - m.metallic);
+            // The diffuse lobes over the cosine density, sheen and coat included.
+            let ni = dot(ns, d);
+            if (ni <= 0.0) { break; }
+            let weight = ggx_diffuse(m, ns, wo, d, normalize(wo + d), ni) * (PI / ni);
             through = survived(through * weight * (params.strength / (1.0 - reflect_chance)), &luck, diffuse_bounces);
             if (all(through <= vec3<f32>(0.0))) { break; }
             rebound = through;

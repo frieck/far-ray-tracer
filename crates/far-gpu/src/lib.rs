@@ -6,9 +6,9 @@
 //! It follows the CPU's Enhanced integrator: every shape, the 2008 material, GGX and glass with
 //! absorption, color textures, every kind of light with one picked of many, the environment
 //! drawn by its light, MIS for GGX reflections, bump and normal maps, fog and smoke, and depth
-//! of field, and roughness, metallic, emission and alpha maps. `render` reports what a scene
-//! uses beyond that (the displaced ground, coat, sheen, subsurface, spotlights, dispersion),
-//! and the CPU engine remains the reference.
+//! of field, roughness, metallic, emission and alpha maps, and clear coat, sheen and
+//! anisotropy. `render` reports what a scene uses beyond that (the displaced ground,
+//! subsurface, spotlights, dispersion), and the CPU engine remains the reference.
 
 use bytemuck::{Pod, Zeroable};
 use far_core::bvh::Bvh;
@@ -76,6 +76,9 @@ struct Material {
     /// Maps that scale the roughness and how metallic a GGX surface is, that tint its
     /// emission, and that cut holes where darker than half gray; NO_TEXTURE where absent.
     roughness_map: u32, metallic_map: u32, emission_map: u32, alpha_map: u32,
+    /// GGX layers, as far-core's Ggx: sheen, clear coat, anisotropy and its rotation in radians.
+    sheen_color: [f32; 3], sheen: f32,
+    clearcoat: f32, clearcoat_roughness: f32, anisotropy: f32, rotation: f32,
 }
 
 /// In Material::bump, a normal map rather than a height map.
@@ -187,10 +190,7 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
         let emission = m.maps.emission.map_or([0.0; 3], |e| e.color.array());
         let (kind, roughness, metallic) = match (&m.ggx, m.refr > 0.0) {
             (_, true) => (2, m.glass.map_or(0.0, |g| g.roughness), 0.0),
-            (Some(ggx), _) => {
-                if ggx.clearcoat > 0.0 || ggx.sheen > 0.0 || ggx.anisotropy != 0.0 { note("clear coat, sheen and anisotropy"); }
-                (1, ggx.roughness, ggx.metallic)
-            }
+            (Some(ggx), _) => (1, ggx.roughness, ggx.metallic),
             (None, _) => (0, m.drefl, 0.0),
         };
         // A 2008 material may reflect and scatter more light than arrives; the CPU scales its
@@ -205,7 +205,10 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
             }),
             bump_strength: m.bump.map_or(0.0, |b| b.strength),
             roughness_map: texture(m.maps.roughness), metallic_map: texture(m.maps.metallic),
-            emission_map: texture(m.maps.emission.and_then(|e| e.map)), alpha_map: texture(m.maps.alpha) }
+            emission_map: texture(m.maps.emission.and_then(|e| e.map)), alpha_map: texture(m.maps.alpha),
+            sheen_color: m.ggx.map_or([1.0; 3], |g| g.sheen_color.array()), sheen: m.ggx.map_or(0.0, |g| g.sheen),
+            clearcoat: m.ggx.map_or(0.0, |g| g.clearcoat), clearcoat_roughness: m.ggx.map_or(0.03, |g| g.clearcoat_roughness),
+            anisotropy: m.ggx.map_or(0.0, |g| g.anisotropy), rotation: m.ggx.map_or(0.0, |g| g.rotation) }
     }).collect();
 
     let color = |material: usize| scene.materials[material].color.array();
@@ -341,8 +344,8 @@ struct Features(u32);
 
 impl Features {
     /// The constants of trace.wgsl, in the order of their bits.
-    const NAMES: [&'static str; 10] = ["HAS_VOLUMES", "HAS_GLASS", "HAS_ENV", "HAS_GGX", "HAS_TEXTURES", "HAS_SOLIDS",
-        "HAS_LENS", "HAS_BUMP", "HAS_MAPS", "HAS_ALPHA"];
+    const NAMES: [&'static str; 11] = ["HAS_VOLUMES", "HAS_GLASS", "HAS_ENV", "HAS_GGX", "HAS_TEXTURES", "HAS_SOLIDS",
+        "HAS_LENS", "HAS_BUMP", "HAS_MAPS", "HAS_ALPHA", "HAS_COATS"];
 
     fn of(scene: &Scene, packed: &Packed, environment: bool, aperture: f32) -> Self {
         let uses = |m: &dyn Fn(&Material) -> bool| packed.materials.iter().any(m);
@@ -357,6 +360,7 @@ impl Features {
             uses(&|m| m.bump != NO_TEXTURE),
             uses(&|m| m.roughness_map != NO_TEXTURE || m.metallic_map != NO_TEXTURE || m.emission_map != NO_TEXTURE),
             uses(&|m| m.alpha_map != NO_TEXTURE),
+            uses(&|m| m.kind == 1 && (m.clearcoat > 0.0 || m.sheen > 0.0 || m.anisotropy != 0.0)),
         ];
         Self(on.iter().enumerate().map(|(i, &b)| (b as u32) << i).sum())
     }
@@ -646,8 +650,8 @@ mod tests {
             "materials/glass.far", "materials/ggx-materials.far", "christmas.far", "techniques/sun-and-sky.far",
             // Even fog, and smoke shaped by noise; height and normal maps.
             "techniques/light-shafts.far", "techniques/smoke.far", "materials/bump-maps.far",
-            // Roughness, metallic, emission and alpha maps.
-            "materials/maps.far"] {
+            // Roughness, metallic, emission and alpha maps; clear coat, sheen and anisotropy.
+            "materials/maps.far", "materials/coatings.far"] {
             let Some((cpu, gpu)) = brightness(name) else { return };
             assert!(cpu > 0.02, "{name}: the CPU image is black");
             assert!((gpu - cpu).abs() < 0.05 * cpu + 0.005, "{name}: CPU {cpu} against GPU {gpu}");
@@ -656,8 +660,8 @@ mod tests {
 
     #[test]
     fn what_the_gpu_leaves_out_is_reported() {
-        let scene = Scene::open(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/materials/coatings.far")).unwrap();
+        let scene = Scene::open(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/materials/subsurface.far")).unwrap();
         let notes = pack(&scene, &Bvh::build(&scene)).notes;
-        assert!(notes.iter().any(|n| n.contains("clear coat")), "{notes:?}");
+        assert!(notes.iter().any(|n| n.contains("subsurface")), "{notes:?}");
     }
 }
