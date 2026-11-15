@@ -21,10 +21,10 @@ and moves under its version when that version is released.
   material, GGX, glass with absorption, color textures, every kind of light, HDR environments
   and the sun and sky, fog and smoke with light shafts, bump and normal maps, roughness,
   metallic, emission and alpha maps, clear coat, sheen and anisotropy, spotlights and IES
-  profiles, dispersion in glass, and depth of field. The displaced ground and subsurface are
-  still the CPU's, and a note says when a scene uses them; Auto renders those scenes on the
-  CPU. Software renderers are not used. The shader is compiled for what each scene uses, up to
-  a third faster on simple scenes.
+  profiles, dispersion in glass, displacement of objects and of the ground, and depth of field.
+  Subsurface is still the CPU's, and a note says when a scene uses it; Auto renders those
+  scenes on the CPU. Software renderers are not used. The shader is compiled for what each
+  scene uses, up to a third faster on simple scenes.
 
 ### Changed
 
@@ -37,6 +37,9 @@ and moves under its version when that version is released.
 - The Photon map panel now reports photons actually traced instead of the requested count,
   and explains empty maps without recommending more photons. Empty maps no longer cause
   unnecessary lookups or suppress lighting. This affected the beta releases and 3.0.0-rc.1.
+- Rays no longer pass through a displaced ground where its map is black: the relief never goes
+  below the base plane, so a ray that reaches it meets the ground there. Rounding let some
+  through, which showed the sky below the horizon in dark patches.
 
 ## [3.0.0-rc.1] - 2026-11-09
 

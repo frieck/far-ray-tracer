@@ -43,7 +43,9 @@ struct Tri {
     n0: vec3<f32>, u1: f32,
     n1: vec3<f32>, v1: f32,
     n2: vec3<f32>, u2: f32,
-    v2: f32, pad1: u32, pad2: u32, pad3: u32,
+    // For a displaced triangle, one more than the index of its record in `tris`: the shape
+    // under it, as lib.rs packs it. 0 for others.
+    v2: f32, displaced: u32, pad2: u32, pad3: u32,
 }
 // A sphere (kind 0), or a solid with its own axes, its own Y the axis of revolution: a box (1,
 // with `half`), a cylinder (2), a tube (3, inner radius in half.x), a cone (4, apex at +Y) or a
@@ -78,7 +80,9 @@ struct Material {
     sheen_color: vec3<f32>, sheen: f32,
     clearcoat: f32, clearcoat_roughness: f32, anisotropy: f32, rotation: f32,
     // The glass's Abbe number, 0 when it does not disperse.
-    abbe: f32, pad0: u32, pad1: u32, pad2: u32,
+    abbe: f32,
+    // The displacement map and the height white reaches; NO_TEXTURE without one.
+    displacement: u32, displacement_height: f32, pad: u32,
 }
 const NORMAL_MAP: u32 = 0x80000000u;
 const NO_TEXTURE: u32 = 0xffffffffu;
@@ -104,6 +108,8 @@ override HAS_COATS: bool = true;
 override HAS_PROFILES: bool = true;
 // Glass that splits light by wavelength.
 override HAS_DISPERSION: bool = true;
+// Displaced objects and grounds.
+override HAS_DISPLACEMENT: bool = true;
 // The kind of a stand-in material for a fog particle, which `respond` answers with its phase.
 const MEDIUM: u32 = 7u;
 // kind 0: a 2008 light, with no falloff. 1: a bulb. 2: a rectangular panel.
@@ -388,6 +394,14 @@ fn intersect_surface(o: vec3<f32>, d: vec3<f32>, limit: f32, any: bool) -> Hit {
     var best = Hit(limit, vec3<f32>(0.0), vec3<f32>(0.0), 0u, 0u, vec2<f32>(0.0));
     for (var i = 0u; i < params.plane_count; i++) {
         let plane = shapes[i];
+        if (HAS_DISPLACEMENT && materials[plane.material].displacement != NO_TEXTURE) {
+            let t = displaced_ground(plane, materials[plane.material], o, d, best.t);
+            if (t < best.t) {
+                best = Hit(t, plane.ax, plane.ax, plane.material, i | 0x80000000u, vec2<f32>(0.0));
+                if (any) { return best; }
+            }
+            continue;
+        }
         let denom = dot(d, plane.ax);
         if (abs(denom) > 1e-7) {
             let t = dot(plane.center - o, plane.ax) / denom;
@@ -427,6 +441,67 @@ fn intersect_surface(o: vec3<f32>, d: vec3<f32>, limit: f32, any: bool) -> Hit {
         node = stack[top];
     }
     return best;
+}
+
+// Where the ray meets a displaced ground before `limit`, or FAR, as displace.rs's
+// intersect_ground: it enters the slab the relief can fill, steps across it about half a texel
+// at a time and refines the crossing. Rays from below the base plane see the plain plane.
+fn displaced_ground(plane: Shape, m: Material, o: vec3<f32>, d: vec3<f32>, limit: f32) -> f32 {
+    let altitude = dot(o - plane.center, plane.ax);
+    let climb = dot(d, plane.ax);
+    let height = m.displacement_height;
+    if (altitude < 0.0 || height <= 0.0) {
+        if (abs(climb) <= 1e-7) { return FAR; }
+        let t = -altitude / climb;
+        if (t > OFFSET * 0.1 && t < limit) { return t; }
+        return FAR;
+    }
+    var enter = 0.0;
+    if (altitude > height) {
+        if (climb >= -1e-7) { return FAR; }
+        enter = (height - altitude) / climb;
+    }
+    var leave = FAR;
+    if (climb < -1e-7) { leave = -altitude / climb; } else if (climb > 1e-7) { leave = (height - altitude) / climb; }
+    let start = max(enter, 1e-4);
+    let end = min(leave, limit);
+    if (start >= end) { return FAR; }
+    let width = f32(texels[3u * m.displacement + 1u]);
+    let texel = 18.0 / max(max(abs(m.u_scale), abs(m.v_scale)), 1e-6) / max(width, 1.0);
+    let across = max(sqrt(max(1.0 - climb * climb, 0.0)), 1e-3);
+    let step = max(0.5 * texel / across, (end - start) / 1500.0);
+    let uv0 = vec2<f32>(dot(o - plane.center, plane.ay), dot(o - plane.center, plane.az)) / 18.0;
+    let duv = vec2<f32>(dot(d, plane.ay), dot(d, plane.az)) / 18.0;
+    let scale = vec2<f32>(m.u_scale, m.v_scale);
+    var t = start;
+    // A ray from above the slab enters at its top, above the relief even where the map is white
+    // and rounding would put the point a hair under it; one starting inside must first get out.
+    var was_above = altitude > height || ground_above(m, altitude, climb, uv0, duv, scale, t) > 0.0;
+    for (var k = 0; k < 4096 && t < end; k++) {
+        let next = min(t + step, end);
+        let now_above = ground_above(m, altitude, climb, uv0, duv, scale, next) > 0.0;
+        if (was_above && !now_above) {
+            var low = t;
+            var high = next;
+            for (var b = 0; b < 12; b++) {
+                let middle = 0.5 * (low + high);
+                if (ground_above(m, altitude, climb, uv0, duv, scale, middle) > 0.0) { low = middle; } else { high = middle; }
+            }
+            if (high >= limit) { return FAR; }
+            return high;
+        }
+        was_above = now_above;
+        t = next;
+    }
+    // The relief never goes below the base plane, so a ray that reaches it meets the surface
+    // there, as on the CPU; where the map is black, rounding could otherwise let it through.
+    if (was_above && climb < -1e-7 && leave < limit) { return leave; }
+    return FAR;
+}
+
+// How far above the relief the point at `t` along the ray is.
+fn ground_above(m: Material, altitude: f32, climb: f32, uv0: vec2<f32>, duv: vec2<f32>, scale: vec2<f32>, t: f32) -> f32 {
+    return altitude + climb * t - m.displacement_height * map_height(m.displacement, (uv0 + duv * t) * scale);
 }
 
 fn blocked(o: vec3<f32>, d: vec3<f32>, limit: f32) -> bool {
@@ -1477,9 +1552,15 @@ fn map_height(texture: u32, uv: vec2<f32>) -> f32 {
     return dot(texture_color(texture, uv), vec3<f32>(1.0 / 3.0));
 }
 
-// `normal`, the stored shading normal of `prim` at `pos`, tilted by material `m`'s map, as
-// bump.rs's tilt.
+// `normal`, the stored shading normal of `prim` at `pos`, tilted by material `m`'s bump map.
 fn bumped(prim: u32, m: Material, pos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
+    return tilt(prim, m, pos, normal, m.bump, m.bump_strength);
+}
+
+// `normal` tilted by the height or normal map `map` (NORMAL_MAP set for a normal map) of
+// strength `strength`, read through the texture coordinates of `prim` at `pos`, as bump.rs's
+// tilt. A height map of a displacement's height gives the normal of the displaced surface.
+fn tilt(prim: u32, m: Material, pos: vec3<f32>, normal: vec3<f32>, map: u32, strength: f32) -> vec3<f32> {
     let at = uv_on(prim, pos, m);
     let frame = basis(normal);
     let t1 = frame[0];
@@ -1487,16 +1568,16 @@ fn bumped(prim: u32, m: Material, pos: vec3<f32>, normal: vec3<f32>) -> vec3<f32
     let r1 = uv_rate(prim, m, pos, t1, at);
     let r2 = uv_rate(prim, m, pos, t2, at);
     if (r1.z == 0.0 || r2.z == 0.0) { return normal; }
-    let texture = m.bump & ~NORMAL_MAP;
+    let texture = map & ~NORMAL_MAP;
     var tilted = normal;
-    if ((m.bump & NORMAL_MAP) == 0u) {
+    if ((map & NORMAL_MAP) == 0u) {
         // The height's slope in texture space, one texel on each side, then along the tangents.
         let su = 1.0 / f32(texels[3u * texture + 1u]);
         let sv = 1.0 / f32(texels[3u * texture + 2u]);
         let hu = (map_height(texture, at + vec2<f32>(su, 0.0)) - map_height(texture, at - vec2<f32>(su, 0.0))) / (2.0 * su);
         let hv = (map_height(texture, at + vec2<f32>(0.0, sv)) - map_height(texture, at - vec2<f32>(0.0, sv))) / (2.0 * sv);
-        let g1 = m.bump_strength * (hu * r1.x + hv * r1.y);
-        let g2 = m.bump_strength * (hu * r2.x + hv * r2.y);
+        let g1 = strength * (hu * r1.x + hv * r1.y);
+        let g2 = strength * (hu * r2.x + hv * r2.y);
         tilted = normal - (t1 * g1 + t2 * g2);
     } else {
         // The tangent directions in which u and v grow; up in the image, where green points,
@@ -1507,8 +1588,8 @@ fn bumped(prim: u32, m: Material, pos: vec3<f32>, normal: vec3<f32>) -> vec3<f32
         let along_v = (t2 * r1.x - t1 * r2.x) / det;
         if (length(along_u) < 1e-12 || length(along_v) < 1e-12) { return normal; }
         let c = texture_color(texture, at);
-        let x = (2.0 * c.x - 1.0) * m.bump_strength;
-        let y = (2.0 * c.y - 1.0) * m.bump_strength;
+        let x = (2.0 * c.x - 1.0) * strength;
+        let y = (2.0 * c.y - 1.0) * strength;
         tilted = normalize(along_u) * x - normalize(along_v) * y + normal * max(2.0 * c.z - 1.0, 0.0);
     }
     let size = length(tilted);
@@ -1619,20 +1700,38 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
         }
         var m = materials[hit.material];
         let pos = o + d * hit.t;
-        if (HAS_TEXTURES && m.texture != NO_TEXTURE) { m.color *= texture_color(m.texture, texture_uv(hit, pos, m)); }
+        // Where maps and textures are read: the hit, or for a displaced triangle the shape under
+        // it, whose normal the displacement map tilts, as the CPU's hit_at.
+        var shade_prim = hit.prim;
+        var shade_pos = pos;
+        var stored = hit.ns;
+        var uv = vec2<f32>(0.0);
+        var displaced = false;
+        if (HAS_DISPLACEMENT && m.displacement != NO_TEXTURE) {
+            if ((hit.prim & 0x80000000u) == 0u && tris[hit.prim].displaced != 0u) {
+                let face = tris[tris[hit.prim].displaced - 1u];
+                let b = hit.bary;
+                shade_pos = face.p0 + b.x * (face.e1 - face.p0) + b.y * (face.e2 - face.p0);
+                shade_prim = face.material;
+                displaced = true;
+                stored = normalize(face.n0 + b.x * (face.n1 - face.n0) + b.y * (face.n2 - face.n0));
+            }
+            stored = tilt(shade_prim, m, shade_pos, stored, m.displacement, m.displacement_height);
+        }
+        if (displaced) { uv = uv_on(shade_prim, shade_pos, m); } else { uv = texture_uv(hit, pos, m); }
+        if (HAS_TEXTURES && m.texture != NO_TEXTURE) { m.color *= texture_color(m.texture, uv); }
         if (HAS_MAPS) {
             // As the CPU's hit_at: the maps scale GGX roughness and metallic, and tint emission.
-            if (m.kind == 1u && m.roughness_map != NO_TEXTURE) { m.roughness *= map_height(m.roughness_map, texture_uv(hit, pos, m)); }
-            if (m.kind == 1u && m.metallic_map != NO_TEXTURE) { m.metallic *= map_height(m.metallic_map, texture_uv(hit, pos, m)); }
-            if (m.emission_map != NO_TEXTURE) { m.emission *= texture_color(m.emission_map, texture_uv(hit, pos, m)); }
+            if (m.kind == 1u && m.roughness_map != NO_TEXTURE) { m.roughness *= map_height(m.roughness_map, uv); }
+            if (m.kind == 1u && m.metallic_map != NO_TEXTURE) { m.metallic *= map_height(m.metallic_map, uv); }
+            if (m.emission_map != NO_TEXTURE) { m.emission *= texture_color(m.emission_map, uv); }
         }
         var ng = hit.ng;
         let inside = dot(ng, d) > 0.0;
         if (inside) { ng = -ng; }
         // Whether the ray meets the side the stored normal points to.
         // The shading normal as stored, tilted by a bump or normal map.
-        var stored = hit.ns;
-        if (HAS_BUMP && m.bump != NO_TEXTURE) { stored = bumped(hit.prim, m, pos, hit.ns); }
+        if (HAS_BUMP && m.bump != NO_TEXTURE) { stored = bumped(shade_prim, m, shade_pos, stored); }
         let front = dot(d, stored) < 0.0;
         var ns = stored;
         if (dot(ns, ng) < 0.0) { ns = -ns; }
@@ -1651,7 +1750,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
         if (HAS_GGX && m.kind == 1u) {
             // GGX: a reflection drawn by its visible microfacets, or a diffuse rebound, each by
             // its chance as the CPU's lobe_chances gives it.
-            if (HAS_COATS && m.anisotropy != 0.0) { surface_tangent = texture_tangent(hit.prim, m, pos, ns); }
+            if (HAS_COATS && m.anisotropy != 0.0) { surface_tangent = texture_tangent(shade_prim, m, shade_pos, ns); }
             let seen = ggx_fresnel(m, dot(ns, wo));
             let diff = (1.0 - m.metallic) * (1.0 - max(max(seen.x, seen.y), seen.z));
             let reflects = may_reflect && m.refl > 0.0;

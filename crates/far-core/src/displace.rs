@@ -461,6 +461,12 @@ pub(crate) fn intersect_ground(scene: &Scene, _prim: usize, g: &Ground, d: &Disp
         was_above = now_above;
         t = next;
     }
+    // The relief never goes below the base plane, so a ray that reaches it meets the surface
+    // there; where the map is black, rounding could otherwise let it through the ground.
+    if was_above && climb < -1e-7 && leave < *dist {
+        *dist = leave;
+        return 1;
+    }
     0
 }
 
@@ -494,7 +500,8 @@ mod tests {
         let d = Displacement { texture: 0, height: 0.5, detail: DEFAULT_DETAIL };
         scene.materials[0].displacement = Some(d);
         let Primitive::Ground(g) = scene.prims[0].clone() else { unreachable!() };
-        for column in [8.0f32, 32.0, 56.0] {
+        // Column 0 is black: a ray straight down meets the base plane, never passes through.
+        for column in [0.0f32, 8.0, 32.0, 56.0] {
             // A point over the given image column, then straight down onto it.
             let spot = g.point + g.u_axis * (crate::scene::GROUND_TILE * (column + 0.5) / 64.0);
             let expected = height_at(&scene, &scene.prims[0], &d, spot);

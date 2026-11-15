@@ -7,9 +7,9 @@
 //! absorption, color textures, every kind of light with one picked of many, the environment
 //! drawn by its light, MIS for GGX reflections, bump and normal maps, fog and smoke, and depth
 //! of field, roughness, metallic, emission and alpha maps, and clear coat, sheen and
-//! anisotropy, spotlight cones and IES profiles, and dispersion in glass. `render` reports what
-//! a scene uses beyond that (the displaced ground, subsurface), and the CPU engine remains the
-//! reference.
+//! anisotropy, spotlight cones and IES profiles, dispersion in glass, and displacement (the
+//! ground marched, objects shaded from the shape under their mesh). `render` reports what a
+//! scene uses beyond that (subsurface), and the CPU engine remains the reference.
 
 use bytemuck::{Pod, Zeroable};
 use far_core::bvh::Bvh;
@@ -83,7 +83,9 @@ struct Material {
     sheen_color: [f32; 3], sheen: f32,
     clearcoat: f32, clearcoat_roughness: f32, anisotropy: f32, rotation: f32,
     /// The glass's Abbe number, 0 when it does not disperse.
-    abbe: f32, pad: [u32; 3],
+    abbe: f32,
+    /// The displacement map and the height white reaches; NO_TEXTURE without one.
+    displacement: u32, displacement_height: f32, pad: u32,
 }
 
 /// In Material::bump, a normal map rather than a height map.
@@ -124,6 +126,48 @@ const SHAPE: u32 = 0x8000_0000;
 /// Volumes the shader takes; its arrays for where a ray crosses them have this size.
 const MAX_VOLUMES: usize = 8;
 
+/// Packs a triangle, sphere or solid into `tris` or `shapes`, giving where it went: a triangle
+/// index, or a shape index with SHAPE set; u32::MAX for a ground, which goes elsewhere.
+fn pack_primitive(scene: &Scene, prim: &Primitive, normals: [far_core::vector::Vec3; 3], tris: &mut Vec<Tri>,
+    shapes: &mut Vec<GpuShape>) -> u32 {
+    match prim {
+        Primitive::Triangle(t) => {
+            let [va, vb, vc] = t.vertices.map(|v| scene.vertices[v as usize]);
+            let (a, b, c) = (va.pos, vb.pos, vc.pos);
+            let normals = normals.map(|n| if n.x.is_finite() && n.y.is_finite() && n.z.is_finite() { n.array() } else { [0.0; 3] });
+            tris.push(Tri {
+                p0: a.array(), material: t.material as u32,
+                e1: (b - a).array(), u0: va.u,
+                e2: (c - a).array(), v0: va.v,
+                n0: normals[0], u1: vb.u, n1: normals[1], v1: vb.v, n2: normals[2], u2: vc.u,
+                v2: vc.v, pad: [0; 3],
+            });
+            tris.len() as u32 - 1
+        }
+        Primitive::Sphere(s) => {
+            shapes.push(GpuShape {
+                center: s.center.array(), kind: 0, ax: [1.0, 0.0, 0.0], material: s.material as u32,
+                ay: [0.0, 1.0, 0.0], radius: s.radius, az: [0.0, 0.0, 1.0], pad1: 0, half: [s.radius; 3], pad2: 0,
+            });
+            SHAPE | (shapes.len() as u32 - 1)
+        }
+        Primitive::Solid(s) => {
+            // The kinds and fields trace.wgsl reads: see its Shape.
+            let (kind, radius, half) = match s.shape {
+                Shape::Box { half } => (1, 0.0, half.array()),
+                Shape::Cylinder { radius, half_height } => (2, radius, [0.0, half_height, 0.0]),
+                Shape::Tube { radius, inner_radius, half_height } => (3, radius, [inner_radius, half_height, 0.0]),
+                Shape::Cone { radius, half_height } => (4, radius, [0.0, half_height, 0.0]),
+                Shape::Torus { major_radius, minor_radius } => (5, major_radius, [minor_radius, minor_radius, 0.0]),
+            };
+            let [ax, ay, az] = s.axes().map(|a| a.array());
+            shapes.push(GpuShape { center: s.center.array(), kind, ax, material: s.material as u32, ay, radius, az, pad1: 0, half, pad2: 0 });
+            SHAPE | (shapes.len() as u32 - 1)
+        }
+        Primitive::Ground(_) => u32::MAX,
+    }
+}
+
 fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
     let mut notes = Vec::new();
     let mut note = |text: &str| {
@@ -145,44 +189,8 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
     }
     let plane_count = shapes.len() as u32;
     for (i, prim) in scene.prims.iter().enumerate() {
-        match prim {
-            Primitive::Triangle(t) => {
-                let [va, vb, vc] = t.vertices.map(|v| scene.vertices[v as usize]);
-                let (a, b, c) = (va.pos, vb.pos, vc.pos);
-                let normals = scene.corner_normals.get(i).copied().unwrap_or_default().map(|n| {
-                    if n.x.is_finite() && n.y.is_finite() && n.z.is_finite() { n.array() } else { [0.0; 3] }
-                });
-                slot[i] = tris.len() as u32;
-                tris.push(Tri {
-                    p0: a.array(), material: t.material as u32,
-                    e1: (b - a).array(), u0: va.u,
-                    e2: (c - a).array(), v0: va.v,
-                    n0: normals[0], u1: vb.u, n1: normals[1], v1: vb.v, n2: normals[2], u2: vc.u,
-                    v2: vc.v, pad: [0; 3],
-                });
-            }
-            Primitive::Sphere(s) => {
-                slot[i] = SHAPE | shapes.len() as u32;
-                shapes.push(GpuShape {
-                    center: s.center.array(), kind: 0, ax: [1.0, 0.0, 0.0], material: s.material as u32,
-                    ay: [0.0, 1.0, 0.0], radius: s.radius, az: [0.0, 0.0, 1.0], pad1: 0, half: [s.radius; 3], pad2: 0,
-                });
-            }
-            Primitive::Solid(s) => {
-                // The kinds and fields trace.wgsl reads: see its Shape.
-                let (kind, radius, half) = match s.shape {
-                    Shape::Box { half } => (1, 0.0, half.array()),
-                    Shape::Cylinder { radius, half_height } => (2, radius, [0.0, half_height, 0.0]),
-                    Shape::Tube { radius, inner_radius, half_height } => (3, radius, [inner_radius, half_height, 0.0]),
-                    Shape::Cone { radius, half_height } => (4, radius, [0.0, half_height, 0.0]),
-                    Shape::Torus { major_radius, minor_radius } => (5, major_radius, [minor_radius, minor_radius, 0.0]),
-                };
-                let [ax, ay, az] = s.axes().map(|a| a.array());
-                slot[i] = SHAPE | shapes.len() as u32;
-                shapes.push(GpuShape { center: s.center.array(), kind, ax, material: s.material as u32, ay, radius, az, pad1: 0, half, pad2: 0 });
-            }
-            Primitive::Ground(_) => {}
-        }
+        let normals = scene.corner_normals.get(i).copied().unwrap_or_default();
+        slot[i] = pack_primitive(scene, prim, normals, &mut tris, &mut shapes);
     }
     let nodes = bvh.nodes.iter().map(|n| Node { low: n.min, first: n.first, high: n.max, count: n.count }).collect();
     let refs = bvh.prims.iter().map(|&p| slot[p as usize]).collect();
@@ -190,7 +198,6 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
     let texture = |map: Option<usize>| map.map_or(NO_TEXTURE, |t| t as u32);
     let materials = scene.materials.iter().map(|m| {
         if m.subsurface.is_some() { note("subsurface scattering"); }
-        if m.displacement.is_some() { note("displacement of the ground"); }
         let emission = m.maps.emission.map_or([0.0; 3], |e| e.color.array());
         let (kind, roughness, metallic) = match (&m.ggx, m.refr > 0.0) {
             (_, true) => (2, m.glass.map_or(0.0, |g| g.roughness), 0.0),
@@ -213,7 +220,9 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
             sheen_color: m.ggx.map_or([1.0; 3], |g| g.sheen_color.array()), sheen: m.ggx.map_or(0.0, |g| g.sheen),
             clearcoat: m.ggx.map_or(0.0, |g| g.clearcoat), clearcoat_roughness: m.ggx.map_or(0.03, |g| g.clearcoat_roughness),
             anisotropy: m.ggx.map_or(0.0, |g| g.anisotropy), rotation: m.ggx.map_or(0.0, |g| g.rotation),
-            abbe: m.glass.and_then(|g| g.abbe).unwrap_or(0.0), pad: [0; 3] }
+            abbe: m.glass.and_then(|g| g.abbe).unwrap_or(0.0),
+            displacement: texture(m.displacement.map(|d| d.texture)), displacement_height: m.displacement.map_or(0.0, |d| d.height),
+            pad: 0 }
     }).collect();
 
     let color = |material: usize| scene.materials[material].color.array();
@@ -273,6 +282,22 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
         });
     }
     let volume_count = volumes.len() as u32;
+
+    // Displaced objects, which far-core turned into meshes: the shapes they came from go after
+    // the volumes (or after the triangles, for a mesh), out of the BVH's reach. Each displaced
+    // triangle points, by one more than the index in its pad[0], to a record after the
+    // triangles: in p0, e1 and e2 the corners of the shape under it, in n0 to n2 its normals
+    // there, and in material where that shape went.
+    let sources: Vec<u32> = scene.displaced_sources.iter()
+        .map(|p| pack_primitive(scene, p, [far_core::vector::Vec3::default(); 3], &mut tris, &mut shapes))
+        .collect();
+    for (i, face) in scene.displaced.iter().enumerate() {
+        let Some(face) = face else { continue };
+        let [b0, b1, b2] = face.base.map(|v| v.array());
+        let [n0, n1, n2] = face.normals.map(|v| v.array());
+        tris[slot[i] as usize].pad[0] = tris.len() as u32 + 1;
+        tris.push(Tri { p0: b0, material: sources[face.source as usize], e1: b1, e2: b2, n0, n1, n2, ..Zeroable::zeroed() });
+    }
 
     // Texels as the CPU stores them, which are bytes over 256.
     let mut texels: Vec<u32> = Vec::with_capacity(3 * scene.textures.len());
@@ -370,8 +395,8 @@ struct Features(u32);
 
 impl Features {
     /// The constants of trace.wgsl, in the order of their bits.
-    const NAMES: [&'static str; 13] = ["HAS_VOLUMES", "HAS_GLASS", "HAS_ENV", "HAS_GGX", "HAS_TEXTURES", "HAS_SOLIDS",
-        "HAS_LENS", "HAS_BUMP", "HAS_MAPS", "HAS_ALPHA", "HAS_COATS", "HAS_PROFILES", "HAS_DISPERSION"];
+    const NAMES: [&'static str; 14] = ["HAS_VOLUMES", "HAS_GLASS", "HAS_ENV", "HAS_GGX", "HAS_TEXTURES", "HAS_SOLIDS",
+        "HAS_LENS", "HAS_BUMP", "HAS_MAPS", "HAS_ALPHA", "HAS_COATS", "HAS_PROFILES", "HAS_DISPERSION", "HAS_DISPLACEMENT"];
 
     fn of(scene: &Scene, packed: &Packed, environment: bool, aperture: f32) -> Self {
         let uses = |m: &dyn Fn(&Material) -> bool| packed.materials.iter().any(m);
@@ -389,6 +414,7 @@ impl Features {
             uses(&|m| m.kind == 1 && (m.clearcoat > 0.0 || m.sheen > 0.0 || m.anisotropy != 0.0)),
             packed.lights.iter().any(|l| l.pad2 & 2 != 0),
             uses(&|m| m.kind == 2 && m.abbe > 0.0),
+            uses(&|m| m.displacement != NO_TEXTURE),
         ];
         Self(on.iter().enumerate().map(|(i, &b)| (b as u32) << i).sum())
     }
@@ -682,7 +708,9 @@ mod tests {
             // Roughness, metallic, emission and alpha maps; clear coat, sheen and anisotropy.
             "materials/maps.far", "materials/coatings.far",
             // Spotlight cones and an IES profile, in fog; glass that disperses.
-            "techniques/spotlights.far", "materials/glass.far"] {
+            "techniques/spotlights.far", "materials/glass.far",
+            // A displaced ground, spheres and a box.
+            "materials/displacement.far"] {
             let Some((cpu, gpu)) = brightness(name) else { return };
             assert!(cpu > 0.02, "{name}: the CPU image is black");
             assert!((gpu - cpu).abs() < 0.05 * cpu + 0.005, "{name}: CPU {cpu} against GPU {gpu}");

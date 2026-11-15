@@ -864,7 +864,7 @@ Enhanced integrator step by step, so the two give the same image within noise.
 
 | Covered | Not yet (rendered without it, and a note says so) |
 | --- | --- |
-| Every shape: meshes, spheres, boxes, cylinders, tubes, cones, tori, grounds | Displacement of the ground |
+| Every shape: meshes, spheres, boxes, cylinders, tubes, cones, tori, grounds, displaced grounds and objects | |
 | 2008 materials, GGX, glass with absorption and roughness, color textures, bump and normal maps; roughness, metallic, emission and alpha maps (rays look through the holes); clear coat, sheen and anisotropy; dispersion in glass, one wavelength per path | Subsurface |
 | 2008 lights, bulbs with spotlight cones and IES profiles, panels, one picked of many; indirect light with the 2008-light limits | Caustic photons |
 | HDR environments and the sun and sky, drawn by their light; MIS for GGX reflections | |
@@ -882,14 +882,15 @@ On an Apple M4 Max at 800 × 600 with 256 samples, against its 16 CPU cores:
 | Glass | 9.2 s | 0.26 s |
 | Primitives (every solid) | 7.4 s | 0.29 s |
 | Sun and sky | 8.6 s | 0.30 s |
-| Showcase | 30.8 s | 1.2 s |
+| Showcase (displaced ground) | 28.5 s | 5.1 s |
 | Christmas (46 lights) | 43.3 s | 2.6 s |
 
 With fog, at 320 × 200 and 256 samples: light shafts 10.9 s against 0.30 s, smoke (marched
 through noise) 42.5 s against 3.7 s. Bump and normal maps, at 800 × 600: 14.0 s against 0.60 s;
 material maps 8.8 s against 0.46 s; the models scene 14.1 s against 0.84 s; coatings 7.3 s
 against 0.34 s; bokeh 6.7 s against 0.25 s; spotlights (in fog) 20.6 s against 1.8 s at 400 × 300
-and 512 samples.
+and 512 samples; displacement 33.3 s against 5.5 s. A displaced ground costs the most on the GPU:
+every ray, shadow rays too, marches over the relief up to 1500 steps.
 
 At few samples the GPU's image is grainier than the CPU's: the CPU draws its samples from
 stratified sequences, the GPU from a hash per pixel and pass. Both converge to the same image
