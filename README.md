@@ -865,7 +865,7 @@ Enhanced integrator step by step, so the two give the same image within noise.
 | Covered | Not yet (rendered without it, and a note says so) |
 | --- | --- |
 | Every shape: meshes, spheres, boxes, cylinders, tubes, cones, tori, grounds | Displacement of the ground |
-| 2008 materials, GGX, glass with absorption and roughness, color textures | Roughness, metallic, emission and alpha maps; bump and normal maps; clear coat, sheen, anisotropy, subsurface; dispersion |
+| 2008 materials, GGX, glass with absorption and roughness, color textures, bump and normal maps | Roughness, metallic, emission and alpha maps; clear coat, sheen, anisotropy, subsurface; dispersion |
 | 2008 lights, bulbs, panels, one picked of many; indirect light with the 2008-light limits | Spotlight cones and IES, caustic photons |
 | HDR environments and the sun and sky, drawn by their light; MIS for GGX reflections | |
 | Fog, height fog and smoke (up to eight volumes), with light shafts | More than eight volumes |
@@ -886,7 +886,11 @@ On an Apple M4 Max at 800 × 600 with 256 samples, against its 16 CPU cores:
 | Christmas (46 lights) | 43.3 s | 2.6 s |
 
 With fog, at 320 × 200 and 256 samples: light shafts 10.9 s against 0.30 s, smoke (marched
-through noise) 42.5 s against 3.7 s.
+through noise) 42.5 s against 3.7 s. Bump and normal maps, at 800 × 600: 14.0 s against 0.60 s.
+
+At few samples the GPU's image is grainier than the CPU's: the CPU draws its samples from
+stratified sequences, the GPU from a hash per pixel and pass. Both converge to the same image
+(an RMSE of 3.4 between them at 1024 samples on the bump-mapped floor).
 
 The GPU is 15 to 35 times faster. A test renders ten example scenes on both, fog and smoke
 among them, and checks that their brightness agrees within 5%; it is skipped on machines

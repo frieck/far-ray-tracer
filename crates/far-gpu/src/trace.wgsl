@@ -66,8 +66,11 @@ struct Material {
     texture: u32, u_scale: f32, v_scale: f32,
     // How much light goes through (2008 materials and glass), and the depth at which glass
     // keeps its color's share of light, or 0 for the CPU's fixed absorption.
-    refr: f32, absorption_depth: f32, pad1: u32, pad2: u32,
+    refr: f32, absorption_depth: f32,
+    // The bump map's texture, NORMAL_MAP set for a normal map, or NO_TEXTURE; its strength.
+    bump: u32, bump_strength: f32,
 }
+const NORMAL_MAP: u32 = 0x80000000u;
 const NO_TEXTURE: u32 = 0xffffffffu;
 
 // What the scene uses, set when the pipeline is made (lib.rs's Features): the compiler drops the
@@ -81,6 +84,7 @@ override HAS_TEXTURES: bool = true;
 // Boxes, cylinders, tubes, cones and tori; spheres and grounds are always there.
 override HAS_SOLIDS: bool = true;
 override HAS_LENS: bool = true;
+override HAS_BUMP: bool = true;
 // The kind of a stand-in material for a fog particle, which `respond` answers with its phase.
 const MEDIUM: u32 = 7u;
 // kind 0: a 2008 light, with no falloff. 1: a bulb. 2: a rectangular panel.
@@ -1153,6 +1157,91 @@ fn texture_color(texture: u32, uv: vec2<f32>) -> vec3<f32> {
         mix(texel(texture, x, y + 1), texel(texture, x + 1, y + 1), frac.x), frac.y);
 }
 
+// Bump and normal maps, as far-core's bump.rs: the shading normal tilted by the map, read through
+// the primitive's texture coordinates. How those coordinates run over the surface is measured
+// with two small steps in the tangent plane, which gives the slope and the tangent axes on every
+// kind of primitive.
+
+// The texture coordinates of any point of primitive `prim`, as the CPU's texture_uv_on: on a
+// triangle, of the point projected onto its plane.
+fn uv_on(prim: u32, pos: vec3<f32>, m: Material) -> vec2<f32> {
+    if ((prim & 0x80000000u) == 0u) {
+        let tri = tris[prim];
+        let rel = pos - tri.p0;
+        let d11 = dot(tri.e1, tri.e1);
+        let d12 = dot(tri.e1, tri.e2);
+        let d22 = dot(tri.e2, tri.e2);
+        let det = d11 * d22 - d12 * d12;
+        if (abs(det) < 1e-20) { return vec2<f32>(0.0); }
+        let s1 = (d22 * dot(rel, tri.e1) - d12 * dot(rel, tri.e2)) / det;
+        let s2 = (d11 * dot(rel, tri.e2) - d12 * dot(rel, tri.e1)) / det;
+        let a = vec2<f32>(tri.u0, tri.v0);
+        return a + s1 * (vec2<f32>(tri.u1, tri.v1) - a) + s2 * (vec2<f32>(tri.u2, tri.v2) - a);
+    }
+    var on: Hit;
+    on.prim = prim;
+    return texture_uv(on, pos, m);
+}
+
+// bump.rs's STEP.
+const BUMP_STEP: f32 = 1e-3;
+
+// Change of texture coordinates per scene unit along `dir`, and 1 in z when it could be measured:
+// a step across a seam, where the coordinates jump, is measured backward instead.
+fn uv_rate(prim: u32, m: Material, pos: vec3<f32>, dir: vec3<f32>, at: vec2<f32>) -> vec3<f32> {
+    let forward = uv_on(prim, pos + dir * BUMP_STEP, m) - at;
+    if (all(abs(forward) < vec2<f32>(0.25))) { return vec3<f32>(forward / BUMP_STEP, 1.0); }
+    let backward = at - uv_on(prim, pos - dir * BUMP_STEP, m);
+    if (all(abs(backward) < vec2<f32>(0.25))) { return vec3<f32>(backward / BUMP_STEP, 1.0); }
+    return vec3<f32>(0.0);
+}
+
+fn map_height(texture: u32, uv: vec2<f32>) -> f32 {
+    return dot(texture_color(texture, uv), vec3<f32>(1.0 / 3.0));
+}
+
+// `normal`, the stored shading normal of `prim` at `pos`, tilted by material `m`'s map, as
+// bump.rs's tilt.
+fn bumped(prim: u32, m: Material, pos: vec3<f32>, normal: vec3<f32>) -> vec3<f32> {
+    let at = uv_on(prim, pos, m);
+    let frame = basis(normal);
+    let t1 = frame[0];
+    let t2 = frame[1];
+    let r1 = uv_rate(prim, m, pos, t1, at);
+    let r2 = uv_rate(prim, m, pos, t2, at);
+    if (r1.z == 0.0 || r2.z == 0.0) { return normal; }
+    let texture = m.bump & ~NORMAL_MAP;
+    var tilted = normal;
+    if ((m.bump & NORMAL_MAP) == 0u) {
+        // The height's slope in texture space, one texel on each side, then along the tangents.
+        let su = 1.0 / f32(texels[3u * texture + 1u]);
+        let sv = 1.0 / f32(texels[3u * texture + 2u]);
+        let hu = (map_height(texture, at + vec2<f32>(su, 0.0)) - map_height(texture, at - vec2<f32>(su, 0.0))) / (2.0 * su);
+        let hv = (map_height(texture, at + vec2<f32>(0.0, sv)) - map_height(texture, at - vec2<f32>(0.0, sv))) / (2.0 * sv);
+        let g1 = m.bump_strength * (hu * r1.x + hv * r1.y);
+        let g2 = m.bump_strength * (hu * r2.x + hv * r2.y);
+        tilted = normal - (t1 * g1 + t2 * g2);
+    } else {
+        // The tangent directions in which u and v grow; up in the image, where green points,
+        // is against v.
+        let det = r1.x * r2.y - r2.x * r1.y;
+        if (abs(det) < 1e-12) { return normal; }
+        let along_u = (t1 * r2.y - t2 * r1.y) / det;
+        let along_v = (t2 * r1.x - t1 * r2.x) / det;
+        if (length(along_u) < 1e-12 || length(along_v) < 1e-12) { return normal; }
+        let c = texture_color(texture, at);
+        let x = (2.0 * c.x - 1.0) * m.bump_strength;
+        let y = (2.0 * c.y - 1.0) * m.bump_strength;
+        tilted = normalize(along_u) * x - normalize(along_v) * y + normal * max(2.0 * c.z - 1.0, 0.0);
+    }
+    let size = length(tilted);
+    if (!(size > 1e-12) || size > 1e30) { return normal; }
+    tilted /= size;
+    // A strong map must not turn the surface away from where it faces.
+    if (dot(tilted, normal) > 0.05) { return tilted; }
+    return normal;
+}
+
 fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
     var o = origin;
     var d = direction;
@@ -1256,8 +1345,11 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
         let inside = dot(ng, d) > 0.0;
         if (inside) { ng = -ng; }
         // Whether the ray meets the side the stored normal points to.
-        let front = dot(d, hit.ns) < 0.0;
-        var ns = hit.ns;
+        // The shading normal as stored, tilted by a bump or normal map.
+        var stored = hit.ns;
+        if (HAS_BUMP && m.bump != NO_TEXTURE) { stored = bumped(hit.prim, m, pos, hit.ns); }
+        let front = dot(d, stored) < 0.0;
+        var ns = stored;
         if (dot(ns, ng) < 0.0) { ns = -ns; }
         if (segment == 0u) {
             first_albedo = m.color;

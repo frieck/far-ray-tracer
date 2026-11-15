@@ -81,8 +81,9 @@ Visual gain for the effort:
      sampling, depth of field), used by the app through a Device setting, with live frames,
      denoise and bloom. Left: the material ball.
   4. Parity, feature by feature, each compared with the CPU against a reference. Left: maps
-     (roughness, metallic, emission, alpha), bump and normal maps, coat, sheen, anisotropy,
-     subsurface, spotlight cones and IES, dispersion. (Fog and smoke are done.)
+     (roughness, metallic, emission, alpha), displacement of the ground, coat, sheen,
+     anisotropy, subsurface, spotlight cones and IES, dispersion. (Fog, smoke, bump and normal
+     maps are done.)
   5. ~~Final renders on the GPU, as a Device setting~~ (done: Auto falls back to the CPU for
      scenes using what the GPU lacks, and says so). Left: continuing a longer render from the
      last one, regions and adaptive sampling on the GPU.
@@ -90,6 +91,8 @@ Visual gain for the effort:
      Next, if measurements show divergence costs most in mixed scenes: a wavefront path
      tracer, with kernels per stage (intersect, shade, shadow, volume) and paths sorted by
      material, as Cycles does; it needs more than wgpu's 8 storage buffers per stage.
+     Also: stratified or low-discrepancy samples on the GPU, which is grainier than the CPU at
+     few samples because it draws from a hash.
 
   Risks: two renderers to keep equal; no recursion in shaders; Windows stops a GPU command
   after 2 seconds, so work goes in small slices; CI has no GPU, only a software renderer;

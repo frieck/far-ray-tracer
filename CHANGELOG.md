@@ -19,10 +19,11 @@ and moves under its version when that version is released.
   shader runs on Metal, DirectX 12 and Vulkan, 15 to 35 times faster than 16 CPU cores, and
   gives the same image as the CPU's Enhanced mode within noise. It covers every shape, the 2008
   material, GGX, glass with absorption, color textures, every kind of light, HDR environments
-  and the sun and sky, fog and smoke with light shafts, and depth of field. Maps, bump,
-  coatings, subsurface, spotlights and dispersion are still the CPU's, and a note says when a
-  scene uses them; Auto renders those scenes on the CPU. Software renderers are not used. The
-  shader is compiled for what each scene uses, up to a third faster on simple scenes.
+  and the sun and sky, fog and smoke with light shafts, bump and normal maps, and depth of
+  field. Maps, the displaced ground, coatings, subsurface, spotlights and dispersion are still
+  the CPU's, and a note says when a scene uses them; Auto renders those scenes on the CPU.
+  Software renderers are not used. The shader is compiled for what each scene uses, up to a
+  third faster on simple scenes.
 
 ### Changed
 
