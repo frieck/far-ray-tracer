@@ -40,7 +40,7 @@ fn rgb(wavelength: f32) -> Color {
 }
 
 /// The average of `rgb` over the visible range, which `weight` divides by.
-fn white() -> Color {
+pub fn white() -> Color {
     static WHITE: OnceLock<Color> = OnceLock::new();
     *WHITE.get_or_init(|| {
         const STEPS: usize = 2000;

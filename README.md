@@ -865,7 +865,7 @@ Enhanced integrator step by step, so the two give the same image within noise.
 | Covered | Not yet (rendered without it, and a note says so) |
 | --- | --- |
 | Every shape: meshes, spheres, boxes, cylinders, tubes, cones, tori, grounds | Displacement of the ground |
-| 2008 materials, GGX, glass with absorption and roughness, color textures, bump and normal maps; roughness, metallic, emission and alpha maps (rays look through the holes); clear coat, sheen and anisotropy | Subsurface; dispersion |
+| 2008 materials, GGX, glass with absorption and roughness, color textures, bump and normal maps; roughness, metallic, emission and alpha maps (rays look through the holes); clear coat, sheen and anisotropy; dispersion in glass, one wavelength per path | Subsurface |
 | 2008 lights, bulbs with spotlight cones and IES profiles, panels, one picked of many; indirect light with the 2008-light limits | Caustic photons |
 | HDR environments and the sun and sky, drawn by their light; MIS for GGX reflections | |
 | Fog, height fog and smoke (up to eight volumes), with light shafts | More than eight volumes |

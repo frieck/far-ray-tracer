@@ -21,10 +21,10 @@ and moves under its version when that version is released.
   material, GGX, glass with absorption, color textures, every kind of light, HDR environments
   and the sun and sky, fog and smoke with light shafts, bump and normal maps, roughness,
   metallic, emission and alpha maps, clear coat, sheen and anisotropy, spotlights and IES
-  profiles, and depth of field. The displaced ground, subsurface and dispersion are still the
-  CPU's, and a note says when a scene uses them; Auto renders those scenes on the CPU. Software
-  renderers are not used. The shader is compiled for what each scene uses, up to a third faster
-  on simple scenes.
+  profiles, dispersion in glass, and depth of field. The displaced ground and subsurface are
+  still the CPU's, and a note says when a scene uses them; Auto renders those scenes on the
+  CPU. Software renderers are not used. The shader is compiled for what each scene uses, up to
+  a third faster on simple scenes.
 
 ### Changed
 

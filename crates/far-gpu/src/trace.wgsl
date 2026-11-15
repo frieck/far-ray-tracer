@@ -30,6 +30,8 @@ struct Params {
     // Fog and smoke: two entries each in `shapes` from `volume_first`, read by volume_shape and
     // volume_medium.
     volume_first: u32, volume_count: u32,
+    // far-core's spectral::white.
+    white_r: f32, white_g: f32, white_b: f32,
 }
 
 struct Node { low: vec3<f32>, first: u32, high: vec3<f32>, count: u32 }
@@ -75,6 +77,8 @@ struct Material {
     // The GGX layers: sheen, clear coat, and anisotropy turned by `rotation` radians.
     sheen_color: vec3<f32>, sheen: f32,
     clearcoat: f32, clearcoat_roughness: f32, anisotropy: f32, rotation: f32,
+    // The glass's Abbe number, 0 when it does not disperse.
+    abbe: f32, pad0: u32, pad1: u32, pad2: u32,
 }
 const NORMAL_MAP: u32 = 0x80000000u;
 const NO_TEXTURE: u32 = 0xffffffffu;
@@ -98,6 +102,8 @@ override HAS_ALPHA: bool = true;
 override HAS_COATS: bool = true;
 // Spotlight cones and IES profiles on bulbs.
 override HAS_PROFILES: bool = true;
+// Glass that splits light by wavelength.
+override HAS_DISPERSION: bool = true;
 // The kind of a stand-in material for a fog particle, which `respond` answers with its phase.
 const MEDIUM: u32 = 7u;
 // kind 0: a 2008 light, with no falloff. 1: a bulb. 2: a rectangular panel.
@@ -759,6 +765,35 @@ fn ies_value(table: u32, vertical: f32, horizontal: f32) -> f32 {
     let t = (h - a) / (b - a);
     return ies_interpolate(verticals, vertical_count, rows + (after - 1u) * vertical_count, vertical) * (1.0 - t)
         + ies_interpolate(verticals, vertical_count, rows + after * vertical_count, vertical) * t;
+}
+
+// Dispersion, as far-core's spectral.rs: one lobe of the color matching fit.
+fn spectral_lobe(x: f32, center: f32, below: f32, above: f32) -> f32 {
+    var width = above;
+    if (x < center) { width = below; }
+    let t = (x - center) / width;
+    return exp(-0.5 * t * t);
+}
+
+// The color a path of this wavelength carries, linear sRGB over its average: white on average.
+fn spectral_weight(l: f32) -> vec3<f32> {
+    let x = 1.056 * spectral_lobe(l, 599.8, 37.9, 31.0) + 0.362 * spectral_lobe(l, 442.0, 16.0, 26.7)
+        - 0.065 * spectral_lobe(l, 501.1, 20.4, 26.2);
+    let y = 0.821 * spectral_lobe(l, 568.8, 46.9, 40.5) + 0.286 * spectral_lobe(l, 530.9, 16.3, 31.1);
+    let z = 1.217 * spectral_lobe(l, 437.0, 11.8, 36.0) + 0.681 * spectral_lobe(l, 459.0, 26.0, 13.8);
+    let rgb = max(vec3<f32>(3.2406 * x - 1.5372 * y - 0.4986 * z, -0.9689 * x + 1.8758 * y + 0.0415 * z,
+        0.0557 * x - 0.2040 * y + 1.0570 * z), vec3<f32>(0.0));
+    return rgb / vec3<f32>(params.white_r, params.white_g, params.white_b);
+}
+
+// The refractive index at `wavelength` of glass with index `ior` at the d line and Abbe number
+// `abbe`, by Cauchy's equation, as spectral::ior.
+fn cauchy_ior(ior: f32, abbe: f32, wavelength: f32) -> f32 {
+    let f = 1.0 / (486.1 * 486.1 * 1e-6);
+    let c = 1.0 / (656.3 * 656.3 * 1e-6);
+    let b = (ior - 1.0) / abbe / (f - c);
+    let a = ior - b / (587.6 * 587.6 * 1e-6);
+    return a + b / (wavelength * wavelength * 1e-6);
 }
 
 struct Lamp {
@@ -1506,6 +1541,8 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
     var mis_from = vec3<f32>(0.0);
     // The product of the chances Russian roulette let the path go on with.
     var luck = 1.0;
+    // The wavelength the path follows once it crosses glass that disperses, 0 before.
+    var wavelength = 0.0;
     // A path ends at its depth limits, by Russian roulette or at this guard.
     for (var segment = 0u; segment < 160u; segment++) {
         var hit = intersect(o, d, FAR, false);
@@ -1694,11 +1731,21 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
             let a = ggx_alpha(m.roughness);
             var facet = ns;
             if (m.roughness > 0.0) { facet = ggx_normal(a, ns, wo, rand(), rand()); }
-            var eta = 1.0 / m.ior;
-            if (inside) { eta = m.ior; }
+            var ior = m.ior;
+            if (HAS_DISPERSION && m.abbe > 0.0) {
+                // As the CPU's refraction: the path follows one wavelength from the first glass
+                // that disperses on, and carries that wavelength's color.
+                if (wavelength == 0.0) {
+                    wavelength = 380.0 + rand() * 340.0;
+                    through *= spectral_weight(wavelength);
+                }
+                ior = cauchy_ior(m.ior, m.abbe, wavelength);
+            }
+            var eta = 1.0 / ior;
+            if (inside) { eta = ior; }
             let cos_i = -dot(d, facet);
             let k = 1.0 - eta * eta * (1.0 - cos_i * cos_i);
-            let f0 = pow((m.ior - 1.0) / (m.ior + 1.0), 2.0);
+            let f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
             var cos_f = cos_i;
             if (inside && k > 0.0) { cos_f = sqrt(k); }
             if (k <= 0.0 || rand() < schlick(cos_f, f0)) {

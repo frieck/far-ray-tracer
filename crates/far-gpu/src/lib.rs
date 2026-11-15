@@ -7,8 +7,8 @@
 //! absorption, color textures, every kind of light with one picked of many, the environment
 //! drawn by its light, MIS for GGX reflections, bump and normal maps, fog and smoke, and depth
 //! of field, roughness, metallic, emission and alpha maps, and clear coat, sheen and
-//! anisotropy, and spotlight cones and IES profiles. `render` reports what a scene uses beyond
-//! that (the displaced ground, subsurface, dispersion), and the CPU engine remains the
+//! anisotropy, spotlight cones and IES profiles, and dispersion in glass. `render` reports what
+//! a scene uses beyond that (the displaced ground, subsurface), and the CPU engine remains the
 //! reference.
 
 use bytemuck::{Pod, Zeroable};
@@ -34,7 +34,9 @@ struct Params {
     blade_rotation: f32, has_glass: u32, strength: f32, clamp: f32,
     max_depth: u32, glossy_max: u32, transmission_max: u32, env_tables: u32,
     stride: u32, features: u32, glow_at: u32, volume_first: u32,
-    volume_count: u32, pad: [u32; 3],
+    volume_count: u32,
+    /// far-core's spectral::white, which a wavelength's color is divided by.
+    white: [f32; 3],
 }
 
 #[repr(C)]
@@ -80,6 +82,8 @@ struct Material {
     /// GGX layers, as far-core's Ggx: sheen, clear coat, anisotropy and its rotation in radians.
     sheen_color: [f32; 3], sheen: f32,
     clearcoat: f32, clearcoat_roughness: f32, anisotropy: f32, rotation: f32,
+    /// The glass's Abbe number, 0 when it does not disperse.
+    abbe: f32, pad: [u32; 3],
 }
 
 /// In Material::bump, a normal map rather than a height map.
@@ -187,7 +191,6 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
     let materials = scene.materials.iter().map(|m| {
         if m.subsurface.is_some() { note("subsurface scattering"); }
         if m.displacement.is_some() { note("displacement of the ground"); }
-        if m.glass.is_some_and(|g| g.abbe.is_some()) { note("dispersion in glass"); }
         let emission = m.maps.emission.map_or([0.0; 3], |e| e.color.array());
         let (kind, roughness, metallic) = match (&m.ggx, m.refr > 0.0) {
             (_, true) => (2, m.glass.map_or(0.0, |g| g.roughness), 0.0),
@@ -209,7 +212,8 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
             emission_map: texture(m.maps.emission.and_then(|e| e.map)), alpha_map: texture(m.maps.alpha),
             sheen_color: m.ggx.map_or([1.0; 3], |g| g.sheen_color.array()), sheen: m.ggx.map_or(0.0, |g| g.sheen),
             clearcoat: m.ggx.map_or(0.0, |g| g.clearcoat), clearcoat_roughness: m.ggx.map_or(0.03, |g| g.clearcoat_roughness),
-            anisotropy: m.ggx.map_or(0.0, |g| g.anisotropy), rotation: m.ggx.map_or(0.0, |g| g.rotation) }
+            anisotropy: m.ggx.map_or(0.0, |g| g.anisotropy), rotation: m.ggx.map_or(0.0, |g| g.rotation),
+            abbe: m.glass.and_then(|g| g.abbe).unwrap_or(0.0), pad: [0; 3] }
     }).collect();
 
     let color = |material: usize| scene.materials[material].color.array();
@@ -366,8 +370,8 @@ struct Features(u32);
 
 impl Features {
     /// The constants of trace.wgsl, in the order of their bits.
-    const NAMES: [&'static str; 12] = ["HAS_VOLUMES", "HAS_GLASS", "HAS_ENV", "HAS_GGX", "HAS_TEXTURES", "HAS_SOLIDS",
-        "HAS_LENS", "HAS_BUMP", "HAS_MAPS", "HAS_ALPHA", "HAS_COATS", "HAS_PROFILES"];
+    const NAMES: [&'static str; 13] = ["HAS_VOLUMES", "HAS_GLASS", "HAS_ENV", "HAS_GGX", "HAS_TEXTURES", "HAS_SOLIDS",
+        "HAS_LENS", "HAS_BUMP", "HAS_MAPS", "HAS_ALPHA", "HAS_COATS", "HAS_PROFILES", "HAS_DISPERSION"];
 
     fn of(scene: &Scene, packed: &Packed, environment: bool, aperture: f32) -> Self {
         let uses = |m: &dyn Fn(&Material) -> bool| packed.materials.iter().any(m);
@@ -384,6 +388,7 @@ impl Features {
             uses(&|m| m.alpha_map != NO_TEXTURE),
             uses(&|m| m.kind == 1 && (m.clearcoat > 0.0 || m.sheen > 0.0 || m.anisotropy != 0.0)),
             packed.lights.iter().any(|l| l.pad2 & 2 != 0),
+            uses(&|m| m.kind == 2 && m.abbe > 0.0),
         ];
         Self(on.iter().enumerate().map(|(i, &b)| (b as u32) << i).sum())
     }
@@ -515,7 +520,8 @@ impl Gpu {
             transmission_max: op.transmission_depth.map_or(u32::MAX, |d| d.max(0) as u32),
             env_tables: 0,
             stride, features: features as u32, glow_at,
-            volume_first: packed.volume_first, volume_count: packed.volume_count, pad: [0; 3],
+            volume_first: packed.volume_first, volume_count: packed.volume_count,
+            white: far_core::spectral::white().array(),
         };
 
         // The environment's sampling tables go after the texels, as float bits.
@@ -675,8 +681,8 @@ mod tests {
             "techniques/light-shafts.far", "techniques/smoke.far", "materials/bump-maps.far",
             // Roughness, metallic, emission and alpha maps; clear coat, sheen and anisotropy.
             "materials/maps.far", "materials/coatings.far",
-            // Spotlight cones and an IES profile, in fog.
-            "techniques/spotlights.far"] {
+            // Spotlight cones and an IES profile, in fog; glass that disperses.
+            "techniques/spotlights.far", "materials/glass.far"] {
             let Some((cpu, gpu)) = brightness(name) else { return };
             assert!(cpu > 0.02, "{name}: the CPU image is black");
             assert!((gpu - cpu).abs() < 0.05 * cpu + 0.005, "{name}: CPU {cpu} against GPU {gpu}");
