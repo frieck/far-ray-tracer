@@ -69,6 +69,9 @@ struct Material {
     refr: f32, absorption_depth: f32,
     // The bump map's texture, NORMAL_MAP set for a normal map, or NO_TEXTURE; its strength.
     bump: u32, bump_strength: f32,
+    // Maps that scale a GGX surface's roughness and metallic, tint the emission, and cut holes
+    // where darker than half gray; NO_TEXTURE where absent.
+    roughness_map: u32, metallic_map: u32, emission_map: u32, alpha_map: u32,
 }
 const NORMAL_MAP: u32 = 0x80000000u;
 const NO_TEXTURE: u32 = 0xffffffffu;
@@ -85,6 +88,9 @@ override HAS_TEXTURES: bool = true;
 override HAS_SOLIDS: bool = true;
 override HAS_LENS: bool = true;
 override HAS_BUMP: bool = true;
+// Roughness, metallic and emission maps; alpha maps, which rays look through.
+override HAS_MAPS: bool = true;
+override HAS_ALPHA: bool = true;
 // The kind of a stand-in material for a fog particle, which `respond` answers with its phase.
 const MEDIUM: u32 = 7u;
 // kind 0: a 2008 light, with no falloff. 1: a bulb. 2: a rectangular panel.
@@ -343,7 +349,29 @@ fn enter(node: u32, o: vec3<f32>, inv: vec3<f32>, limit: f32) -> f32 {
     return -1.0;
 }
 
+// The nearest surface along the ray before `limit`, looking through the holes alpha maps cut
+// as the CPU's nearest_through_cutouts does, up to its MAX_CUTOUT_CROSSINGS; `any` returns the
+// first one found instead, for shadow rays.
 fn intersect(o: vec3<f32>, d: vec3<f32>, limit: f32, any: bool) -> Hit {
+    if (!HAS_ALPHA) { return intersect_surface(o, d, limit, any); }
+    var start = o;
+    var skipped = 0.0;
+    for (var k = 0; k < 16; k++) {
+        var hit = intersect_surface(start, d, limit - skipped, false);
+        if (hit.t >= limit - skipped) { break; }
+        let m = materials[hit.material];
+        let pos = start + d * hit.t;
+        if (m.alpha_map == NO_TEXTURE || map_height(m.alpha_map, texture_uv(hit, pos, m)) >= 0.5) {
+            hit.t += skipped;
+            return hit;
+        }
+        skipped += hit.t + OFFSET;
+        start = pos + d * OFFSET;
+    }
+    return Hit(limit, vec3<f32>(0.0), vec3<f32>(0.0), 0u, 0u, vec2<f32>(0.0));
+}
+
+fn intersect_surface(o: vec3<f32>, d: vec3<f32>, limit: f32, any: bool) -> Hit {
     var best = Hit(limit, vec3<f32>(0.0), vec3<f32>(0.0), 0u, 0u, vec2<f32>(0.0));
     for (var i = 0u; i < params.plane_count; i++) {
         let plane = shapes[i];
@@ -1341,6 +1369,12 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
         var m = materials[hit.material];
         let pos = o + d * hit.t;
         if (HAS_TEXTURES && m.texture != NO_TEXTURE) { m.color *= texture_color(m.texture, texture_uv(hit, pos, m)); }
+        if (HAS_MAPS) {
+            // As the CPU's hit_at: the maps scale GGX roughness and metallic, and tint emission.
+            if (m.kind == 1u && m.roughness_map != NO_TEXTURE) { m.roughness *= map_height(m.roughness_map, texture_uv(hit, pos, m)); }
+            if (m.kind == 1u && m.metallic_map != NO_TEXTURE) { m.metallic *= map_height(m.metallic_map, texture_uv(hit, pos, m)); }
+            if (m.emission_map != NO_TEXTURE) { m.emission *= texture_color(m.emission_map, texture_uv(hit, pos, m)); }
+        }
         var ng = hit.ng;
         let inside = dot(ng, d) > 0.0;
         if (inside) { ng = -ng; }

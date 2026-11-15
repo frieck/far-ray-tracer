@@ -6,8 +6,9 @@
 //! It follows the CPU's Enhanced integrator: every shape, the 2008 material, GGX and glass with
 //! absorption, color textures, every kind of light with one picked of many, the environment
 //! drawn by its light, MIS for GGX reflections, bump and normal maps, fog and smoke, and depth
-//! of field. `render` reports what a scene uses beyond that (maps, coat, sheen, subsurface,
-//! spotlights, dispersion), and the CPU engine remains the reference.
+//! of field, and roughness, metallic, emission and alpha maps. `render` reports what a scene
+//! uses beyond that (the displaced ground, coat, sheen, subsurface, spotlights, dispersion),
+//! and the CPU engine remains the reference.
 
 use bytemuck::{Pod, Zeroable};
 use far_core::bvh::Bvh;
@@ -72,6 +73,9 @@ struct Material {
     /// The bump or normal map's texture, with the top bit set for a normal map; NO_TEXTURE
     /// without one.
     bump: u32, bump_strength: f32,
+    /// Maps that scale the roughness and how metallic a GGX surface is, that tint its
+    /// emission, and that cut holes where darker than half gray; NO_TEXTURE where absent.
+    roughness_map: u32, metallic_map: u32, emission_map: u32, alpha_map: u32,
 }
 
 /// In Material::bump, a normal map rather than a height map.
@@ -175,8 +179,8 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
     let nodes = bvh.nodes.iter().map(|n| Node { low: n.min, first: n.first, high: n.max, count: n.count }).collect();
     let refs = bvh.prims.iter().map(|&p| slot[p as usize]).collect();
 
+    let texture = |map: Option<usize>| map.map_or(NO_TEXTURE, |t| t as u32);
     let materials = scene.materials.iter().map(|m| {
-        if m.maps != Default::default() { note("roughness, metallic, emission and alpha maps"); }
         if m.subsurface.is_some() { note("subsurface scattering"); }
         if m.displacement.is_some() { note("displacement of the ground"); }
         if m.glass.is_some_and(|g| g.abbe.is_some()) { note("dispersion in glass"); }
@@ -199,7 +203,9 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
             bump: m.bump.map_or(NO_TEXTURE, |b| {
                 b.texture as u32 | if b.kind == far_core::bump::BumpKind::Normal { NORMAL_MAP } else { 0 }
             }),
-            bump_strength: m.bump.map_or(0.0, |b| b.strength) }
+            bump_strength: m.bump.map_or(0.0, |b| b.strength),
+            roughness_map: texture(m.maps.roughness), metallic_map: texture(m.maps.metallic),
+            emission_map: texture(m.maps.emission.and_then(|e| e.map)), alpha_map: texture(m.maps.alpha) }
     }).collect();
 
     let color = |material: usize| scene.materials[material].color.array();
@@ -335,8 +341,8 @@ struct Features(u32);
 
 impl Features {
     /// The constants of trace.wgsl, in the order of their bits.
-    const NAMES: [&'static str; 8] =
-        ["HAS_VOLUMES", "HAS_GLASS", "HAS_ENV", "HAS_GGX", "HAS_TEXTURES", "HAS_SOLIDS", "HAS_LENS", "HAS_BUMP"];
+    const NAMES: [&'static str; 10] = ["HAS_VOLUMES", "HAS_GLASS", "HAS_ENV", "HAS_GGX", "HAS_TEXTURES", "HAS_SOLIDS",
+        "HAS_LENS", "HAS_BUMP", "HAS_MAPS", "HAS_ALPHA"];
 
     fn of(scene: &Scene, packed: &Packed, environment: bool, aperture: f32) -> Self {
         let uses = |m: &dyn Fn(&Material) -> bool| packed.materials.iter().any(m);
@@ -349,6 +355,8 @@ impl Features {
             packed.shapes.iter().take(packed.volume_first as usize).any(|s| (1..=5).contains(&s.kind)),
             aperture > 0.0,
             uses(&|m| m.bump != NO_TEXTURE),
+            uses(&|m| m.roughness_map != NO_TEXTURE || m.metallic_map != NO_TEXTURE || m.emission_map != NO_TEXTURE),
+            uses(&|m| m.alpha_map != NO_TEXTURE),
         ];
         Self(on.iter().enumerate().map(|(i, &b)| (b as u32) << i).sum())
     }
@@ -637,7 +645,9 @@ mod tests {
         for name in ["cornell-box.far", "2008/scene-b.far", "techniques/rectangular-lights.far", "techniques/primitives.far",
             "materials/glass.far", "materials/ggx-materials.far", "christmas.far", "techniques/sun-and-sky.far",
             // Even fog, and smoke shaped by noise; height and normal maps.
-            "techniques/light-shafts.far", "techniques/smoke.far", "materials/bump-maps.far"] {
+            "techniques/light-shafts.far", "techniques/smoke.far", "materials/bump-maps.far",
+            // Roughness, metallic, emission and alpha maps.
+            "materials/maps.far"] {
             let Some((cpu, gpu)) = brightness(name) else { return };
             assert!(cpu > 0.02, "{name}: the CPU image is black");
             assert!((gpu - cpu).abs() < 0.05 * cpu + 0.005, "{name}: CPU {cpu} against GPU {gpu}");
