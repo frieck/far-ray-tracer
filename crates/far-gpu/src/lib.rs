@@ -7,8 +7,9 @@
 //! absorption, color textures, every kind of light with one picked of many, the environment
 //! drawn by its light, MIS for GGX reflections, bump and normal maps, fog and smoke, and depth
 //! of field, roughness, metallic, emission and alpha maps, and clear coat, sheen and
-//! anisotropy. `render` reports what a scene uses beyond that (the displaced ground,
-//! subsurface, spotlights, dispersion), and the CPU engine remains the reference.
+//! anisotropy, and spotlight cones and IES profiles. `render` reports what a scene uses beyond
+//! that (the displaced ground, subsurface, dispersion), and the CPU engine remains the
+//! reference.
 
 use bytemuck::{Pod, Zeroable};
 use far_core::bvh::Bvh;
@@ -216,9 +217,25 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
     for l in &scene.lights {
         lights.push(Light { pos: l.center.array(), kind: 0, color: color(l.material), radius: l.radius, ..Zeroable::zeroed() });
     }
+    // A bulb's profile, as trace.wgsl's bulb_factor reads it: its axis in normal and the IES
+    // table's 0° horizontal direction in u; the cone's edge and inner cosines in v; in pad2, bit
+    // 0 for a cone and bit 1 for any profile; in pad1, where its IES table starts in the texels.
+    let mut ies_tables = Vec::new();
     for (i, l) in scene.bulbs.iter().enumerate() {
-        if scene.bulb_profiles.get(i).is_some_and(|p| p.is_some()) { note("spotlight cones and IES profiles"); }
-        lights.push(Light { pos: l.center.array(), kind: 1, color: color(l.material), radius: l.radius, ..Zeroable::zeroed() });
+        let mut light = Light { pos: l.center.array(), kind: 1, color: color(l.material), radius: l.radius, pad1: NO_TEXTURE, ..Zeroable::zeroed() };
+        if let Some(Some(profile)) = scene.bulb_profiles.get(i) {
+            light.normal = profile.axis.array();
+            light.u = profile.across.array();
+            light.pad2 = 2 | profile.cone.is_some() as u32;
+            if let Some((outer, inner)) = profile.cone { light.v = [outer, inner, 0.0]; }
+            if let Some(ies) = &profile.ies {
+                let (vertical, horizontal, values) = ies.table();
+                let mut table = vec![vertical.len() as f32, horizontal.len() as f32];
+                table.extend(vertical.iter().chain(horizontal).chain(values.iter().flatten()));
+                ies_tables.push((lights.len(), table));
+            }
+        }
+        lights.push(light);
     }
     for l in &scene.rect_lights {
         lights.push(Light {
@@ -263,6 +280,11 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
     for t in &scene.textures {
         let byte = |x: f32| (x * 256.0).round().clamp(0.0, 255.0) as u32;
         texels.extend(t.image.iter().map(|c| byte(c.x) | byte(c.y) << 8 | byte(c.z) << 16));
+    }
+    // IES tables after the textures, as float bits.
+    for (light, table) in ies_tables {
+        lights[light].pad1 = texels.len() as u32;
+        texels.extend(table.iter().map(|v| v.to_bits()));
     }
     Packed { nodes, refs, tris, shapes, plane_count, volume_first, volume_count, texels, materials, lights, notes }
 }
@@ -344,8 +366,8 @@ struct Features(u32);
 
 impl Features {
     /// The constants of trace.wgsl, in the order of their bits.
-    const NAMES: [&'static str; 11] = ["HAS_VOLUMES", "HAS_GLASS", "HAS_ENV", "HAS_GGX", "HAS_TEXTURES", "HAS_SOLIDS",
-        "HAS_LENS", "HAS_BUMP", "HAS_MAPS", "HAS_ALPHA", "HAS_COATS"];
+    const NAMES: [&'static str; 12] = ["HAS_VOLUMES", "HAS_GLASS", "HAS_ENV", "HAS_GGX", "HAS_TEXTURES", "HAS_SOLIDS",
+        "HAS_LENS", "HAS_BUMP", "HAS_MAPS", "HAS_ALPHA", "HAS_COATS", "HAS_PROFILES"];
 
     fn of(scene: &Scene, packed: &Packed, environment: bool, aperture: f32) -> Self {
         let uses = |m: &dyn Fn(&Material) -> bool| packed.materials.iter().any(m);
@@ -361,6 +383,7 @@ impl Features {
             uses(&|m| m.roughness_map != NO_TEXTURE || m.metallic_map != NO_TEXTURE || m.emission_map != NO_TEXTURE),
             uses(&|m| m.alpha_map != NO_TEXTURE),
             uses(&|m| m.kind == 1 && (m.clearcoat > 0.0 || m.sheen > 0.0 || m.anisotropy != 0.0)),
+            packed.lights.iter().any(|l| l.pad2 & 2 != 0),
         ];
         Self(on.iter().enumerate().map(|(i, &b)| (b as u32) << i).sum())
     }
@@ -651,7 +674,9 @@ mod tests {
             // Even fog, and smoke shaped by noise; height and normal maps.
             "techniques/light-shafts.far", "techniques/smoke.far", "materials/bump-maps.far",
             // Roughness, metallic, emission and alpha maps; clear coat, sheen and anisotropy.
-            "materials/maps.far", "materials/coatings.far"] {
+            "materials/maps.far", "materials/coatings.far",
+            // Spotlight cones and an IES profile, in fog.
+            "techniques/spotlights.far"] {
             let Some((cpu, gpu)) = brightness(name) else { return };
             assert!(cpu > 0.02, "{name}: the CPU image is black");
             assert!((gpu - cpu).abs() < 0.05 * cpu + 0.005, "{name}: CPU {cpu} against GPU {gpu}");

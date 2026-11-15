@@ -76,6 +76,12 @@ pub struct Ies {
 }
 
 impl Ies {
+    /// The vertical and horizontal angles in degrees, and the scaled values, one row of
+    /// vertical values per horizontal angle: for renderers that read the table themselves.
+    pub fn table(&self) -> (&[f32], &[f32], &[Vec<f32>]) {
+        (&self.vertical, &self.horizontal, &self.values)
+    }
+
     pub fn parse(text: &str) -> Result<Self, String> {
         let tilt = text.lines().position(|line| line.trim_start().to_ascii_uppercase().starts_with("TILT="))
             .ok_or("Not an IES file: no TILT line")?;

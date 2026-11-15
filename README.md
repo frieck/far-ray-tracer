@@ -866,7 +866,7 @@ Enhanced integrator step by step, so the two give the same image within noise.
 | --- | --- |
 | Every shape: meshes, spheres, boxes, cylinders, tubes, cones, tori, grounds | Displacement of the ground |
 | 2008 materials, GGX, glass with absorption and roughness, color textures, bump and normal maps; roughness, metallic, emission and alpha maps (rays look through the holes); clear coat, sheen and anisotropy | Subsurface; dispersion |
-| 2008 lights, bulbs, panels, one picked of many; indirect light with the 2008-light limits | Spotlight cones and IES, caustic photons |
+| 2008 lights, bulbs with spotlight cones and IES profiles, panels, one picked of many; indirect light with the 2008-light limits | Caustic photons |
 | HDR environments and the sun and sky, drawn by their light; MIS for GGX reflections | |
 | Fog, height fog and smoke (up to eight volumes), with light shafts | More than eight volumes |
 | Depth of field and bokeh shapes, denoise and bloom (on the CPU, from the GPU's sums) | Regions and adaptive sampling (the whole image is rendered) |
@@ -888,7 +888,8 @@ On an Apple M4 Max at 800 × 600 with 256 samples, against its 16 CPU cores:
 With fog, at 320 × 200 and 256 samples: light shafts 10.9 s against 0.30 s, smoke (marched
 through noise) 42.5 s against 3.7 s. Bump and normal maps, at 800 × 600: 14.0 s against 0.60 s;
 material maps 8.8 s against 0.46 s; the models scene 14.1 s against 0.84 s; coatings 7.3 s
-against 0.34 s; bokeh 6.7 s against 0.25 s.
+against 0.34 s; bokeh 6.7 s against 0.25 s; spotlights (in fog) 20.6 s against 1.8 s at 400 × 300
+and 512 samples.
 
 At few samples the GPU's image is grainier than the CPU's: the CPU draws its samples from
 stratified sequences, the GPU from a hash per pixel and pass. Both converge to the same image

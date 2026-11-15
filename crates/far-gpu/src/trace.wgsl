@@ -96,6 +96,8 @@ override HAS_MAPS: bool = true;
 override HAS_ALPHA: bool = true;
 // Clear coat, sheen and anisotropy on GGX surfaces.
 override HAS_COATS: bool = true;
+// Spotlight cones and IES profiles on bulbs.
+override HAS_PROFILES: bool = true;
 // The kind of a stand-in material for a fog particle, which `respond` answers with its phase.
 const MEDIUM: u32 = 7u;
 // kind 0: a 2008 light, with no falloff. 1: a bulb. 2: a rectangular panel.
@@ -591,7 +593,7 @@ fn emitter_weight(i: u32, pos: vec3<f32>) -> f32 {
     if (light.kind == 1u) {
         let r2 = light.radius * light.radius;
         let distance2 = max(max(dot(to_point, to_point), r2), 1e-6);
-        return luminance * PI * r2 / distance2;
+        return luminance * PI * r2 * bulb_factor(light, to_point / sqrt(distance2)) / distance2;
     }
     return 0.0;
 }
@@ -634,7 +636,8 @@ fn from_light(i: u32, chance: f32, pos: vec3<f32>, m: Material, albedo: vec3<f32
     // The light's estimate per unit of its color: what it brings over the density of the point.
     var estimate = PI;
     if (light.kind == 1u) {
-        estimate = 2.0 * PI * light.radius * light.radius * max(dot(w, -l), 0.0) / (distance * distance);
+        estimate = 2.0 * PI * light.radius * light.radius * max(dot(w, -l), 0.0) * bulb_factor(light, -l)
+            / (distance * distance);
     } else if (light.kind == 2u) {
         estimate = light.area * max(-dot(light.normal, l), 0.0) / (distance * distance);
     }
@@ -689,6 +692,75 @@ fn surface_visibility(start: vec3<f32>, l: vec3<f32>, limit: f32) -> vec3<f32> {
     return vec3<f32>(0.0);
 }
 
+// Spotlights and IES profiles, as far-core's light_profile.rs: the share of a bulb's light that
+// leaves along unit `direction`. lib.rs packs the profile into the bulb's spare fields.
+fn bulb_factor(light: Light, direction: vec3<f32>) -> f32 {
+    if (!HAS_PROFILES || (light.pad2 & 2u) == 0u) { return 1.0; }
+    let cosine = clamp(dot(direction, light.normal), -1.0, 1.0);
+    var factor = 1.0;
+    if ((light.pad2 & 1u) != 0u) {
+        let outer = light.v.x;
+        let inner = light.v.y;
+        if (cosine <= outer) { return 0.0; }
+        if (cosine < inner) { factor = smooth_step((cosine - outer) / (inner - outer)); }
+    }
+    if (light.pad1 != NO_TEXTURE) {
+        let side = cross(light.normal, light.u);
+        let flat = direction - light.normal * cosine;
+        let horizontal = degrees(atan2(dot(flat, side), dot(flat, light.u)));
+        factor *= ies_value(light.pad1, degrees(acos(cosine)), horizontal);
+    }
+    return factor;
+}
+
+fn ies_number(at: u32) -> f32 { return bitcast<f32>(texels[at]); }
+
+// Between the angles at `angles` (count of them), the values at `values`; 0 outside them.
+fn ies_interpolate(angles: u32, count: u32, values: u32, at: f32) -> f32 {
+    if (at < ies_number(angles) || at > ies_number(angles + count - 1u)) { return 0.0; }
+    var after = 1u;
+    while (after < count - 1u && ies_number(angles + after) <= at) { after++; }
+    let a = ies_number(angles + after - 1u);
+    let b = ies_number(angles + after);
+    let t = clamp((at - a) / (b - a), 0.0, 1.0);
+    return ies_number(values + after - 1u) * (1.0 - t) + ies_number(values + after) * t;
+}
+
+// An IES table's scaled intensity at a vertical and a horizontal angle, in degrees, as Ies::value:
+// the vertical and horizontal counts, the angles, then a row of vertical values per horizontal.
+fn ies_value(table: u32, vertical: f32, horizontal: f32) -> f32 {
+    let vertical_count = u32(ies_number(table));
+    let horizontal_count = u32(ies_number(table + 1u));
+    let verticals = table + 2u;
+    let horizontals = verticals + vertical_count;
+    let rows = horizontals + horizontal_count;
+    let last = ies_number(horizontals + horizontal_count - 1u);
+    // The file lists only part of the circle when the fixture is symmetric.
+    var h = horizontal - 360.0 * floor(horizontal / 360.0);
+    if (last <= 0.0) {
+        h = 0.0;
+    } else if (last <= 90.0) {
+        h = h - 180.0 * floor(h / 180.0);
+        if (h > 90.0) { h = 180.0 - h; }
+    } else if (last <= 180.0 && h > 180.0) {
+        h = 360.0 - h;
+    }
+    if (horizontal_count == 1u) { return ies_interpolate(verticals, vertical_count, rows, vertical); }
+    var after = 0u;
+    while (after < horizontal_count && ies_number(horizontals + after) <= h) { after++; }
+    if (after == 0u) { return ies_interpolate(verticals, vertical_count, rows, vertical); }
+    if (after >= horizontal_count) {
+        var row = horizontal_count - 1u;
+        if (last >= 360.0 - 1e-3) { row = 0u; }
+        return ies_interpolate(verticals, vertical_count, rows + row * vertical_count, vertical);
+    }
+    let a = ies_number(horizontals + after - 1u);
+    let b = ies_number(horizontals + after);
+    let t = (h - a) / (b - a);
+    return ies_interpolate(verticals, vertical_count, rows + (after - 1u) * vertical_count, vertical) * (1.0 - t)
+        + ies_interpolate(verticals, vertical_count, rows + after * vertical_count, vertical) * t;
+}
+
 struct Lamp {
     color: vec3<f32>,
     t: f32,
@@ -707,7 +779,7 @@ fn emitter(o: vec3<f32>, d: vec3<f32>, limit: f32) -> Lamp {
             let disc = b * b - (dot(rel, rel) - light.radius * light.radius);
             if (disc > 0.0) {
                 let t = -b - sqrt(disc);
-                if (t > OFFSET && t < found.t) { found = Lamp(light.color, t, i); }
+                if (t > OFFSET && t < found.t) { found = Lamp(light.color * bulb_factor(light, -d), t, i); }
             }
         } else if (light.kind == 2u) {
             let denom = dot(d, light.normal);
