@@ -155,7 +155,7 @@ export interface Startup {
 }
 
 export interface MenuAction {
-  action: "open" | "save" | "save_scene" | "save_scene_as" | "render" | "example";
+  action: "open" | "save" | "save_scene" | "save_scene_as" | "render" | "example" | "undo" | "redo";
   path: string | null;
 }
 

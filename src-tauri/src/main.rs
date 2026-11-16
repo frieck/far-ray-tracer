@@ -40,6 +40,8 @@ const MENU_SAVE_SCENE_AS: &str = "save_scene_as";
 const MENU_RENDER: &str = "render";
 const MENU_EXAMPLE: &str = "example:";
 const MENU_ABOUT: &str = "about";
+const MENU_UNDO: &str = "undo";
+const MENU_REDO: &str = "redo";
 const REPOSITORY_URL: &str = "https://github.com/frieck/far-ray-tracer";
 
 struct OpenScene {
@@ -604,6 +606,9 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let save_scene_as = MenuItemBuilder::with_id(MENU_SAVE_SCENE_AS, "Save Scene As…").accelerator("CmdOrCtrl+Shift+S").build(app)?;
     let save = MenuItemBuilder::with_id(MENU_SAVE, "Export Image…").accelerator("CmdOrCtrl+E").build(app)?;
     let render = MenuItemBuilder::with_id(MENU_RENDER, "Render").accelerator("CmdOrCtrl+R").build(app)?;
+    // The app's own undo, of scene and render edits; in a text field it undoes the typing.
+    let undo = MenuItemBuilder::with_id(MENU_UNDO, "Undo").accelerator("CmdOrCtrl+Z").build(app)?;
+    let redo = MenuItemBuilder::with_id(MENU_REDO, "Redo").accelerator("Shift+CmdOrCtrl+Z").build(app)?;
     let about = MenuItemBuilder::with_id(MENU_ABOUT, "About Far Ray Tracer").build(app)?;
     let check_updates = MenuItemBuilder::with_id(updater::MENU_CHECK_UPDATES, "Check for Updates…").build(app)?;
 
@@ -631,8 +636,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .close_window()
         .build()?;
     let edit = SubmenuBuilder::new(app, "Edit")
-        .undo()
-        .redo()
+        .item(&undo)
+        .item(&redo)
         .separator()
         .cut()
         .copy()
@@ -662,6 +667,8 @@ fn on_menu(app: &AppHandle, id: &str) {
         MENU_SAVE_SCENE => MenuAction { action: "save_scene", path: None },
         MENU_SAVE_SCENE_AS => MenuAction { action: "save_scene_as", path: None },
         MENU_RENDER => MenuAction { action: "render", path: None },
+        MENU_UNDO => MenuAction { action: "undo", path: None },
+        MENU_REDO => MenuAction { action: "redo", path: None },
         _ => match id.strip_prefix(MENU_EXAMPLE) {
             Some(path) => MenuAction { action: "example", path: Some(path.to_string()) },
             None => return,

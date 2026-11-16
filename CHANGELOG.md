@@ -87,6 +87,10 @@ are not used. The shader is compiled for what
   grab, placed with a click or Enter and called off with Esc. The quick 3D view follows the
   move at once, and placing it writes the edit.
 
+- Undo and redo (⌘Z, ⇧⌘Z) of edits to objects, lights, materials, the environment and the
+  settings: a drag or slider move is one step, orbiting the camera is not undone, and a text
+  field still undoes its typing.
+
 - A more compact panel: Render, Render after each change, Open, Save and Export share one
   row, and the tab's title, which the rail already shows, no longer takes one.
 

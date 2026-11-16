@@ -141,8 +141,9 @@ Visual gain for the effort:
 - [x] **Editing objects and lights**: place, rotation and sizes, and a light's color,
   intensity, size and cone, in the Object tab, saved into the scene file.
 - [x] **Move gizmo**: arrows along X, Y and Z and a ring across the view, on the image.
+- [x] **Undo and redo** of scene and settings edits.
 - [ ] **Outliner, next**: rotate and scale gizmos; adding, duplicating and deleting objects;
-  a model's parts as children; renaming; undo. Medium.
+  a model's parts as children; renaming. Medium.
 - [ ] **Instancing**: many copies of an object for almost no memory. Medium.
 - [ ] **Subdivision surfaces**: smooth meshes from coarse ones. High.
 - [ ] **CSG (boolean operations)**: would carve the material ball's medallion into the

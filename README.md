@@ -662,6 +662,12 @@ object at once and renders wait; letting go writes the new place as an edit, and
 rendered again. A plane moves all four corners together; fog, which fills the scene, has no
 gizmo.
 
+**Undo.** **Edit > Undo** (⌘Z) and **Redo** (⇧⌘Z) step through edits: to objects and lights,
+what is hidden, materials, the environment and the render and camera settings. A change
+counts once it settles for a moment, so a whole drag or slider move is one step. Where the
+camera looks is left out, as orbiting is looking rather than editing, and a new scene starts a
+new history of up to 200 steps. In a text field, the same keys undo the typing.
+
 Each field drags or takes a typed value; vectors have one per axis. **Reset** goes back to the
 file's values, and **Save Scene** writes the edits into the file. An edit replaces those
 fields of the entry and the engine reads the scene again, as it would the saved file: about

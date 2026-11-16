@@ -8,6 +8,7 @@ import { Outliner } from "./components/Outliner";
 import { LIGHT_ID, SelectionOverlay, type IdMap } from "./components/SelectionOverlay";
 import { MoveGizmo } from "./components/MoveGizmo";
 import { anchorOf, type Vec3 } from "./objectFields";
+import * as history from "./history";
 import { MaterialStage } from "./components/MaterialStage";
 import { Viewport } from "./components/Viewport";
 import { Renderer, type RenderJob, type RenderView } from "./renderer";
@@ -33,6 +34,8 @@ const scenePose = ({ camera: { position, target, zoom } }: SceneInfo): Pose => (
  */
 const OUTLINER_HEIGHT_KEY = "far.outliner.height";
 const OUTLINE_KEY = "far.outliner.outline";
+/** How long settings stay put before a change becomes an undo step. */
+const SETTLE_MS = 400;
 /** Largest side of the ID map the outline is drawn from, in screen pixels. */
 const MAX_ID_SIDE = 2048;
 
@@ -594,6 +597,45 @@ export function App() {
     else if (action === "save_scene") void saveScene(false);
     else if (action === "save_scene_as") void saveScene(true);
     else if (action === "render" && scene) renderNow();
+    else if (action === "undo" || action === "redo") step(action);
+  };
+
+  // Undo and redo. A change is recorded once settings stay put for a moment, so a drag is one
+  // step; a new scene starts a new history.
+  const steps = useRef<history.History | null>(null);
+  const stepsScene = useRef<SceneInfo | null>(null);
+  const undoable = settings && scene ? history.snapshot(settings) : null;
+  useEffect(() => {
+    if (undoable === null) return;
+    if (stepsScene.current !== scene || !steps.current) {
+      steps.current = history.start(undoable);
+      stepsScene.current = scene;
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      if (steps.current) steps.current = history.record(steps.current, undoable);
+    }, SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [undoable, scene]);
+  const step = (direction: "undo" | "redo") => {
+    // In a text field, the menu undoes the typing, as it would anywhere else.
+    const focused = document.activeElement as HTMLElement | null;
+    if (focused && (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA")) {
+      document.execCommand(direction);
+      return;
+    }
+    if (!steps.current || undoable === null) return;
+    const { history: next, to } = history[direction](steps.current, undoable);
+    steps.current = next;
+    if (to === null) {
+      publish({ status: direction === "undo" ? "Nothing to undo" : "Nothing to redo" });
+      return;
+    }
+    focusRequest.current += 1;
+    setPickingFocus(false);
+    publish({ caustics: null, hasPhotonMap: false, status: direction === "undo" ? "Undone" : "Redone" });
+    setShowPhotonMap(false);
+    setSettings((old) => old && history.restore(old, to));
   };
 
   useEffect(() => {
