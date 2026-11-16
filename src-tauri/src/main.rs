@@ -978,15 +978,20 @@ fn render_scene(
             });
         }
     }
-    // Fewer passes than kept cannot reuse them; more continue from them, on the CPU.
-    let previous = previous.filter(|a| a.passes() < options.samples && gpu.is_none());
-    let continued_from = previous.as_ref().map(|a| a.passes());
+    // Fewer passes than kept cannot reuse them; more continue from them, on the CPU or the GPU,
+    // whichever rendered them, since the key holds the device.
+    let previous = previous.filter(|a| a.passes() < options.samples);
+    let (previous, resumed) = match gpu {
+        Some(_) => (None, previous.and_then(|a| a.resume(&options))),
+        None => (previous, None),
+    };
+    let continued_from = previous.as_ref().map(|a| a.passes()).or(resumed.as_ref().map(|s| s.passes));
 
     let frame_interval = FRAME_INTERVAL * (image.width * image.height / PIXELS_PER_FRAME_INTERVAL).max(1);
     let mut accumulated = None;
     let mut adapter = None;
     let render_ms = if let Some((gpu, bvh)) = gpu {
-        let (rendered, ms) = render_on_gpu(gpu, bvh, kd, scene, &options, &image, progress, frame_interval, send_frame)?;
+        let (rendered, ms) = render_on_gpu(gpu, bvh, kd, scene, &options, resumed, &image, progress, frame_interval, send_frame)?;
         adapter = Some(rendered.0);
         accumulated = rendered.1;
         ms
@@ -1042,8 +1047,8 @@ fn render_scene(
 }
 
 /// Renders on the graphics card, showing its image through the CPU's display, denoiser and
-/// bloom as it builds up. Gives back the card's name, what the render accumulated unless it
-/// was cancelled, and how long it took.
+/// bloom as it builds up, continuing from `previous` when there is one. Gives back the card's
+/// name, what the render accumulated, even when cancelled, and how long it took.
 #[allow(clippy::too_many_arguments)]
 fn render_on_gpu(
     gpu: &far_gpu::Gpu,
@@ -1051,17 +1056,20 @@ fn render_on_gpu(
     kd: Option<&KdTree>,
     scene: &Scene,
     options: &Options,
+    previous: Option<far_gpu::Sums>,
     image: &Image,
     progress: &Progress,
     frame_interval: Duration,
     send_frame: impl Fn() -> Result<(), tauri::Error>,
 ) -> Result<((String, Option<far_core::enhanced::Accumulation>), u64), String> {
-    // The card renders the whole image and every pass; frames in between skip the filters.
-    let options = Options { region: None, noise_threshold: 0.0, ..options.clone() };
+    // The card takes every pixel of the image or region the same number of samples; frames in
+    // between skip the filters.
+    let options = Options { noise_threshold: 0.0, ..options.clone() };
     let quick = Options { denoise: false, bloom: false, ..options.clone() };
+    let first = previous.as_ref().map_or(0, |p| p.passes) as usize;
     progress.tiles_total.store(options.samples.max(1) as usize, Relaxed);
-    progress.tiles_done.store(0, Relaxed);
-    progress.pass_index.store(0, Relaxed);
+    progress.tiles_done.store(first, Relaxed);
+    progress.pass_index.store(first, Relaxed);
     progress.rays.store(0, Relaxed);
     *progress.denoiser.lock().unwrap() = None;
     *progress.photon_stats.lock().unwrap() = None;
@@ -1073,6 +1081,7 @@ fn render_on_gpu(
         accumulation
     };
     let mut outcome = Err(String::new());
+    let mut previous = previous;
     let ms = render_with_frames(
         || {
             let cancel = || progress.cancel.load(Relaxed);
@@ -1080,10 +1089,11 @@ fn render_on_gpu(
             // the KD-Tree when there is one.
             let pose = options.pose.unwrap_or(scene.camera.pose());
             let photons = far_core::enhanced::caustic_map(scene, kd, &options, &pose, progress);
-            outcome = gpu.render(scene, bvh, &options, photons.as_ref(), &cancel, Some(GPU_FRAME_INTERVAL), &mut |sums| { show(sums, &quick); })
+            outcome = gpu.render(scene, bvh, &options, photons.as_ref(), previous.take(), &cancel, Some(GPU_FRAME_INTERVAL), &mut |sums| { show(sums, &quick); })
                 .map(|rendered| {
                     let accumulation = show(&rendered.sums, &options);
-                    (rendered.adapter, (!rendered.cancelled).then_some(accumulation))
+                    // Every pass is whole, so a render stopped early can be continued too.
+                    (rendered.adapter, (rendered.sums.passes > 0).then_some(accumulation))
                 });
         },
         frame_interval,
@@ -1191,23 +1201,54 @@ mod tests {
         let bvh = far_core::bvh::Bvh::build(&scene);
         let options = Options {
             mode: Mode::Enhanced, width: 640, height: 480, samples: 2048, denoise: true, bloom: true,
-            region: Some(far_core::engine::Region { x0: 0, y0: 0, x1: 32, y1: 32 }), ..Options::default()
+            region: Some(far_core::engine::Region { x0: 200, y0: 200, x1: 232, y1: 232 }), ..Options::default()
         };
         let (image, progress) = (Image::new(options.width, options.height), Progress::default());
         let frames = AtomicUsize::new(0);
-        let ((adapter, accumulation), _) = render_on_gpu(&gpu, &bvh, None, &scene, &options, &image, &progress,
+        let ((adapter, accumulation), _) = render_on_gpu(&gpu, &bvh, None, &scene, &options, None, &image, &progress,
             Duration::from_millis(5), || { frames.fetch_add(1, Relaxed); Ok(()) }).unwrap();
         assert!(!adapter.is_empty());
         assert!(frames.load(Relaxed) > 1, "no frames while rendering");
         assert_eq!(progress.pass_index.load(Relaxed), 2048);
         assert!(progress.denoiser.lock().unwrap().is_some(), "not denoised");
-        // The whole image, whatever the region, and lit.
+        // The region is lit; far from it, the image is left as it was.
         let rgba = image.rgba();
-        let outside: Vec<u8> = rgba.chunks_exact(640 * 4).skip(32).flat_map(|row| row[..3].iter().chain(&row[320 * 4..][..3]).copied()).collect();
-        let mean = outside.iter().map(|&c| c as f32).sum::<f32>() / outside.len() as f32;
-        assert!(mean > 20.0, "the image outside the region is dark: {mean}");
+        let mean = |x0: usize, y0: usize| (y0..y0 + 32).flat_map(|y| (x0..x0 + 32).map(move |x| (y * 640 + x) * 4))
+            .map(|i| rgba[i..i + 3].iter().map(|&c| c as f32).sum::<f32>() / 3.0).sum::<f32>() / 1024.0;
+        assert!(mean(200, 200) > 20.0, "the region is dark: {}", mean(200, 200));
+        assert_eq!(mean(500, 400), 0.0, "the image outside the region was rendered");
         // Exposure changes show the kept light again without rendering.
-        let brighter = Options { region: None, exposure: 2.0, bloom: false, ..options.clone() };
-        assert!(far_core::enhanced::redisplay(&accumulation.unwrap(), &scene, &brighter, &image, &progress));
+        let accumulation = accumulation.unwrap();
+        let brighter = Options { exposure: 2.0, bloom: false, ..options.clone() };
+        assert!(far_core::enhanced::redisplay(&accumulation, &scene, &brighter, &image, &progress));
+    }
+
+    #[test]
+    fn a_longer_gpu_render_continues_from_the_last_one() {
+        let gpu = match far_gpu::Gpu::new() {
+            Ok(gpu) => gpu,
+            Err(e) => return eprintln!("skipped: {e}"),
+        };
+        let scene = Scene::open(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/scenes/cornell-box.far")).unwrap();
+        let bvh = far_core::bvh::Bvh::build(&scene);
+        let short = Options { mode: Mode::Enhanced, width: 96, height: 72, samples: 64, denoise: true, ..Options::default() };
+        let long = Options { samples: 256, ..short.clone() };
+        let render = |op: &Options, previous: Option<far_gpu::Sums>| {
+            let (image, progress) = (Image::new(op.width, op.height), Progress::default());
+            let ((_, accumulation), _) = render_on_gpu(&gpu, &bvh, None, &scene, op, previous, &image, &progress,
+                Duration::from_millis(50), || Ok(())).unwrap();
+            assert_eq!(progress.pass_index.load(Relaxed), op.samples as usize);
+            (image.rgba(), accumulation.unwrap())
+        };
+        let (_, kept) = render(&short, None);
+        let resumed = kept.resume(&long).expect("the longer render cannot continue");
+        assert_eq!(resumed.passes, 64);
+        // The kept passes are the first ones a full render takes, so the image is the same.
+        let (continued, accumulation) = render(&long, Some(resumed));
+        assert_eq!(accumulation.passes(), 256);
+        let (whole, _) = render(&long, None);
+        assert!(continued == whole, "continuing gives another image than rendering at once");
+        // Another size, or fewer passes, start over.
+        assert!(accumulation.resume(&Options { samples: 128, ..long.clone() }).is_none());
     }
 }

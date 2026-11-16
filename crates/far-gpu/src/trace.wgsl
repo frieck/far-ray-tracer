@@ -37,7 +37,9 @@ struct Params {
     photon_buckets: u32, bucket_first: u32, photon_first: u32, photon_radius: f32,
     // The multiplier of caustic light; whether only that light is shown; whether photons carry
     // the environment's light.
-    caustic_strength: f32, caustics_only: u32, photon_env: u32, pad: u32,
+    caustic_strength: f32, caustics_only: u32, photon_env: u32,
+    // The pixels to render, from (x0, y0) up to (x1, y1): the whole image or a region.
+    x0: u32, y0: u32, x1: u32, y1: u32, pad: u32,
 }
 
 struct Node { low: vec3<f32>, first: u32, high: vec3<f32>, count: u32 }
@@ -160,9 +162,74 @@ fn hash(x: u32) -> u32 {
     return (w >> 22u) ^ w;
 }
 
-fn rand() -> f32 {
+fn random_number() -> f32 {
     rng = hash(rng);
     return f32(rng >> 8u) / 16777216.0;
+}
+
+// As far-core's sampler, with cheaper hashes: the first decisions of a camera sample come from
+// 2D Sobol points with hash-based Owen scrambling (Burley 2020), with the order of the samples
+// shuffled per decision so separate decisions do not move in step. Successive passes then cover
+// each decision evenly.
+const SEQUENCE_DIMENSIONS: u32 = 48u;
+// The pixel and the pass of the camera sample, and how many decisions it has drawn.
+var<private> sequence_pixel: u32;
+var<private> sequence_index: u32;
+var<private> dimension: u32;
+
+// The first two dimensions of the Sobol sequence, as 32-bit fractions. The second is the
+// first times the Pascal matrix mod 2, done in five steps, as far-core does.
+fn sobol(index: u32) -> vec2<u32> {
+    let x = reverseBits(index);
+    var y = x;
+    y ^= (y & 0x55555555u) << 1u;
+    y ^= (y & 0x33333333u) << 2u;
+    y ^= (y & 0x0f0f0f0fu) << 4u;
+    y ^= (y & 0x00ff00ffu) << 8u;
+    y ^= (y & 0x0000ffffu) << 16u;
+    return vec2<u32>(x, y);
+}
+
+// A random permutation that keeps the strata of a sequence (Laine and Karras).
+fn owen(value: u32, seed: u32) -> u32 {
+    var x = reverseBits(value) + seed;
+    x ^= x * 0x6c50b47cu;
+    x ^= x * 0xb82f1e52u;
+    x ^= x * 0xc7afe638u;
+    x ^= x * 0x8d22f6e6u;
+    return reverseBits(x);
+}
+
+fn fraction(x: u32) -> f32 {
+    return f32(x >> 8u) / 16777216.0;
+}
+
+// The seed of the next decision of the camera sample, and its sample index shuffled for that
+// decision, so separate decisions do not move in step from pass to pass.
+fn next_decision() -> vec2<u32> {
+    let seed = hash(sequence_pixel ^ (dimension * 0x9e3779b9u));
+    dimension++;
+    return vec2<u32>(seed, owen(sequence_index, hash(seed ^ 0x51edu)));
+}
+
+// Two numbers in [0, 1) for one decision: a scrambled Sobol point for the first decisions of a
+// camera sample, plain random numbers after them.
+fn rand2() -> vec2<f32> {
+    if (dimension < SEQUENCE_DIMENSIONS) {
+        let decision = next_decision();
+        let point = sobol(decision.y);
+        return vec2<f32>(fraction(owen(point.x, hash(decision.x ^ 0xa5a5u))), fraction(owen(point.y, hash(decision.x ^ 0x3c3cu))));
+    }
+    return vec2<f32>(random_number(), random_number());
+}
+
+// One number in [0, 1), for a decision that needs one: the first coordinate of such a point.
+fn rand() -> f32 {
+    if (dimension < SEQUENCE_DIMENSIONS) {
+        let decision = next_decision();
+        return fraction(owen(reverseBits(decision.y), hash(decision.x ^ 0xa5a5u)));
+    }
+    return random_number();
 }
 
 struct Hit {
@@ -598,8 +665,9 @@ fn basis(n: vec3<f32>) -> mat3x3<f32> {
 }
 
 fn cosine_direction(n: vec3<f32>) -> vec3<f32> {
-    let u = rand();
-    let angle = 2.0 * PI * rand();
+    let s = rand2();
+    let u = s.x;
+    let angle = 2.0 * PI * s.y;
     let r = sqrt(u);
     return basis(n) * vec3<f32>(r * cos(angle), r * sin(angle), sqrt(max(0.0, 1.0 - u)));
 }
@@ -646,7 +714,8 @@ fn direct(pos: vec3<f32>, m: Material, albedo: vec3<f32>, spec: f32, n: vec3<f32
         else { emitters++; }
     }
     if (HAS_ENV && params.has_env != 0u && (m.kind == 1u || any(albedo > vec3<f32>(0.0)))) {
-        let drawn = sample_environment(rand(), rand());
+        let e = rand2();
+        let drawn = sample_environment(e.x, e.y);
         diffuse_only = photons_carry && params.photon_env != 0u;
         if (drawn.w > 0.0) {
             // No 2008 highlight from the sky, as on the CPU.
@@ -723,11 +792,13 @@ fn from_light(i: u32, chance: f32, pos: vec3<f32>, m: Material, albedo: vec3<f32
     var target_point = light.pos;
     var w = vec3<f32>(0.0);
     if (light.kind == 2u) {
-        target_point = light.pos + light.u * (rand() - 0.5) + light.v * (rand() - 0.5);
+        let s = rand2();
+        target_point = light.pos + light.u * (s.x - 0.5) + light.v * (s.y - 0.5);
     } else {
-        let z = 1.0 - 2.0 * rand();
+        let s = rand2();
+        let z = 1.0 - 2.0 * s.x;
         let r = sqrt(max(0.0, 1.0 - z * z));
-        let angle = 2.0 * PI * rand();
+        let angle = 2.0 * PI * s.y;
         w = vec3<f32>(r * cos(angle), r * sin(angle), z);
         if (dot(w, pos - light.pos) < 0.0) { w = -w; }
         target_point = light.pos + w * light.radius;
@@ -946,9 +1017,10 @@ fn subsurface_walk(m: Material, pos: vec3<f32>, ns: vec3<f32>, ng: vec3<f32>, wo
         }
         p += dir * length;
         carried *= albedo;
-        let z = 1.0 - 2.0 * rand();
+        let s = rand2();
+        let z = 1.0 - 2.0 * s.x;
         let ring = sqrt(max(0.0, 1.0 - z * z));
-        let angle = 2.0 * PI * rand();
+        let angle = 2.0 * PI * s.y;
         dir = vec3<f32>(ring * cos(angle), ring * sin(angle), z);
         if (step >= 8) {
             let survival = clamp(max(max(carried.x, carried.y), carried.z), 0.05, 0.95);
@@ -1496,7 +1568,8 @@ fn ggx_sample(m: Material, n: vec3<f32>, wo: vec3<f32>, weight: ptr<function, ve
     let on_coat = rand() < chance;
     var l = base_lobe(m, n);
     if (on_coat) { l = coat_lobe(m, n); }
-    let h = lobe_normal(l, n, wo, rand(), rand());
+    let s = rand2();
+    let h = lobe_normal(l, n, wo, s.x, s.y);
     let oh = dot(wo, h);
     let wi = h * (2.0 * oh) - wo;
     if (oh <= 0.0 || dot(n, wi) <= 0.0) { return vec4<f32>(0.0); }
@@ -1806,7 +1879,8 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
                     if (!camera || (may_scatter && rand() >= kept)) {
                         if (!may_scatter) { break; }
                         // A rebound in the fog, by the phase function, weighed as the CPU's.
-                        d = sample_phase(d, medium.ax.y, rand(), rand());
+                        let s = rand2();
+                        d = sample_phase(d, medium.ax.y, s.x, s.y);
                         o = pos;
                         through = survived(through * medium.center * params.strength, &luck, diffuse_bounces);
                         if (all(through <= vec3<f32>(0.0))) { break; }
@@ -2005,7 +2079,10 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
             transmission_count++;
             let a = ggx_alpha(m.roughness);
             var facet = ns;
-            if (m.roughness > 0.0) { facet = ggx_normal(a, ns, wo, rand(), rand()); }
+            if (m.roughness > 0.0) {
+                let s = rand2();
+                facet = ggx_normal(a, ns, wo, s.x, s.y);
+            }
             var ior = m.ior;
             if (HAS_DISPERSION && m.abbe > 0.0) {
                 // As the CPU's refraction: the path follows one wavelength from the first glass
@@ -2046,8 +2123,9 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
             d = reflect(d, ns);
             if (m.roughness > 0.0) {
                 let frame = basis(d);
-                let radius = 0.5 * m.roughness * sqrt(rand());
-                let angle = 2.0 * PI * rand();
+                let s = rand2();
+                let radius = 0.5 * m.roughness * sqrt(s.x);
+                let angle = 2.0 * PI * s.y;
                 d = normalize(d + frame[0] * (radius * cos(angle)) + frame[1] * (radius * sin(angle)));
             }
             if (dot(d, ng) <= 0.0) { d = reflect(d, ng); }
@@ -2113,20 +2191,27 @@ fn lens_point(u: f32, v: f32) -> vec2<f32> {
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    if (id.x >= params.width || id.y >= params.height) { return; }
-    let pixel = id.y * params.width + id.x;
+    let x = id.x + params.x0;
+    let y = id.y + params.y0;
+    if (x >= params.x1 || y >= params.y1) { return; }
+    let pixel = y * params.width + x;
     rng = hash(pixel ^ hash(params.pass_index + 1u));
+    sequence_pixel = hash(pixel + 0x632be5abu);
+    sequence_index = params.pass_index;
+    dimension = 0u;
     // A tent filter over the pixel, as the CPU uses.
-    let a = rand();
-    let b = rand();
+    let jitter = rand2();
+    let a = jitter.x;
+    let b = jitter.y;
     let jx = select(1.0 - sqrt(2.0 - 2.0 * a), sqrt(2.0 * a) - 1.0, a < 0.5);
     let jy = select(1.0 - sqrt(2.0 - 2.0 * b), sqrt(2.0 * b) - 1.0, b < 0.5);
-    let target_point = params.corner + params.dx * (f32(id.x) + 0.5 + jx) + params.dy * (f32(id.y) + 0.5 + jy);
+    let target_point = params.corner + params.dx * (f32(x) + 0.5 + jx) + params.dy * (f32(y) + 0.5 + jy);
     var origin = params.origin;
     var d = normalize(target_point - params.origin);
     if (HAS_LENS && params.aperture > 0.0) {
         let focus = params.origin + d * (params.focus / dot(d, params.forward));
-        let lens = lens_point(rand(), rand());
+        let on_lens = rand2();
+        let lens = lens_point(on_lens.x, on_lens.y);
         origin = params.origin + params.right * lens.x + params.up * lens.y;
         d = normalize(focus - origin);
     }

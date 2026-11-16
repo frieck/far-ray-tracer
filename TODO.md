@@ -41,6 +41,9 @@ Visual gain for the effort:
 - [x] **Physical sun and sky**: a sky computed from the time of day, without an HDR image.
   Medium.
 - [x] **Spotlights and IES profiles**: a flashlight beam or a real fixture's light. Low.
+- [ ] **EXR and LDR environments**: only Radiance HDR panoramas are read now. Low.
+- [ ] **Caustics on an infinite mirror ground**: photons are not aimed at it, and scenes with
+  one skip environment photons and keep path-traced environment light. Medium.
 
 ## Camera and image
 
@@ -49,6 +52,11 @@ Visual gain for the effort:
 - [x] **Film tone mapping (ACES or AgX)**: natural colors in bright light. Low.
 - [ ] **White balance**: a color temperature for the camera. Low.
 - [ ] **Motion blur**: needs moving objects in the scene format. Medium.
+- [ ] **Raw light and render passes**: save the render's linear light (EXR) and passes such as
+  albedo, direct and indirect light, or light groups, so colors, exposure and lights can be
+  changed after rendering, in the app or a compositor. The app already keeps the light for
+  exposure, tone mapping, denoise and bloom; changing a material's color still renders again.
+  Medium.
 
 ## Quality and speed
 
@@ -84,18 +92,27 @@ Visual gain for the effort:
      on the GPU and matches the CPU within noise. Fog, smoke, bump and normal maps,
      roughness, metallic, emission and alpha maps, clear coat, sheen, anisotropy, spotlight
      cones, IES profiles, dispersion, displacement, subsurface and caustics, whose photons the
-     CPU still traces.) Left on the CPU: more than eight volumes.
+     CPU still traces.) Left on the CPU: more than eight volumes, and the tracing of caustic
+     photons, which is quick there; after a GPU render the Photon map panel does not report
+     lookups, which the card does not count.
   5. ~~Final renders on the GPU, as a Device setting~~ (done: Auto falls back to the CPU for
-     scenes using what the GPU lacks, and says so). Left: continuing a longer render from the
-     last one, regions and adaptive sampling on the GPU.
+     scenes using what the GPU lacks, and says so; regions, and longer renders continued from
+     the last one). Left: adaptive sampling on the GPU.
   6. Speed: the shader is specialized per scene (done, up to a third faster on simple scenes).
-     Next, if measurements show divergence costs most in mixed scenes: a wavefront path
-     tracer, with kernels per stage (intersect, shade, shadow, volume) and paths sorted by
-     material, as Cycles does; it needs more than wgpu's 8 storage buffers per stage.
-     Also: stratified or low-discrepancy samples on the GPU, which is grainier than the CPU at
-     few samples because it draws from a hash.
+     Next, measure how much divergence costs in mixed scenes (glass, metal, volumes and
+     subsurface side by side, against the same scene with one material), and only if it costs
+     most: a wavefront path tracer, with kernels per stage (intersect, shade, shadow, volume)
+     and paths sorted by material, as Cycles does; it needs more than wgpu's 8 storage buffers
+     per stage, or buffers merged. Low for the measurement, high for the wavefront.
+     And split `trace.wgsl` (over 2,200 lines, one kernel) into files by subject: sampling
+     and Sobol, BVH and shapes, materials, lights, volumes, caustics, joined before compiling,
+     since WGSL has no includes. The compiled shader stays the same. Low.
+     ~~Low-discrepancy samples on the GPU~~ (done: the CPU's scrambled Sobol points).
      And the displaced ground's march, most of a showcase render on the GPU (5 s against 1.2 s
      without it): a coarser first pass over a max-height mip chain would skip most steps.
+     And gathering caustics where glass focuses light: thousands of photons in one cell keep a
+     group of pixels waiting, so the GPU gains 7 to 9 times there against 15 to 35 without
+     caustics; a coarser map for dense cells, or photons sorted by cell, could help.
 
   Risks: two renderers to keep equal; no recursion in shaders; Windows stops a GPU command
   after 2 seconds, so work goes in small slices; CI has no GPU, only a software renderer;
@@ -111,3 +128,9 @@ Visual gain for the effort:
   sphere, for one. High.
 - [ ] **Displacement height in the material editor**: needs the mesh and the KD-Tree
   rebuilt on each change. Medium.
+- [ ] **More of glTF**: texture coordinate sets after the first, its lights and cameras, and
+  16-bit or HDR textures; lines, points, animation and skinning are ignored now. Low to
+  medium.
+- [ ] **Displaced objects past 4 million triangles**: detail is lowered evenly now, with a
+  warning; adaptive tessellation by distance to the camera would keep it where it shows.
+  Medium.

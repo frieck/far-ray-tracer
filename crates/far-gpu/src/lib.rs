@@ -43,7 +43,9 @@ struct Params {
     photon_buckets: u32, bucket_first: u32, photon_first: u32, photon_radius: f32,
     /// The multiplier of caustic light; whether only that light is shown; whether photons carry
     /// the environment's light.
-    caustic_strength: f32, caustics_only: u32, photon_env: u32, pad: u32,
+    caustic_strength: f32, caustics_only: u32, photon_env: u32,
+    /// The pixels to render, from (x0, y0) up to (x1, y1): the whole image or a region.
+    x0: u32, y0: u32, x1: u32, y1: u32, pad: u32,
 }
 
 #[repr(C)]
@@ -342,34 +344,7 @@ pub fn leaves_out(scene: &Scene, bvh: &Bvh) -> Vec<String> {
 }
 
 /// What the samples of a GPU render add up to, per pixel of the whole image, row by row.
-pub struct Sums {
-    pub width: u32,
-    pub height: u32,
-    /// Samples each pixel has.
-    pub passes: u32,
-    /// Exposed light, capped as the CPU caps it.
-    pub light: Vec<[f32; 3]>,
-    /// The squared luminance of that light.
-    pub luminance2: Vec<f32>,
-    /// What camera rays met first, when the render was asked to denoise.
-    pub primary: Option<Vec<far_core::denoise::Primary>>,
-    /// The light over the bloom threshold, when the render was asked for bloom.
-    pub glow: Option<Vec<[f32; 3]>>,
-}
-
-impl Sums {
-    /// Mean linear light of each pixel: what the tone mapping takes.
-    pub fn mean(&self) -> Vec<[f32; 3]> {
-        let n = self.passes.max(1) as f32;
-        self.light.iter().map(|l| [l[0] / n, l[1] / n, l[2] / n]).collect()
-    }
-
-    /// The same light, as far-core's display, denoiser and bloom take it.
-    pub fn accumulation(&self, op: &Options) -> far_core::enhanced::Accumulation {
-        far_core::enhanced::Accumulation::gathered(op, self.passes, &self.light, &self.luminance2,
-            self.primary.as_deref(), self.glow.as_deref())
-    }
-}
+pub use far_core::enhanced::Sums;
 
 /// What a GPU render gives back.
 pub struct Rendered {
@@ -396,7 +371,7 @@ pub fn render(scene: &Scene, bvh: &Bvh, op: &Options, cancel: &dyn Fn() -> bool)
     let pose = op.pose.unwrap_or(scene.camera.pose());
     let kd = op.caustics.then(|| far_core::KdTree::build_corrected(scene));
     let photons = far_core::enhanced::caustic_map(scene, kd.as_ref(), op, &pose, &far_core::engine::Progress::default());
-    Gpu::new()?.render(scene, bvh, op, photons.as_ref(), cancel, None, &mut |_| {})
+    Gpu::new()?.render(scene, bvh, op, photons.as_ref(), None, cancel, None, &mut |_| {})
 }
 
 /// A unit vector in 32 bits: its octahedral projection, two signed 16-bit halves, as WGSL's
@@ -542,13 +517,15 @@ impl Gpu {
         }).clone()
     }
 
-    /// Renders `op.samples` passes of the whole image; `op.region` and adaptive sampling are
-    /// left to the CPU. `cancel` is checked between passes. With `frames`, `on_frame` gets the
-    /// sums so far about that often, for a progressive display.
-    /// `photons` is the caustic map far-core's caustic_map traced for `op`, if any.
+    /// Renders `op.samples` passes of the image, or of `op.region` and a ring of tiles around
+    /// it, as the CPU does; adaptive sampling is left to the CPU. `cancel` is checked between
+    /// passes. With `frames`, `on_frame` gets the sums so far about that often, for a
+    /// progressive display. `photons` is the caustic map far-core's caustic_map traced for `op`,
+    /// if any. `previous`, from `Accumulation::resume`, holds the first passes of this same
+    /// render, which it continues from.
     #[allow(clippy::too_many_arguments)]
-    pub fn render(&self, scene: &Scene, bvh: &Bvh, op: &Options, photons: Option<&PhotonMap>, cancel: &dyn Fn() -> bool,
-        frames: Option<std::time::Duration>, on_frame: &mut dyn FnMut(&Sums)) -> Result<Rendered, String> {
+    pub fn render(&self, scene: &Scene, bvh: &Bvh, op: &Options, photons: Option<&PhotonMap>, previous: Option<Sums>,
+        cancel: &dyn Fn() -> bool, frames: Option<std::time::Duration>, on_frame: &mut dyn FnMut(&Sums)) -> Result<Rendered, String> {
         let (device, queue) = (&self.device, &self.queue);
         let packed = pack(scene, bvh);
         let (w, h) = (op.width, op.height);
@@ -563,6 +540,11 @@ impl Gpu {
         let features = op.denoise;
         let glow_at = if op.bloom { 1 + 2 * features as u32 } else { 0 };
         let stride = 1 + 2 * features as u32 + op.bloom as u32;
+        // A region renders its pixels and a ring of tiles around them, as on the CPU.
+        let area = far_core::enhanced::rendered_region(op);
+        // Continues from `previous` when it has this image's sums, with fewer passes.
+        let previous = previous.filter(|p| p.width == w && p.height == h && p.passes < op.samples.max(1)
+            && p.primary.is_some() == features && p.glow.is_some() == op.bloom);
         let mut params = Params {
             origin: view.origin.array(), width: w,
             corner: view.plane_point(-1.0, 1.0).array(), height: h,
@@ -594,7 +576,8 @@ impl Gpu {
             white: far_core::spectral::white().array(),
             photon_buckets: 0, bucket_first: 0, photon_first: 0, photon_radius: op.caustic_radius.max(1e-3),
             caustic_strength: op.caustic_strength, caustics_only: caustics_only as u32,
-            photon_env: photons.is_some_and(|map| map.carries_environment()) as u32, pad: 0,
+            photon_env: photons.is_some_and(|map| map.carries_environment()) as u32,
+            x0: area.x0, y0: area.y0, x1: area.x1, y1: area.y1, pad: 0,
         };
 
         // The environment's sampling tables go after the texels, as float bits.
@@ -644,10 +627,33 @@ impl Gpu {
 
         let pixels = (w as usize) * (h as usize);
         let accum_size = (pixels * 16 * stride as usize) as u64;
-        let accum = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("accum"), size: accum_size, mapped_at_creation: false,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        });
+        // The sums so far, laid out as the shader adds to them, or nothing.
+        let accum = match &previous {
+            Some(p) => {
+                let mut cells = vec![[0f32; 4]; pixels * stride as usize];
+                for (i, cell) in cells.chunks_exact_mut(stride as usize).enumerate() {
+                    let l = p.light[i];
+                    cell[0] = [l[0], l[1], l[2], p.luminance2[i]];
+                    if let Some(primary) = &p.primary {
+                        let q = &primary[i];
+                        cell[1] = [q.albedo[0], q.albedo[1], q.albedo[2], q.depth];
+                        cell[2] = [q.normal[0], q.normal[1], q.normal[2], 0.0];
+                    }
+                    if let Some(glow) = &p.glow {
+                        let g = glow[i];
+                        cell[glow_at as usize] = [g[0], g[1], g[2], 0.0];
+                    }
+                }
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("accum"), contents: bytemuck::cast_slice(&cells),
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                })
+            }
+            None => device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("accum"), size: accum_size, mapped_at_creation: false,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            }),
+        };
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("readback"), size: accum_size, mapped_at_creation: false,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
@@ -702,7 +708,8 @@ impl Gpu {
         };
 
         let samples = op.samples.max(1);
-        let mut done = 0;
+        // The passes `previous` holds are the first ones, so the next takes up after them.
+        let mut done = previous.map_or(0, |p| p.passes);
         let mut last_frame = std::time::Instant::now();
         let mut cancelled = false;
         // One pass per submission: a long command is killed by the system's GPU watchdog.
@@ -718,7 +725,7 @@ impl Gpu {
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None, timestamp_writes: None });
                 pass.set_pipeline(&pipeline);
                 pass.set_bind_group(0, &bind_group, &[]);
-                pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
+                pass.dispatch_workgroups((area.x1 - area.x0).div_ceil(8), (area.y1 - area.y0).div_ceil(8), 1);
             }
             queue.submit([encoder.finish()]);
             done += 1;
@@ -800,6 +807,29 @@ mod tests {
                 let Some((cpu, gpu)) = brightness_with(name, op) else { return };
                 assert!(cpu > 0.001, "{name}: the CPU's caustics are black");
                 assert!((gpu - cpu).abs() < 0.05 * cpu + 0.003, "{name}, caustics only {only}: CPU {cpu} against GPU {gpu}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_region_renders_its_pixels_as_the_whole_image_does() {
+        let scene = Scene::open(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/cornell-box.far")).unwrap();
+        let bvh = Bvh::build(&scene);
+        let whole = Options { mode: Mode::Enhanced, width: 256, height: 192, samples: 16, ..Options::default() };
+        let part = Options { region: Some(far_core::engine::Region { x0: 120, y0: 90, x1: 136, y1: 100 }), ..whole.clone() };
+        let (whole_sums, part_sums) = match (render(&scene, &bvh, &whole, &|| false), render(&scene, &bvh, &part, &|| false)) {
+            (Ok(a), Ok(b)) => (a.sums, b.sums),
+            (Err(e), _) if e.contains("no graphics card") => return eprintln!("skipped: {e}"),
+            (Err(e), _) | (_, Err(e)) => panic!("{e}"),
+        };
+        let area = far_core::enhanced::rendered_region(&part);
+        assert!(area.x0 <= 120 && area.x1 >= 136 && area.x1 - area.x0 < 256, "{area:?}");
+        for y in 0..192 {
+            for x in 0..256 {
+                let p = (y * 256 + x) as usize;
+                let inside = x >= area.x0 && x < area.x1 && y >= area.y0 && y < area.y1;
+                let expected = if inside { whole_sums.light[p] } else { [0.0; 3] };
+                assert_eq!(part_sums.light[p], expected, "pixel {x}, {y}");
             }
         }
     }

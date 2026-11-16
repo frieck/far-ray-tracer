@@ -219,8 +219,8 @@ fn render_on_gpu(scene: &Scene, options: &Options, output: &str, t0: Instant) {
     for note in &rendered.notes {
         println!("note: the GPU renderer leaves out {note}");
     }
-    // Shown as the CPU shows its own light: tone mapping, then the denoiser and bloom.
-    let options = Options { region: None, ..options.clone() };
+    // Shown as the CPU shows its own light: tone mapping, then the denoiser and bloom. Outside
+    // a region the image stays black, as on the CPU.
     let image = far_core::Image::new(options.width, options.height);
     let progress = far_core::Progress::default();
     far_core::enhanced::redisplay(&rendered.sums.accumulation(&options), scene, &options, &image, &progress);

@@ -849,9 +849,10 @@ The image builds up in the window as on the CPU, five times a second. The finish
 goes through the CPU's denoiser and bloom. The GPU also returns, for each pixel, what the
 camera ray first hit (albedo, normal, depth) and the squared luminance, which is what the
 denoiser needs. Changing the exposure, tone mapping, denoise or bloom afterwards shows the
-image again without rendering, as it does for the CPU. A region renders the whole image on
-the GPU, and adaptive sampling is left to the CPU. A longer render on the GPU starts over
-rather than continuing from the last one; it is fast enough that this costs little.
+image again without rendering, as it does for the CPU. A region renders only its pixels and
+the ring of tiles around it, exactly as they come out in a whole GPU render. A longer render
+continues from the last one, or from one stopped halfway, and gives the same image as
+rendering all its passes at once. Adaptive sampling is left to the CPU.
 
 On the command line, `far render scene.far -o image.png --enhanced --gpu` does the same,
 with `--denoise` and `--bloom`.
@@ -872,22 +873,22 @@ Every example scene renders on the GPU in Auto mode.
 | Caustics: the CPU traces the photons, as for a CPU render, and the card gathers them | The photon lookup counts in the Photon map panel |
 | HDR environments and the sun and sky, drawn by their light; MIS for GGX reflections | |
 | Fog, height fog and smoke (up to eight volumes), with light shafts | More than eight volumes |
-| Depth of field and bokeh shapes, denoise and bloom (on the CPU, from the GPU's sums) | Regions and adaptive sampling (the whole image is rendered) |
+| Depth of field and bokeh shapes, denoise and bloom (on the CPU, from the GPU's sums); regions, and longer renders continued from the last one | Adaptive sampling (every pixel takes every pass) |
 
 On an Apple M4 Max at 800 × 600 with 256 samples, against its 16 CPU cores:
 
 | Scene | CPU | GPU |
 | --- | ---: | ---: |
-| Cornell box | 9.7 s | 0.48 s |
-| Rectangular lights | 3.9 s | 0.21 s |
-| Scene B (2008 mesh) | 8.1 s | 0.49 s |
-| Rhino (2008 mesh, textured glass) | 15.9 s | 0.97 s |
-| Glass | 9.2 s | 0.26 s |
-| Primitives (every solid) | 7.4 s | 0.29 s |
-| Sun and sky | 8.6 s | 0.30 s |
-| Showcase (displaced ground) | 28.5 s | 5.1 s |
-| Christmas (46 lights) | 43.3 s | 2.6 s |
-| Still life (art example) | 61.4 s at 300 × 225 and 512 samples | 6.1 s |
+| Cornell box | 9.7 s | 0.47 s |
+| Rectangular lights | 3.9 s | 0.20 s |
+| Scene B (2008 mesh) | 8.1 s | 0.48 s |
+| Rhino (2008 mesh, textured glass) | 15.9 s | 0.76 s |
+| Glass | 9.2 s | 0.28 s |
+| Primitives (every solid) | 7.4 s | 0.26 s |
+| Sun and sky | 8.6 s | 0.34 s |
+| Showcase (displaced ground) | 28.5 s | 5.6 s |
+| Christmas (46 lights) | 43.3 s | 2.5 s |
+| Still life (art example) | 61.4 s at 300 × 225 and 512 samples | 3.0 s |
 
 With fog, at 320 × 200 and 256 samples: light shafts 10.9 s against 0.30 s, smoke (marched
 through noise) 42.5 s against 3.7 s. Bump and normal maps, at 800 × 600: 14.0 s against 0.60 s;
@@ -904,9 +905,12 @@ gains less with caustics than without, and the more photons, the less. At 800 ×
 samples and a million photons: glass 8.0 s against 1.2 s, rhino 22.5 s against 2.6 s,
 environment caustics 10.2 s against 1.4 s, and 40.6 s against 7.9 s with six million photons.
 
-At few samples the GPU's image is grainier than the CPU's: the CPU draws its samples from
-stratified sequences, the GPU from a hash per pixel and pass. Both converge to the same image
-(an RMSE of 3.4 between them at 1024 samples on the bump-mapped floor).
+The GPU draws its samples as the CPU does (see [Sampling](#sampling-enhanced)), from
+scrambled Sobol points, with cheaper hashes. Against plain random numbers per pixel and pass,
+at 320 × 240 against an 8192-pass reference, it cuts the error at 64 passes by 47% on GGX
+materials, 42% under the sun and sky, 39% under rectangular lights, 30% in subsurface wax and
+23% in the Cornell box: the gain of 1.7 to 3.5 times the passes, for 3% to 20% more time per
+pass.
 
 The GPU is 15 to 35 times faster, and 5 to 6 times with a displaced ground. A test renders
 eighteen example scenes on both and checks that their brightness agrees within 5%; it is

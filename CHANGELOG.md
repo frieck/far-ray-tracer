@@ -24,7 +24,10 @@ and moves under its version when that version is released.
   profiles, dispersion in glass, displacement of objects and of the ground, subsurface
   scattering, depth of field, and caustics, gathering on the card the photons the CPU traces:
   every example scene renders on the GPU. More than eight volumes stay on the CPU, and Auto
-  renders such scenes there. Software renderers are not used. The shader is compiled for what
+  renders such scenes there. Samples come from scrambled Sobol points, as on the CPU,
+for as little noise at few samples. Render regions and raising the passes work as on the CPU: a region
+renders only its pixels, and a longer render continues from the last one. Software renderers
+are not used. The shader is compiled for what
   each scene uses, up to a third faster on simple scenes.
 
 ### Changed

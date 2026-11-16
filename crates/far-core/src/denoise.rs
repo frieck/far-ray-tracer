@@ -56,6 +56,18 @@ impl Guide {
         Self { sums: sums.map(|v| AtomicU32::new(v.to_bits())).collect() }
     }
 
+    /// The sums `from_sums` takes, back again.
+    pub fn sums(&self) -> (Vec<f32>, Vec<Primary>) {
+        self.sums.chunks_exact(FIELDS).map(|cell| {
+            let v = |i: usize| f32::from_bits(cell[i].load(Relaxed));
+            (v(LUMA2), Primary {
+                albedo: [v(ALBEDO), v(ALBEDO + 1), v(ALBEDO + 2)],
+                normal: [v(NORMAL), v(NORMAL + 1), v(NORMAL + 2)],
+                depth: v(DEPTH),
+            })
+        }).unzip()
+    }
+
     fn add(&self, index: usize, value: f32) {
         let cell = &self.sums[index];
         cell.store((f32::from_bits(cell.load(Relaxed)) + value).to_bits(), Relaxed);

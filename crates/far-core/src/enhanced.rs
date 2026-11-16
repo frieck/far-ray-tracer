@@ -301,18 +301,16 @@ impl Adaptive {
 /// ones, deep in a path, are plain random numbers.
 const SEQUENCE_DIMENSIONS: u32 = 48;
 
-/// The first two dimensions of the Sobol sequence, as 32-bit fractions.
+/// The first two dimensions of the Sobol sequence, as 32-bit fractions. The second one's
+/// direction numbers are the rows of the Pascal matrix mod 2, so it is the first times that
+/// matrix: five shifts in place of a step per bit of the index.
 fn sobol(index: u32) -> (u32, u32) {
-    let (mut y, mut v) = (0u32, 1u32 << 31);
-    let mut i = index;
-    while i != 0 {
-        if i & 1 != 0 {
-            y ^= v;
-        }
-        v ^= v >> 1;
-        i >>= 1;
+    let x = index.reverse_bits();
+    let mut y = x;
+    for (shift, mask) in [(1, 0x5555_5555u32), (2, 0x3333_3333), (4, 0x0f0f_0f0f), (8, 0x00ff_00ff), (16, 0x0000_ffff)] {
+        y ^= (y & mask) << shift;
     }
-    (index.reverse_bits(), y)
+    (x, y)
 }
 
 /// Owen scrambling by hashing (Burley 2020, after Laine and Karras): a random permutation
@@ -1907,25 +1905,94 @@ impl Accumulation {
         self.passes
     }
 
-    /// Light gathered by another renderer, as the GPU does, for `redisplay` to show: per pixel
-    /// of the whole image, sums over `passes` samples taken at `op`'s exposure with the scene's
-    /// light compensation, capped as `render` caps them. `luminance2` and `primary` feed the
-    /// denoiser, and `glow` bloom, which `redisplay` skips when they are missing.
-    pub fn gathered(op: &Options, passes: u32, light: &[[f32; 3]], luminance2: &[f32],
-        primary: Option<&[Primary]>, glow: Option<&[[f32; 3]]>) -> Self {
+    /// The sums again, for another renderer to add passes to, when a render with `op` can
+    /// continue from them: the same image, area, denoising and bloom, more passes, and the same
+    /// exposure unless the render has no bloom, in which case the light is scaled to the new
+    /// one. The caller makes sure the scene, camera and other settings are the same.
+    pub fn resume(self, op: &Options) -> Option<Sums> {
+        let samples = op.samples.max(1);
+        if op.mode == Mode::Fixed || self.width != op.width || self.height != op.height
+            || self.rendered != rendered_region(op) || self.guide.is_some() != op.denoise
+            || self.glow.is_some() != op.bloom || self.passes >= samples || self.passes == 0
+            || (self.exposure != op.exposure && op.bloom) {
+            return None;
+        }
+        let factor = op.exposure / self.exposure;
+        let triples = |cells: &[AtomicU32], scale: f32| cells.chunks_exact(3)
+            .map(|c| [0, 1, 2].map(|k| f32::from_bits(c[k].load(Relaxed)) * scale)).collect::<Vec<_>>();
+        let (luminance2, primary) = match &self.guide {
+            Some(guide) => {
+                let (luminance2, primary) = guide.sums();
+                (luminance2.into_iter().map(|l| l * factor * factor).collect(), Some(primary))
+            }
+            None => (vec![0.0; self.counts.len()], None),
+        };
+        Some(Sums {
+            width: self.width,
+            height: self.height,
+            passes: self.passes,
+            light: triples(&self.sum, factor),
+            luminance2,
+            primary,
+            glow: self.glow.as_deref().map(|g| triples(g, 1.0)),
+        })
+    }
+}
+
+/// Light gathered by another renderer, as the GPU does, per pixel of the whole image, row by
+/// row: sums over `passes` samples taken with the scene's light compensation, capped as
+/// `render` caps them. Pixels outside the rendered area hold nothing.
+pub struct Sums {
+    pub width: u32,
+    pub height: u32,
+    /// Samples each rendered pixel has.
+    pub passes: u32,
+    /// Exposed light.
+    pub light: Vec<[f32; 3]>,
+    /// The squared luminance of that light.
+    pub luminance2: Vec<f32>,
+    /// What camera rays met first, when the render was asked to denoise.
+    pub primary: Option<Vec<Primary>>,
+    /// The light over the bloom threshold, when the render was asked for bloom.
+    pub glow: Option<Vec<[f32; 3]>>,
+}
+
+impl Sums {
+    /// Mean linear light of each pixel: what the tone mapping takes.
+    pub fn mean(&self) -> Vec<[f32; 3]> {
+        let n = self.passes.max(1) as f32;
+        self.light.iter().map(|l| [l[0] / n, l[1] / n, l[2] / n]).collect()
+    }
+
+    /// The same light, taken at `op`'s exposure over `op`'s area, as `redisplay` shows it, with
+    /// the denoiser and bloom when `primary` and `glow` are there.
+    pub fn accumulation(&self, op: &Options) -> Accumulation {
         let atomics = |values: &[[f32; 3]]| values.iter().flatten().map(|v| AtomicU32::new(v.to_bits())).collect::<Vec<_>>();
-        Self {
-            width: op.width,
-            height: op.height,
-            rendered: engine::Region { x0: 0, y0: 0, x1: op.width, y1: op.height },
-            passes,
-            sum: atomics(light),
-            counts: (0..light.len()).map(|_| AtomicU32::new(passes)).collect(),
-            guide: primary.map(|p| Guide::from_sums(luminance2, p)),
-            glow: glow.map(atomics),
+        let rendered = rendered_region(op);
+        let width = self.width as usize;
+        let inside = |p: usize| {
+            let (x, y) = ((p % width) as u32, (p / width) as u32);
+            x >= rendered.x0 && x < rendered.x1 && y >= rendered.y0 && y < rendered.y1
+        };
+        Accumulation {
+            width: self.width,
+            height: self.height,
+            rendered,
+            passes: self.passes,
+            sum: atomics(&self.light),
+            counts: (0..self.light.len()).map(|p| AtomicU32::new(if inside(p) { self.passes } else { 0 })).collect(),
+            guide: self.primary.as_deref().map(|p| Guide::from_sums(&self.luminance2, p)),
+            glow: self.glow.as_deref().map(atomics),
             exposure: op.exposure,
         }
     }
+}
+
+/// The pixels an Enhanced render with `op` traces: the whole image, or its region and a ring
+/// of tiles around it, which the denoiser filters against.
+pub fn rendered_region(op: &Options) -> engine::Region {
+    let (tx0, ty0, tx1, ty1) = rendered_area(op, false);
+    engine::Region { x0: tx0 * TILE, y0: ty0 * TILE, x1: (tx1 * TILE).min(op.width), y1: (ty1 * TILE).min(op.height) }
 }
 
 /// The part of the image a render traces: the whole of it, or a region and a ring of tiles
@@ -2261,6 +2328,26 @@ mod tests {
 
     fn example(name: &str) -> Scene {
         Scene::open(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes").join(name)).unwrap()
+    }
+
+    #[test]
+    fn sobol_matches_its_direction_numbers() {
+        // The definition: each set bit of the index adds a direction number, each the last one
+        // xor itself shifted right.
+        let by_bits = |index: u32| {
+            let (mut y, mut v, mut i) = (0u32, 1u32 << 31, index);
+            while i != 0 {
+                if i & 1 != 0 {
+                    y ^= v;
+                }
+                v ^= v >> 1;
+                i >>= 1;
+            }
+            y
+        };
+        for index in (0..4096).chain((0..4096).map(|k| hash(k, 7))) {
+            assert_eq!(sobol(index).1, by_bits(index), "index {index}");
+        }
     }
 
     fn small(samples: u32) -> Options {
