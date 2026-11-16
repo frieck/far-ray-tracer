@@ -10,6 +10,8 @@ interface EnvironmentPreviewProps {
   environment: EnvironmentConfig;
   exposure: number;
   toneMapping: ToneMapping;
+  whiteBalance: number;
+  tint: number;
   /** The camera, marked where it looks. */
   pose: Pose;
   /** Dragging sideways turns the environment, when given. */
@@ -17,10 +19,10 @@ interface EnvironmentPreviewProps {
 }
 
 /**
- * The whole environment as a panorama, as seen from inside: brightened and tone-mapped as
+ * The whole environment as a panorama, as seen from inside: brightened, white balanced and tone-mapped as
  * renders show it, turned by its rotation, with a ring where the camera looks.
  */
-export function EnvironmentPreview({ environment, exposure, toneMapping, pose, onRotate }: EnvironmentPreviewProps) {
+export function EnvironmentPreview({ environment, exposure, toneMapping, whiteBalance, tint, pose, onRotate }: EnvironmentPreviewProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [pixels, setPixels] = useState<ImageData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -29,12 +31,12 @@ export function EnvironmentPreview({ environment, exposure, toneMapping, pose, o
 
   // What the pixels depend on; rotation and the camera only move them.
   const { path, sky, intensity } = environment;
-  const key = JSON.stringify({ path, sky, intensity, exposure, toneMapping });
+  const key = JSON.stringify({ path, sky, intensity, exposure, toneMapping, whiteBalance, tint });
   useEffect(() => {
     let current = true;
     setBusy(true);
     const timer = window.setTimeout(() => {
-      invoke<ArrayBuffer>("environment_preview", { environment, width: WIDTH, exposure, toneMapping })
+      invoke<ArrayBuffer>("environment_preview", { environment, width: WIDTH, exposure, toneMapping, whiteBalance, tint })
         .then((buffer) => {
           if (!current) return;
           setPixels(new ImageData(new Uint8ClampedArray(buffer), WIDTH, HEIGHT));

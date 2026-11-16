@@ -56,13 +56,21 @@ struct OpenScene {
     bvh: OnceLock<far_core::bvh::Bvh>,
 }
 
+fn neutral_white() -> f32 {
+    far_core::lens::NEUTRAL_KELVIN
+}
+
+fn reference_iso() -> f32 {
+    far_core::lens::REFERENCE_ISO
+}
+
 struct FinishedImage {
     width: u32,
     height: u32,
     rgba: Vec<u8>,
-    /// The exposure it was shown with, when the kept accumulation holds its light, which can
-    /// then be saved as EXR.
-    exposure: Option<f32>,
+    /// The options it was shown with (exposure, white balance and vignette), when the kept
+    /// accumulation holds its light, which can then be saved as EXR.
+    shown_with: Option<Options>,
 }
 
 #[derive(Default)]
@@ -205,6 +213,23 @@ struct RenderRequest {
     exposure: f32,
     #[serde(default)]
     tone_mapping: far_core::ToneMapping,
+    /// The camera's white balance in kelvin and its tint, vignetting, chromatic aberration,
+    /// film grain from 0 to 1 at the camera's ISO, and halation. `exposure` already holds what
+    /// the ISO and shutter make of the light.
+    #[serde(default = "neutral_white")]
+    white_balance: f32,
+    #[serde(default)]
+    tint: f32,
+    #[serde(default)]
+    vignette: f32,
+    #[serde(default)]
+    chromatic_aberration: f32,
+    #[serde(default)]
+    grain: f32,
+    #[serde(default = "reference_iso")]
+    iso: f32,
+    #[serde(default)]
+    halation: f32,
     caustics: bool,
     photons: u32,
     caustic_radius: f32,
@@ -656,7 +681,7 @@ fn render_environment(config: &EnvironmentConfig, scene: Option<&Scene>, state: 
 const MAX_ENVIRONMENT_PREVIEW: u32 = 1024;
 
 /// The environment as a panorama for the Light panel, `width` by `width / 2` RGBA pixels: at its
-/// intensity, exposed and tone-mapped as renders show light, and unrotated, since the panel
+/// intensity, exposed, white balanced and tone-mapped as renders show light, and unrotated, since the panel
 /// turns it. The map is the one renders use, loaded once.
 #[tauri::command(async)]
 fn environment_preview(
@@ -664,6 +689,8 @@ fn environment_preview(
     width: u32,
     exposure: f32,
     tone_mapping: far_core::tonemap::ToneMapping,
+    white_balance: Option<f32>,
+    tint: Option<f32>,
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
     if !(2..=MAX_ENVIRONMENT_PREVIEW).contains(&width) || !exposure.is_finite() || exposure < 0.0 {
@@ -673,14 +700,17 @@ fn environment_preview(
     let environment = guarded("preview the environment", || {
         render_environment(&environment, open.as_ref().map(|open| &open.scene), &state)
     })?;
-    Ok(Response::new(environment_pixels(&environment, width, exposure, tone_mapping)))
+    let white = far_core::lens::white_balance(white_balance.unwrap_or(far_core::lens::NEUTRAL_KELVIN), tint.unwrap_or(0.0));
+    Ok(Response::new(environment_pixels(&environment, width, exposure, white, tone_mapping)))
 }
 
 /// The RGBA pixels of `environment_preview`.
-fn environment_pixels(environment: &Environment, width: u32, exposure: f32, tone_mapping: far_core::tonemap::ToneMapping) -> Vec<u8> {
+fn environment_pixels(environment: &Environment, width: u32, exposure: f32, white: [f32; 3],
+    tone_mapping: far_core::tonemap::ToneMapping) -> Vec<u8> {
     let scale = environment.config.intensity * exposure;
     environment.map.thumbnail(width as usize).iter().flat_map(|c| {
-        let [r, g, b] = far_core::tonemap::display(tone_mapping, [c.x * scale, c.y * scale, c.z * scale]);
+        let [r, g, b] = far_core::tonemap::display(tone_mapping,
+            [c.x * scale * white[0], c.y * scale * white[1], c.z * scale * white[2]]);
         [r, g, b].map(|v| (v * 255.0 + 0.5).clamp(0.0, 255.0) as u8).into_iter().chain([255])
     }).collect()
 }
@@ -718,11 +748,10 @@ fn save_image(name: String, app: AppHandle, state: State<'_, AppState>) -> Resul
     let image = guard.as_ref().ok_or("There is no finished image to save")?;
     // An EXR file takes the light behind the image, before tone mapping, and its passes.
     if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("exr")) {
-        let exposure = image.exposure.ok_or("Only a finished Enhanced render has linear light to save as EXR")?;
+        let options = image.shown_with.as_ref().ok_or("Only a finished Enhanced render has linear light to save as EXR")?;
         let kept = state.accumulation.lock().unwrap();
         let (_, accumulation) = kept.as_ref().ok_or("Only a finished Enhanced render has linear light to save as EXR")?;
-        let options = Options { mode: Mode::Enhanced, exposure, ..Options::default() };
-        guarded("save the EXR file", || accumulation.layers(&options).write_exr(&path))?;
+        guarded("save the EXR file", || accumulation.layers(options).write_exr(&path))?;
         return Ok(Some(path.to_string_lossy().into_owned()));
     }
     let rgb: Vec<u8> = image.rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
@@ -973,6 +1002,12 @@ fn render_scene(
         bloom: request.bloom,
         exposure: request.exposure,
         tone_mapping: request.tone_mapping,
+        white_balance: request.white_balance,
+        tint: request.tint,
+        vignette: request.vignette,
+        chromatic_aberration: request.chromatic_aberration,
+        grain: far_core::lens::grain_at_iso(request.grain, request.iso),
+        halation: request.halation,
         caustics: request.caustics,
         photons: request.photons,
         caustic_radius: request.caustic_radius,
@@ -1050,7 +1085,7 @@ fn render_scene(
             progress.tiles_done.store(1, Relaxed);
             send_frame().map_err(|e| e.to_string())?;
             *state.last_image.lock().unwrap() =
-                Some(FinishedImage { width: options.width, height: options.height, rgba: image.rgba(), exposure: Some(options.exposure) });
+                Some(FinishedImage { width: options.width, height: options.height, rgba: image.rgba(), shown_with: Some(options.clone()) });
             let denoiser = *progress.denoiser.lock().unwrap();
             *state.accumulation.lock().unwrap() = previous.map(|a| (key.clone(), a));
             return Ok(RenderResult {
@@ -1100,7 +1135,7 @@ fn render_scene(
     if request.keep {
         let rgba = image.rgba();
         *state.last_image.lock().unwrap() = Some(FinishedImage {
-            width: options.width, height: options.height, rgba, exposure: linear.then_some(options.exposure),
+            width: options.width, height: options.height, rgba, shown_with: linear.then(|| options.clone()),
         });
     }
     let on_gpu = adapter.is_some();
@@ -1285,7 +1320,7 @@ mod tests {
         };
         let environment = Environment::load(config).unwrap();
         let tone = far_core::tonemap::ToneMapping::Agx;
-        let pixels = environment_pixels(&environment, 256, 1.0, tone);
+        let pixels = environment_pixels(&environment, 256, 1.0, [1.0; 3], tone);
         assert_eq!(pixels.len(), 256 * 128 * 4);
         assert!(pixels.chunks_exact(4).all(|p| p[3] == 255));
         // The warm panel, left of the back (+Z at the center), is the brightest thing in it.
@@ -1295,11 +1330,11 @@ mod tests {
         assert!(y > 20 && y < 60 && (x as f32 / 256.0 - (3.9 / std::f32::consts::TAU)).abs() < 0.1, "{x} {y}");
         // Brighter light shows brighter, and intensity counts as exposure does.
         let mean = |p: &[u8]| p.iter().map(|&v| v as u64).sum::<u64>();
-        let brighter = environment_pixels(&environment, 256, 2.0, tone);
+        let brighter = environment_pixels(&environment, 256, 2.0, [1.0; 3], tone);
         assert!(mean(&brighter) > mean(&pixels));
         let mut doubled = environment.clone();
         doubled.config.intensity = 2.0;
-        assert_eq!(environment_pixels(&doubled, 256, 1.0, tone), brighter);
+        assert_eq!(environment_pixels(&doubled, 256, 1.0, [1.0; 3], tone), brighter);
     }
 
     #[test]

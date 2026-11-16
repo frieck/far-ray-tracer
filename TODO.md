@@ -48,9 +48,16 @@ Visual gain for the effort:
 ## Camera and image
 
 - [x] **Shaped bokeh**: hexagonal or other aperture shapes. Low.
-- [ ] **Vignetting and chromatic aberration**. Low.
+- [x] **Vignetting and chromatic aberration**: natural vignetting and lateral aberration.
 - [x] **Film tone mapping (ACES or AgX)**: natural colors in bright light. Low.
-- [ ] **White balance**: a color temperature for the camera. Low.
+- [x] **White balance**: a color temperature for the camera, with tint.
+- [x] **Physical exposure and film**: ISO and shutter, or one Brightness in stops; grain and
+  halation.
+- [ ] **Focal length, sensor size and f-number**: the camera has only a zoom, and depth of
+  field takes the aperture as a diameter in scene units. With a focal length and a sensor in
+  millimetres, as in V-Ray and Blender, the f-number could set the depth of field and the
+  exposure together; scenes would need their aperture converted. Medium.
+- [ ] **Film looks**: color profiles of film stocks, as lookup tables. Low to medium.
 - [ ] **Motion blur**: needs moving objects in the scene format. Medium.
 - [x] **Raw light and render passes**: the linear light as EXR, with the denoised light,
   albedo, normal and depth, from the app and the command line.

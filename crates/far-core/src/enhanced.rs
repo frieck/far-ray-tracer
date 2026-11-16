@@ -1730,6 +1730,8 @@ fn channel(v: f32) -> u32 {
 /// afterwards without rendering again.
 struct Display {
     curve: ToneMapping,
+    /// White balance and vignetting, on the light before the curve.
+    film: crate::lens::Film,
     /// The brightest a sample may be, before exposure; None in scenes lit by an HDR image or a
     /// sky, whose sun is far brighter than any lamp.
     cap: Option<f32>,
@@ -1740,9 +1742,14 @@ impl Display {
         (self.cap.map_or(radiance, |cap| radiance.min(cap)) * exposure).max(0.)
     }
 
-    /// Screen values of a pixel's mean sample.
+    /// Screen values of a mean sample, without the film.
     fn show(self, mean: [f32; 3]) -> [f32; 3] {
         tonemap::display(self.curve, mean)
+    }
+
+    /// Screen values of the mean sample of the pixel at index `p`, through the film.
+    fn show_at(self, mean: [f32; 3], p: usize) -> [f32; 3] {
+        self.show(self.film.light(mean, p))
     }
 }
 
@@ -1770,7 +1777,7 @@ fn apply_denoiser(sum: &[AtomicU32], guide: &Guide, counts: &[AtomicU32], scale:
             (0..indices.len()).map(|q| guide.albedo_normal(q, pixel_counts[q])).unzip();
         if let Some(result) = crate::oidn::denoise(&color, &albedo, &normal, x1 - x0, y1 - y0, true) {
             for (&p, c) in indices.iter().zip(result) {
-                let c = display.show(c);
+                let c = display.show_at(c, p);
                 image.pixels[p].store(0xff00_0000 | channel(c[0]) | channel(c[1]) << 8 | channel(c[2]) << 16, Relaxed);
             }
             *progress.denoiser.lock().unwrap() = Some(engine::Denoiser::Oidn);
@@ -1785,7 +1792,7 @@ fn apply_denoiser(sum: &[AtomicU32], guide: &Guide, counts: &[AtomicU32], scale:
         // The filter works on displayed values, where the curve compresses the noise.
         let shown = |b: f32| display.show([b; 3])[1];
         let slope = (shown(brightness + 0.01) - shown(brightness)) / 0.01;
-        color.push(display.show(mean));
+        color.push(display.show_at(mean, p));
         variance.push(spread * slope * slope);
     }
     let Some(result) = denoise::denoise(color, variance, guide, &pixel_counts, x1 - x0, y1 - y0, &progress.cancel) else { return };
@@ -1829,7 +1836,7 @@ fn box_blur(buffer: &mut [f32], width: usize, height: usize, radius: usize, hori
 
 /// Spreads the light above the threshold into a halo and screens it over the image.
 /// `counts` gives each pixel's samples when they differ; otherwise every pixel took `count`.
-fn apply_bloom(glow: &[AtomicU32], counts: Option<&[AtomicU32]>, count: u32, image: &Image) {
+fn apply_bloom(glow: &[AtomicU32], counts: Option<&[AtomicU32]>, count: u32, white: [f32; 3], image: &Image) {
     let (width, height) = (image.width as usize, image.height as usize);
     let samples = |i: usize| counts.map_or(count, |c| c[i / 3].load(Relaxed).max(1));
     let source: Vec<f32> = glow.iter().enumerate()
@@ -1857,7 +1864,65 @@ fn apply_bloom(glow: &[AtomicU32], counts: Option<&[AtomicU32]>, count: u32, ima
         let mut out = 0xff00_0000u32;
         for k in 0..3 {
             let shown = ((rgba >> (8 * k)) & 0xff) as f32 / 255.0;
-            let light = 1.0 - (-BLOOM_STRENGTH * halo[p * 3 + k]).exp();
+            let light = 1.0 - (-BLOOM_STRENGTH * halo[p * 3 + k] * white[k]).exp();
+            out |= channel(shown + light - shown * light) << (8 * k);
+        }
+        pixel.store(out, Relaxed);
+    }
+}
+
+/// The halation's halo as a share of the image's longer side, and its color: film's red layer,
+/// lit again by light the base reflects behind it.
+const HALATION_SIZE: f32 = 0.006;
+const HALATION_COLOR: [f32; 3] = [1.0, 0.28, 0.06];
+const HALATION_STRENGTH: f32 = 1.5;
+
+/// What the camera does last, on the finished picture: halation around bright light, the
+/// lens's chromatic aberration, then grain.
+#[allow(clippy::too_many_arguments)]
+fn finish_like_film(sum: &[AtomicU32], counts: &[AtomicU32], scale: f32, display: Display, op: &Options, image: &Image,
+    rendered: engine::Region) {
+    if op.halation > 0.0 {
+        apply_halation(sum, counts, scale, display, op.halation.min(1.0), image);
+    }
+    crate::lens::chromatic_aberration(image, op.chromatic_aberration, rendered);
+    crate::lens::grain(image, op.grain, rendered);
+}
+
+/// Film halation: light far brighter than white goes through the film, reflects off its base
+/// and exposes the red layer again around it, in a reddish glow. Taken from each pixel's mean
+/// light, through the film, so it follows exposure and white balance.
+fn apply_halation(sum: &[AtomicU32], counts: &[AtomicU32], scale: f32, display: Display, strength: f32, image: &Image) {
+    let (width, height) = (image.width as usize, image.height as usize);
+    let mut excess: Vec<f32> = (0..width * height).flat_map(|p| {
+        let count = counts[p].load(Relaxed);
+        let light = if count == 0 {
+            0.0
+        } else {
+            let mean = [0, 1, 2].map(|k| f32::from_bits(sum[p * 3 + k].load(Relaxed)) * scale / count as f32);
+            denoise::luma(display.film.light(mean, p))
+        };
+        let over = if light.is_finite() { (light - 1.0).clamp(0.0, BLOOM_MAX) } else { 0.0 };
+        [over, 0.0, 0.0]
+    }).collect();
+    if excess.iter().all(|v| *v <= 0.0) {
+        return;
+    }
+    let radius = ((HALATION_SIZE * width.max(height) as f32).round() as usize).max(1);
+    for _ in 0..3 {
+        box_blur(&mut excess, width, height, radius, true);
+        box_blur(&mut excess, width, height, radius, false);
+    }
+    for (p, pixel) in image.pixels.iter().enumerate() {
+        let halo = excess[p * 3];
+        if halo <= 0.0 {
+            continue;
+        }
+        let rgba = pixel.load(Relaxed);
+        let mut out = 0xff00_0000u32;
+        for (k, color) in HALATION_COLOR.iter().enumerate() {
+            let shown = ((rgba >> (8 * k)) & 0xff) as f32 / 255.0;
+            let light = 1.0 - (-HALATION_STRENGTH * strength * halo * color).exp();
             out |= channel(shown + light - shown * light) << (8 * k);
         }
         pixel.store(out, Relaxed);
@@ -1873,7 +1938,7 @@ fn accumulate(sum: &[AtomicU32], p: usize, color: Vec3, exposure: f32, count: u3
         total.store(value.to_bits(), Relaxed);
         value / count as f32
     });
-    let shown = display.show(mean);
+    let shown = display.show_at(mean, p);
     0xff00_0000 | channel(shown[0]) | channel(shown[1]) << 8 | channel(shown[2]) << 16
 }
 
@@ -1910,10 +1975,13 @@ impl Accumulation {
     /// too when Open Image Denoise is installed.
     pub fn layers(&self, op: &Options) -> crate::layers::Layers {
         let scale = op.exposure / self.exposure;
+        // The light as the display takes it: white balanced and vignetted. Chromatic aberration
+        // is left out, so the passes line up with it.
+        let film = crate::lens::Film::new(op.white_balance, op.tint, op.vignette, self.width, self.height);
         let counts: Vec<u32> = self.counts.iter().map(|c| c.load(Relaxed)).collect();
         let per = |p: usize| if counts[p] == 0 { 0.0 } else { 1.0 / counts[p] as f32 };
         let light: Vec<[f32; 3]> = (0..counts.len())
-            .map(|p| [0, 1, 2].map(|k| f32::from_bits(self.sum[p * 3 + k].load(Relaxed)) * scale * per(p)))
+            .map(|p| film.light([0, 1, 2].map(|k| f32::from_bits(self.sum[p * 3 + k].load(Relaxed)) * scale * per(p)), p))
             .collect();
         let mut layers = crate::layers::Layers {
             width: self.width, height: self.height, light, denoised: None, albedo: None, normal: None, depth: None,
@@ -2051,7 +2119,11 @@ fn rendered_area(op: &Options, fixed: bool) -> (u32, u32, u32, u32) {
 
 fn display_for(scene: &Scene, op: &Options) -> Display {
     let hdr = scene.environment.as_ref().is_some_and(|e| e.active());
-    Display { curve: op.tone_mapping, cap: (!hdr).then_some(MAX_SAMPLE_RADIANCE) }
+    Display {
+        curve: op.tone_mapping,
+        film: crate::lens::Film::new(op.white_balance, op.tint, op.vignette, op.width, op.height),
+        cap: (!hdr).then_some(MAX_SAMPLE_RADIANCE),
+    }
 }
 
 /// Shows `previous` again with `op`'s exposure, tone mapping, denoise and bloom, without
@@ -2077,8 +2149,9 @@ pub fn redisplay(previous: &Accumulation, scene: &Scene, op: &Options, image: &I
         apply_denoiser(&previous.sum, guide, &previous.counts, scale, display, image, progress, rendered);
     }
     if let Some(glow) = previous.glow.as_ref().filter(|_| op.bloom) {
-        apply_bloom(glow, Some(&previous.counts), previous.passes, image);
+        apply_bloom(glow, Some(&previous.counts), previous.passes, display.film.white(), image);
     }
+    finish_like_film(&previous.sum, &previous.counts, scale, display, op, image, rendered);
     true
 }
 
@@ -2093,7 +2166,7 @@ fn paint(sum: &[AtomicU32], counts: &[AtomicU32], scale: f32, display: Display, 
                 continue;
             }
             let mean = [0, 1, 2].map(|k| f32::from_bits(sum[p * 3 + k].load(Relaxed)) * scale / count as f32);
-            let shown = display.show(mean);
+            let shown = display.show_at(mean, p);
             image.pixels[p].store(0xff00_0000 | channel(shown[0]) | channel(shown[1]) << 8 | channel(shown[2]) << 16, Relaxed);
         }
     }
@@ -2358,8 +2431,9 @@ pub fn render_continuing(scene: &Scene, kd: Option<&KdTree>, op: &Options, image
         apply_denoiser(&sum, guide, &counts, 1.0, display, image, progress, rendered);
     }
     if let Some(glow) = &glow {
-        apply_bloom(glow, Some(&counts), samples, image);
+        apply_bloom(glow, Some(&counts), samples, display.film.white(), image);
     }
+    finish_like_film(&sum, &counts, 1.0, display, op, image, rendered);
     Some(Accumulation {
         width: w, height: h, rendered, passes: samples, sum, counts, guide, glow, exposure: op.exposure,
     })
@@ -2502,6 +2576,9 @@ mod tests {
             Options { tone_mapping: ToneMapping::Aces, exposure: 0.6, bloom: false, ..agx },
             Options { denoise: false, ..agx },
             Options { bloom: false, tone_mapping: ToneMapping::AgxPunchy, ..agx },
+            // The camera's white balance, vignetting and chromatic aberration.
+            Options { white_balance: 3200.0, vignette: 0.6, chromatic_aberration: 1.0, ..agx },
+            Options { tint: 0.5, grain: 0.8, halation: 1.0, exposure: 1.0, ..agx },
         ] {
             let again = shown(&op).expect("shown again");
             let (fresh, _) = rendered(&scene, &op, None);
@@ -2518,6 +2595,22 @@ mod tests {
         let again: Vec<u32> = image.pixels.iter().map(|p| p.load(Relaxed)).collect();
         assert!(largest_difference(&again, &rendered(&cornell, &brighter, None).0) <= 1);
         assert!(shown(&Options { exposure: 2.0, ..agx }).is_none());
+        // Balanced for tungsten, the picture turns bluer; vignetted, its corner darker.
+        let mean = |pixels: &[u32], k: usize| pixels.iter().map(|p| ((p >> (8 * k)) & 0xff) as u64).sum::<u64>();
+        let neutral = shown(&agx).unwrap();
+        let warm_light = shown(&Options { white_balance: 3200.0, ..agx }).unwrap();
+        assert!(mean(&warm_light, 2) * mean(&neutral, 0) > mean(&warm_light, 0) * mean(&neutral, 2));
+        let dark = shown(&Options { vignette: 1.0, ..agx }).unwrap();
+        let brightness = |p: u32| (p & 0xff) + ((p >> 8) & 0xff) + ((p >> 16) & 0xff);
+        assert!(brightness(dark[0]) < brightness(neutral[0]));
+        let center = (agx.height as usize / 2) * agx.width as usize + agx.width as usize / 2;
+        assert!(brightness(dark[center]).abs_diff(brightness(neutral[center])) <= 3);
+        // Halation adds red, and only red mostly, around light brighter than white.
+        let haloed = shown(&Options { halation: 1.0, exposure: 4.0, bloom: false, ..agx });
+        let plain = shown(&Options { exposure: 4.0, bloom: false, ..agx });
+        let (haloed, plain) = (haloed.unwrap(), plain.unwrap());
+        let gain = |k: usize| mean(&haloed, k) - mean(&plain, k);
+        assert!(gain(0) > 0 && gain(0) > 3 * gain(2), "{} {}", gain(0), gain(2));
         assert!(shown(&Options { width: 32, ..agx }).is_none());
     }
 
@@ -2865,16 +2958,16 @@ mod tests {
         let image = Image::new(64, 64);
         for pixel in image.pixels.iter() { pixel.store(0xff20_2020, Relaxed); }
         let glow: Vec<AtomicU32> = (0..64 * 64 * 3).map(|_| AtomicU32::new(0)).collect();
-        apply_bloom(&glow, None, 1, &image);
+        apply_bloom(&glow, None, 1, [1.0; 3], &image);
         assert!(image.pixels.iter().all(|p| p.load(Relaxed) == 0xff20_2020), "nothing above white, nothing changes");
         let center = (32 * 64 + 32) * 3;
         for k in 0..3 { glow[center + k].store(200f32.to_bits(), Relaxed); }
-        apply_bloom(&glow, None, 1, &image);
+        apply_bloom(&glow, None, 1, [1.0; 3], &image);
         let red = |x: usize, y: usize| image.pixels[y * 64 + x].load(Relaxed) & 0xff;
         assert!(red(32, 32) > red(34, 32) && red(34, 32) > red(40, 32) && red(40, 32) > 0x20);
         assert_eq!(red(31, 32), red(33, 32), "the halo is symmetric");
         glow[center].store(f32::NAN.to_bits(), Relaxed);
-        apply_bloom(&glow, None, 1, &image);
+        apply_bloom(&glow, None, 1, [1.0; 3], &image);
         assert!(red(60, 60) < 0xff, "an invalid value does not spread");
     }
 
@@ -2883,7 +2976,7 @@ mod tests {
         // A bright source covering 1/32 of the samples has mean radiance 0.5: averaged before
         // the curve, it shows as 0.5 whatever the order of the samples.
         let red = |rgba: u32| rgba & 0xff;
-        let display = Display { curve: ToneMapping::Standard, cap: None };
+        let display = Display { curve: ToneMapping::Standard, film: Default::default(), cap: None };
         let bright = Vec3::new(16., 0., 0.);
         let dark = Vec3::new(0., 0., 0.);
         let run = |display: Display, order: &[Vec3]| {

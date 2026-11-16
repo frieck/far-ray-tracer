@@ -37,6 +37,17 @@ usage:
       --gpu           render on the graphics card (a first cut: see the README)
       --exposure N    brightness multiplier in enhanced mode (default 1)
       --tone-mapping standard|agx|agx-punchy|aces   how light becomes screen colors (default standard)
+      --iso N         the camera's ISO: twice the ISO is twice the light, and more grain
+                      (default 100)
+      --shutter T     shutter time in seconds, such as 1/60 or 0.5: twice the time is twice
+                      the light (default 1/125); ISO 100 at 1/125 is exposure 1
+      --white-balance K    color temperature in kelvin that comes out white, 1500 to 15000;
+                      lower suits warmer light (default 6500, which changes nothing)
+      --tint N        white balance from -1 (green) to 1 (magenta) (default 0)
+      --grain N       film grain, 0 to 1, stronger at high ISO (default 0)
+      --halation N    reddish glow around bright light, as on film, 0 to 1 (default 0)
+      --vignette N    darkens the corners as a lens does, 0 to 1 (default 0)
+      --chromatic-aberration N   red and blue fringes toward the corners, 0 to 1 (default 0)
       --aperture N    lens diameter in scene units; 0 disables depth of field
       --focus-distance N   focus-plane distance from camera in scene units
       --blades N      diaphragm blades, the shape of out-of-focus highlights; 0 is round
@@ -69,6 +80,15 @@ fn number<T: std::str::FromStr>(args: &mut impl Iterator<Item = String>, name: &
         .unwrap_or_else(|| fail(&format!("{name} needs a number")))
 }
 
+/// A number from 0 to 1.
+fn fraction(args: &mut impl Iterator<Item = String>, name: &str) -> f32 {
+    let value: f32 = number(args, name);
+    if !(0.0..=1.0).contains(&value) {
+        fail(&format!("{name} is 0 to 1"));
+    }
+    value
+}
+
 fn point(args: &mut impl Iterator<Item = String>, name: &str) -> [f32; 3] {
     let text = args.next().unwrap_or_default();
     let values: Vec<f32> = text.split(',').filter_map(|v| v.parse().ok()).collect();
@@ -80,6 +100,7 @@ fn render_command(mut args: impl Iterator<Item = String>) {
     let mut gpu = false;
     let (mut scene, mut output) = (None, None);
     let (mut position, mut target, mut zoom) = (None, None, None);
+    let (mut iso, mut shutter, mut grain) = (far_core::lens::REFERENCE_ISO, far_core::lens::REFERENCE_SHUTTER, 0.0);
     while let Some(a) = args.next() {
         match a.as_str() {
             "-o" => output = args.next(),
@@ -117,6 +138,37 @@ fn render_command(mut args: impl Iterator<Item = String>) {
             "--target" => target = Some(point(&mut args, &a)),
             "--zoom" => zoom = Some(number(&mut args, &a)),
             "--exposure" => options.exposure = number(&mut args, &a),
+            "--white-balance" => {
+                options.white_balance = number(&mut args, &a);
+                if !(far_core::lens::MIN_KELVIN..=far_core::lens::MAX_KELVIN).contains(&options.white_balance) {
+                    fail("--white-balance is 1500 to 15000 kelvin");
+                }
+            }
+            "--vignette" => options.vignette = fraction(&mut args, &a),
+            "--iso" => {
+                iso = number(&mut args, &a);
+                if iso.is_nan() || iso <= 0.0 || iso > 1e6 {
+                    fail("--iso needs a positive number");
+                }
+            }
+            "--shutter" => {
+                let text = args.next().unwrap_or_default();
+                shutter = match text.split_once('/') {
+                    Some((top, bottom)) => top.trim().parse::<f32>().ok().zip(bottom.trim().parse::<f32>().ok()).map(|(t, b)| t / b),
+                    None => text.trim().parse().ok(),
+                }
+                .filter(|t: &f32| t.is_finite() && *t > 0.0)
+                .unwrap_or_else(|| fail("--shutter needs a time in seconds, such as 1/60 or 0.5"));
+            }
+            "--tint" => {
+                options.tint = number(&mut args, &a);
+                if !(-1.0..=1.0).contains(&options.tint) {
+                    fail("--tint is -1 to 1");
+                }
+            }
+            "--grain" => grain = fraction(&mut args, &a),
+            "--halation" => options.halation = fraction(&mut args, &a),
+            "--chromatic-aberration" => options.chromatic_aberration = fraction(&mut args, &a),
             "--caustics" => options.caustics = true,
             "--photons" => options.photons = number(&mut args, &a),
             "--caustic-radius" => options.caustic_radius = number(&mut args, &a),
@@ -140,6 +192,9 @@ fn render_command(mut args: impl Iterator<Item = String>) {
         eprintln!("{HELP}");
         exit(2);
     };
+    // The camera's ISO and shutter join --exposure, and the ISO sets the grain's strength.
+    options.exposure *= far_core::lens::exposure(iso, shutter);
+    options.grain = far_core::lens::grain_at_iso(grain, iso);
 
     let t0 = Instant::now();
     let scene = Scene::open(Path::new(&scene)).unwrap_or_else(|e| fail(&e));

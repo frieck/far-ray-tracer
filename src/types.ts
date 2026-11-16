@@ -113,6 +113,8 @@ export interface MenuAction {
 export interface Area { x0: number; y0: number; x1: number; y1: number }
 
 /** How light becomes screen colors; see crates/far-core/src/tonemap.rs. */
+export type ExposureMode = "simple" | "physical";
+
 export type ToneMapping = "standard" | "agx" | "agx_punchy" | "aces";
 
 /** Where Enhanced renders run: Auto takes the graphics card for scenes it renders as the CPU does. */
@@ -148,6 +150,16 @@ export interface RenderRequest {
   bloom: boolean;
   exposure: number;
   tone_mapping: ToneMapping;
+  /** The camera's white balance in kelvin (6500 changes nothing), vignetting and chromatic
+   * aberration from 0 to 1: shown again without rendering, as exposure is. */
+  white_balance: number;
+  tint: number;
+  vignette: number;
+  chromatic_aberration: number;
+  /** Film grain from 0 to 1 at `iso`, which makes it stronger above 100. */
+  grain: number;
+  iso: number;
+  halation: number;
   caustics: boolean;
   photons: number;
   caustic_radius: number;
@@ -199,8 +211,19 @@ export interface Settings {
   bladeRotation: number;
   quality: Quality;
   customPasses: number;
-  exposure: number;
+  /** Simple sets the light with one Brightness, in stops; Physical with the ISO and shutter. */
+  exposureMode: ExposureMode;
+  brightness: number;
+  iso: number;
+  /** The shutter time in seconds. */
+  shutter: number;
   toneMapping: ToneMapping;
+  whiteBalance: number;
+  tint: number;
+  vignette: number;
+  chromaticAberration: number;
+  grain: number;
+  halation: number;
   denoise: boolean;
   bloom: boolean;
   caustics: boolean;

@@ -35,6 +35,13 @@ are not used. The shader is compiled for what
   into linear light, in the app (**Light > Environment > Image**) and in scene files. The
   HDRI studio example comes in EXR, PNG and JPEG versions too.
 
+- A camera much like V-Ray's physical camera, in the **Camera** tab and on the command line,
+  for Enhanced rendering: exposure by ISO and shutter speed (`--iso`, `--shutter`), or one
+  Brightness in stops that says which ISO and shutter a camera would pick; white balance and
+  tint (`--white-balance`, `--tint`); vignetting and chromatic aberration (`--vignette`,
+  `--chromatic-aberration`); and film grain, stronger at high ISO, and halation (`--grain`,
+  `--halation`). Each changes after a render without rendering again, on the CPU and the GPU.
+
 - **Light > Environment** shows the environment as a panorama, tone-mapped as renders show
   it, with a ring where the camera looks; dragging it sideways turns the environment.
 
@@ -43,6 +50,9 @@ are not used. The shader is compiled for what
   denoised, the denoised light, albedo, normal and depth passes.
 
 ### Changed
+
+- Exposure moved from **Image** to **Camera > Exposure**. Scenes saved with the earlier
+  Exposure multiplier open with the same light, as a Brightness.
 
 - Fixed and Enhanced modes find what a ray hits with a bounding volume hierarchy (BVH) instead
   of the KD-Tree: scenes are ready 20 to 90 times sooner, and meshes render 10% to 35% faster.

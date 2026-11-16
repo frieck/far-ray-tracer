@@ -90,6 +90,19 @@ pub struct Options {
     pub exposure: f32,
     /// How light becomes screen colors in Enhanced mode.
     pub tone_mapping: crate::ToneMapping,
+    /// Enhanced mode: the color temperature, in kelvin, that comes out white; 6500 changes
+    /// nothing. See `lens`.
+    pub white_balance: f32,
+    /// Enhanced mode: white balance's other axis, from -1 (green) to 1 (magenta).
+    pub tint: f32,
+    /// Enhanced mode: how much the corners darken, from 0 to 1.
+    pub vignette: f32,
+    /// Enhanced mode: how far red and blue part toward the corners, from 0 to 1.
+    pub chromatic_aberration: f32,
+    /// Enhanced mode: the strength of film grain, 0 for none; see `lens::grain_at_iso`.
+    pub grain: f32,
+    /// Enhanced mode: the reddish glow film shows around bright light, from 0 to 1.
+    pub halation: f32,
     /// Traces photons so glass and mirrors focus light, in Enhanced mode.
     pub caustics: bool,
     /// Photons emitted for caustics. More photons allow a smaller radius.
@@ -132,6 +145,12 @@ impl Default for Options {
             indirect_clamp: None,
             exposure: 1.0,
             tone_mapping: crate::ToneMapping::Standard,
+            white_balance: crate::lens::NEUTRAL_KELVIN,
+            tint: 0.0,
+            vignette: 0.0,
+            chromatic_aberration: 0.0,
+            grain: 0.0,
+            halation: 0.0,
             caustics: false,
             photons: 1_000_000,
             caustic_radius: 0.12,

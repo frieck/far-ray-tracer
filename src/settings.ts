@@ -146,6 +146,60 @@ export const DEFAULT_SKY: import("./types").SkyConfig = {
 };
 export const DEFAULT_SUN_TIME: import("./types").SunTime = { hour: 15, latitude: -27, day: 80 };
 
+/** ISO 100 at 1/125 s leaves the light as rendered, as in the engine's `lens::exposure`. */
+export const REFERENCE_ISO = 100;
+export const REFERENCE_SHUTTER = 1 / 125;
+/** The usual ranges of the camera's ISO and shutter time. */
+export const ISO_RANGE: [number, number] = [25, 6400];
+export const SHUTTER_RANGE: [number, number] = [1 / 4000, 1];
+
+/** The light's multiplier: 2 to the brightness, or what the ISO and shutter make of it. */
+export function exposureOf(settings: Settings): number {
+  if (settings.exposureMode === "simple") return 2 ** settings.brightness;
+  return (settings.iso / REFERENCE_ISO) * (settings.shutter / REFERENCE_SHUTTER);
+}
+
+/**
+ * The ISO and shutter time of the picture: as set, or in Simple what a camera in program mode
+ * would pick for that light. From ISO 100 at 1/125 s, more light takes a longer shutter down to
+ * 1/30 s, held in the hand, then a higher ISO up to 6400, then longer still, on a tripod; less
+ * light takes a shorter shutter up to 1/4000 s, then ISO down to 50.
+ */
+export function cameraOf(settings: Settings): { iso: number; shutter: number } {
+  if (settings.exposureMode === "physical") return { iso: settings.iso, shutter: settings.shutter };
+  const stops = settings.brightness;
+  const handheld = Math.log2((1 / 30) / REFERENCE_SHUTTER);
+  const fastest = Math.log2(SHUTTER_RANGE[0] / REFERENCE_SHUTTER);
+  let shutterStops: number;
+  let isoStops: number;
+  if (stops >= 0) {
+    shutterStops = Math.min(stops, handheld);
+    isoStops = Math.min(stops - shutterStops, 6);
+    shutterStops += stops - shutterStops - isoStops;
+  } else {
+    shutterStops = Math.max(stops, fastest);
+    isoStops = Math.max(stops - shutterStops, -1);
+    shutterStops += stops - shutterStops - isoStops;
+  }
+  return { iso: REFERENCE_ISO * 2 ** isoStops, shutter: REFERENCE_SHUTTER * 2 ** shutterStops };
+}
+
+/** The settings in the other exposure mode, with the same light. */
+export function withExposureMode(settings: Settings, mode: Settings["exposureMode"]): Partial<Settings> {
+  if (mode === settings.exposureMode) return {};
+  if (mode === "physical") {
+    const { iso, shutter } = cameraOf(settings);
+    return { exposureMode: mode, iso: Math.round(iso), shutter };
+  }
+  return { exposureMode: mode, brightness: Math.round(Math.log2(exposureOf(settings)) * 100) / 100 };
+}
+
+/** A shutter time as cameras show it: 1/125 s, or 2 s. */
+export function shutterLabel(seconds: number): string {
+  if (seconds >= 0.4) return `${Number(seconds.toFixed(seconds >= 10 ? 0 : 1))} s`;
+  return `1/${Math.round(1 / seconds)} s`;
+}
+
 export function defaultSettings(cores: number): Settings {
   return {
     environment: null,
@@ -160,8 +214,17 @@ export function defaultSettings(cores: number): Settings {
     bladeRotation: 0,
     quality: 64,
     customPasses: 128,
-    exposure: 1,
+    exposureMode: "simple",
+    brightness: 0,
+    iso: REFERENCE_ISO,
+    shutter: REFERENCE_SHUTTER,
     toneMapping: "standard",
+    whiteBalance: 6500,
+    tint: 0,
+    vignette: 0,
+    chromaticAberration: 0,
+    grain: 0,
+    halation: 0,
     denoise: true,
     bloom: false,
     caustics: false,
@@ -237,7 +300,8 @@ function causticValues(settings: Settings) {
 /** Render settings saved with a scene, so it opens looking as it was saved. */
 const SAVED_SETTINGS = [
   "quality", "customPasses", "resolution", "customWidth", "customHeight", "depth", "glossyDepth", "transmissionDepth",
-  "exposure", "toneMapping",
+  "exposureMode", "brightness", "iso", "shutter", "toneMapping", "whiteBalance", "tint", "vignette",
+  "chromaticAberration", "grain", "halation",
   "denoise", "bloom", "indirect", "bounces", "caustics", "causticPreset", "photonMillions", "causticRadius",
   "causticStrength", "dofPreset", "dofPasses",
 ] as const satisfies readonly (keyof Settings)[];
@@ -258,8 +322,17 @@ export function withSavedRenderSettings(settings: Settings, saved: unknown): Set
       ? value === null || (typeof value === "object" && value !== null)
       : key === "glossyDepth" || key === "transmissionDepth"
       ? value === null || (typeof value === "number" && value >= 1)
+      : key === "exposureMode"
+      ? value === "simple" || value === "physical"
       : typeof value === typeof current || (key === "quality" && (typeof value === "number" || value === "custom"));
     if (value !== undefined && sameKind) next[key] = value;
+  }
+  // Scenes saved before the camera had ISO and shutter kept an exposure multiplier: the same
+  // light as a brightness in stops.
+  const exposure = values.exposure;
+  if (values.brightness === undefined && typeof exposure === "number" && exposure > 0 && Number.isFinite(exposure)) {
+    next.exposureMode = "simple";
+    next.brightness = Math.log2(exposure);
   }
   return next as unknown as Settings;
 }
@@ -326,8 +399,15 @@ export function buildRequest(settings: Settings, mode: Mode, keep: boolean): Ren
     }),
     denoise: mode === "enhanced" && settings.denoise,
     bloom: mode === "enhanced" && settings.bloom,
-    exposure: settings.exposure,
+    exposure: exposureOf(settings),
     tone_mapping: settings.toneMapping,
+    white_balance: settings.whiteBalance,
+    tint: settings.tint,
+    vignette: settings.vignette,
+    chromatic_aberration: settings.chromaticAberration,
+    grain: settings.grain,
+    iso: cameraOf(settings).iso,
+    halation: settings.halation,
     caustics: settings.caustics,
     ...causticValues(settings),
     caustics_only: false,

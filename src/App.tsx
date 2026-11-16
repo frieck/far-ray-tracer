@@ -23,11 +23,15 @@ const WHEEL_END_MS = 250;
 const scenePose = ({ camera: { position, target, zoom } }: SceneInfo): Pose => ({ position, target, zoom });
 
 /**
- * The job without how the light is shown (exposure, tone mapping, denoise and bloom): two jobs
+ * The job without how the light is shown (exposure, tone mapping, the camera's white balance,
+ * tint, vignetting, chromatic aberration, grain and halation, denoise and bloom): two jobs
  * with the same light differ only in what the engine shows again at once, without rendering.
  */
 function lightKey(job: RenderJob): string {
-  const strip = (request: RenderRequest | null) => request && { ...request, exposure: 0, tone_mapping: null, denoise: false, bloom: false };
+  const strip = (request: RenderRequest | null) => request && ({
+    ...request, exposure: 0, tone_mapping: null, white_balance: 0, tint: 0, vignette: 0, chromatic_aberration: 0, grain: 0, iso: 0,
+    halation: 0, denoise: false, bloom: false,
+  });
   return JSON.stringify({ ...job, main: strip(job.main), comparison: strip(job.comparison) });
 }
 
@@ -186,7 +190,8 @@ export function App() {
       void renderer.stop();
       return;
     }
-    // Without auto-render, a change of exposure, tone mapping, denoise or bloom still applies at
+    // Without auto-render, a change of how the light is shown (exposure, tone mapping, the lens,
+    // denoise or bloom) still applies at
     // once: the last finished render is shown again with it, without rendering.
     const lookOnly = !renderAlone && !job.preview && view.hasResult && renderedKey !== null && renderedKey !== jobKey
       && lightKey(JSON.parse(renderedKey) as RenderJob) === lightKey(job);

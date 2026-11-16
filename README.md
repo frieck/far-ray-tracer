@@ -156,7 +156,8 @@ is the exposed light the display shows; pixels a region left out are black.
 
 **File > Save Scene** writes the scene with the edits made in the app: the camera, depth of
 field and bokeh, the environment (HDR or sky), material edits and the render settings
-(quality, size, exposure, tone mapping, denoise, bloom, indirect light and caustics), which
+(quality, size, the camera's exposure, white balance, lens and film, tone mapping, denoise,
+bloom, indirect light and caustics), which
 are restored when it opens again. Everything else in the file stays as it was. A scene saved
 to another folder keeps finding its images, models and IES files: the paths are rewritten, and
 a `data_folder` field points at the folder of images and meshes. The examples and models
@@ -965,6 +966,46 @@ render without rendering again. In scenes without an HDR environment or a sky, a
 capped at 6 before the exposure, so rare bright paths do not become white dots. The denoiser
 works on the same linear values.
 
+### Camera: exposure, white balance, lens and film (Enhanced)
+
+What a camera does to light on its way to the picture, in the **Camera** tab, much as in
+V-Ray's physical camera. Each changes after a render without rendering again.
+
+**Exposure** sets how bright the picture is, in one of two modes, picked in the section's
+header:
+
+- **Simple** (the default): one **Brightness**, in stops, as cameras count light: +1 doubles
+  it, −1 halves it, and 0 shows the light as rendered. Below it, the panel says what a camera
+  in program mode would pick for it, such as "ISO 200 and 1/30 s": from ISO 100 at 1/125 s,
+  more light takes a longer shutter down to 1/30 s, held in the hand, then a higher ISO up to
+  6400, then a longer shutter on a tripod; less light a shorter shutter up to 1/4000 s, then
+  ISO down to 50.
+- **Physical**: the **ISO** and the **Shutter speed**, typed as the N of 1/N s. Twice the ISO
+  or twice the time is twice the light; ISO 100 at 1/125 s shows it as rendered.
+
+Switching modes keeps the light. The aperture's f-number is not part of exposure, as it is in
+a real camera: the depth of field's aperture is a diameter in scene units, and the camera has
+no focal length to make an f-number of. The shutter only sets the light until there is
+motion blur. Scenes saved with the earlier Exposure multiplier open with the same light, as a
+brightness.
+
+| Setting | Where | Command line | What it does |
+| --- | --- | --- | --- |
+| Exposure | Camera > Exposure | `--iso N`, `--shutter T` (such as `1/60`), `--exposure N` | The light's multiplier: ISO / 100 × time × 125, times `--exposure` (default 1). |
+| White balance | Camera > Exposure | `--white-balance K` | The color temperature that comes out white, 1500 to 15000 K. 6500 K, daylight and the white of an sRGB screen, changes nothing. Lower values suit warmer light (about 3200 K for lamps, 2000 K for candles) and turn the picture bluer; higher ones warm it. Grey keeps its brightness. |
+| Tint | Camera > Exposure | `--tint N` | White balance's other axis, −1 to 1: toward magenta to take out the green of fluorescent tubes, or toward green. |
+| Vignette | Camera > Lens | `--vignette N` | Darkens the corners, 0 to 1. Light falls off as the fourth power of the cosine of its angle off the lens axis (natural vignetting); at 1 the corners are at 60 degrees and get a sixteenth of the light. |
+| Chromatic aberration | Camera > Lens | `--chromatic-aberration N` | Red and blue fringes toward the corners, 0 to 1, as a simple lens bends red light less than blue: the red image is a little larger and the blue smaller, up to 1.2% of the distance from the center at 1. |
+| Grain | Camera > Film | `--grain N` | Film grain, 0 to 1: a fixed pattern of fine grey specks, strongest in the mid-tones. It grows with the square root of the ISO, so ISO 400 doubles it; the same picture always gets the same grain. |
+| Halation | Camera > Film | `--halation N` | The reddish glow cinema film shows around very bright light, 0 to 1, which goes through the film, reflects off its base and lights the red layer again. |
+
+Exposure, white balance, tint and vignetting act on the light before the curve, so they show
+while the image builds up, the denoiser and bloom see them, and an EXR file holds them.
+Halation, chromatic aberration and grain work on the finished picture, in that order, after
+the denoiser and bloom, so on the CPU they show when the render finishes; they are left out
+of an EXR, whose passes then line up with the light. The environment preview in **Light >
+Environment** shows the exposure, white balance and tint too.
+
 ### Volumes: fog, smoke and light shafts (Enhanced)
 
 Light scatters in fog, smoke and haze, so beams through a window or between trees show as
@@ -1039,7 +1080,8 @@ ones are read as sRGB and turned into linear light up to 1, so they light dimly 
 sharp shadows, and suit backgrounds more than lighting.
 Intensity changes its brightness; Rotation turns an image around the vertical axis.
 Below the menu, the whole environment shows as a panorama, as seen from inside: brightened
-and tone-mapped as renders show it, with the current Exposure and Tone mapping, and turned
+and tone-mapped as renders show it, with the camera's exposure and white balance and the
+Tone mapping, and turned
 by its rotation. A ring marks where the camera looks. Dragging the panorama sideways turns
 an image environment; a physical sky shows where the sun stands.
 **Background** affects camera misses only: turning it off keeps lighting,

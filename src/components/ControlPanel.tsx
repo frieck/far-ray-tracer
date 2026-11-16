@@ -23,9 +23,15 @@ import {
   withMode,
   DEFAULT_SKY,
   DEFAULT_SUN_TIME,
+  cameraOf,
+  exposureOf,
+  ISO_RANGE,
+  SHUTTER_RANGE,
+  shutterLabel,
+  withExposureMode,
 } from "../settings";
 import type {
-  Bounces, DofPreset, CausticPreset, CausticReport, Comparison, Device, Mode, Quality, Resolution, Settings, SkyConfig, SunTime, ToneMapping,
+  Bounces, DofPreset, CausticPreset, CausticReport, Comparison, Device, ExposureMode, Mode, Quality, Resolution, Settings, SkyConfig, SunTime, ToneMapping,
 } from "../types";
 import { MaterialEditor } from "./MaterialEditor";
 import { CausticStats } from "./CausticStats";
@@ -378,8 +384,8 @@ function LightTab({ props, update, enhanced }: TabContext) {
         )}>
         {environment ? (
           <>
-            <EnvironmentPreview environment={environment} exposure={settings.exposure} toneMapping={settings.toneMapping}
-              pose={settings.pose} onRotate={sky ? undefined : (rotation) => setEnvironment({ rotation })} />
+            <EnvironmentPreview environment={environment} exposure={exposureOf(settings)} toneMapping={settings.toneMapping}
+              whiteBalance={settings.whiteBalance} tint={settings.tint} pose={settings.pose} onRotate={sky ? undefined : (rotation) => setEnvironment({ rotation })} />
             {sky ? (
               <>
                 <ChoiceRow<"angles" | "time"> label="Sun from" keywords="sun sky" value={sky.time ? "time" : "angles"}
@@ -459,12 +465,21 @@ function LightTab({ props, update, enhanced }: TabContext) {
 function CameraTab({ props, update, enhanced }: TabContext) {
   const { settings } = props;
   const dof = dofValues(settings);
+  const camera = cameraOf(settings);
   return (
     <>
       <Section id="lens" title="Lens">
         <ScrubRow label="Zoom" value={settings.pose.zoom} min={0.25} max={4} hard={[0.01, 100]} step={0.01} disabled={!enhanced}
           format={(value) => `${value.toFixed(2)}×`} hint="Drag the image to orbit. Shift-drag to pan, scroll to move closer."
           onChange={(zoom) => update({ pose: { ...settings.pose, zoom } })} />
+        <ScrubRow label="Vignette" keywords="corners dark falloff" value={settings.vignette} min={0} max={1} step={0.01} strict
+          disabled={!enhanced} format={(value) => `${Math.round(value * 100)}%`}
+          hint="Darkens the corners as a lens does, with light falling off away from its axis."
+          onChange={(vignette) => update({ vignette })} />
+        <ScrubRow label="Chromatic aberration" keywords="fringe color lens" value={settings.chromaticAberration} min={0} max={1} step={0.01} strict
+          disabled={!enhanced} format={(value) => `${Math.round(value * 100)}%`}
+          hint="Red and blue fringes toward the corners, as a simple lens bends colors apart. Applied when the render finishes."
+          onChange={(chromaticAberration) => update({ chromaticAberration })} />
         <ButtonRow label="View">
           <button type="button" className="prop-mini" disabled={!enhanced || !props.canRender} onClick={props.onResetCamera}
             title="Back to the scene's camera">
@@ -477,6 +492,44 @@ function CameraTab({ props, update, enhanced }: TabContext) {
             {props.pickingFocus ? "Cancel" : "Focus"}
           </button>
         </ButtonRow>
+      </Section>
+      <Section id="exposure" title="Exposure"
+        extra={
+          <Choice<ExposureMode> small label="Exposure mode" value={settings.exposureMode} disabled={!enhanced}
+            onChange={(mode) => update(withExposureMode(settings, mode))}>
+            <option value="simple">Simple</option>
+            <option value="physical">Physical</option>
+          </Choice>
+        }>
+        {settings.exposureMode === "simple" ? (
+          <>
+            <ScrubRow label="Brightness" keywords="exposure ev stops" value={settings.brightness} min={-6} max={6} hard={[-20, 20]} step={0.1}
+              disabled={!enhanced} format={(value) => `${value > 0 ? "+" : ""}${value.toFixed(1)}`}
+              hint="In stops, as cameras count light: +1 doubles it, −1 halves it."
+              onChange={(brightness) => update({ brightness })} />
+            {enhanced && <Hint>Like a camera at ISO {Math.round(camera.iso)} and {shutterLabel(camera.shutter)}.</Hint>}
+          </>
+        ) : (
+          <>
+            <ScrubRow label="ISO" keywords="exposure sensitivity film speed" value={settings.iso} min={ISO_RANGE[0]} max={ISO_RANGE[1]}
+              hard={[1, 1e6]} step={1} log disabled={!enhanced} format={(value) => String(Math.round(value))}
+              hint="The film's or sensor's sensitivity: twice the ISO is twice the light, and more grain."
+              onChange={(iso) => update({ iso })} />
+            <ScrubRow label="Shutter speed" keywords="exposure time" value={1 / settings.shutter} min={1 / SHUTTER_RANGE[1]}
+              max={1 / SHUTTER_RANGE[0]} hard={[0.01, 1e5]} step={0.01} log disabled={!enhanced}
+              format={(value) => shutterLabel(1 / value)}
+              hint="Typed as the N of 1/N s: 60 is 1/60 s. A longer time lets in more light. ISO 100 at 1/125 s shows the light as rendered."
+              onChange={(speed) => update({ shutter: 1 / speed })} />
+          </>
+        )}
+        <ScrubRow label="White balance" keywords="temperature kelvin warm cool color" value={settings.whiteBalance}
+          min={2500} max={10000} hard={[1500, 15000]} step={50} disabled={!enhanced} format={(value) => `${Math.round(value)} K`}
+          hint="The color of light that comes out white: about 3200 K for lamps, 5500 K for the sun. 6500 K changes nothing; lower turns the picture bluer, higher warmer."
+          onChange={(whiteBalance) => update({ whiteBalance })} />
+        <ScrubRow label="Tint" keywords="white balance green magenta" value={settings.tint} min={-1} max={1} step={0.01} strict
+          disabled={!enhanced} format={(value) => `${value > 0 ? "+" : ""}${Math.round(value * 100)}`}
+          hint="White balance's other axis: toward magenta to take out the green of fluorescent tubes, or toward green."
+          onChange={(tint) => update({ tint })} />
       </Section>
       <Section id="dof" title="Depth of field"
         enabled={{ checked: settings.depthOfField, onChange: (depthOfField) => update({ depthOfField }), disabled: !enhanced }}
@@ -514,6 +567,16 @@ function CameraTab({ props, update, enhanced }: TabContext) {
           {![0, 5, 6, 8].includes(settings.blades) && <option value={settings.blades}>{settings.blades} blades</option>}
         </ChoiceRow>
       </Section>
+      <Section id="film" title="Film">
+        <ScrubRow label="Grain" keywords="noise film iso" value={settings.grain} min={0} max={1} step={0.01} strict
+          disabled={!enhanced} format={(value) => `${Math.round(value * 100)}%`}
+          hint="Fine specks, strongest in the mid-tones, as on film. A higher ISO makes them stronger."
+          onChange={(grain) => update({ grain })} />
+        <ScrubRow label="Halation" keywords="glow film red highlights" value={settings.halation} min={0} max={1} step={0.01} strict
+          disabled={!enhanced} format={(value) => `${Math.round(value * 100)}%`}
+          hint="A reddish glow around very bright light, as cinema film shows. Applied when the render finishes."
+          onChange={(halation) => update({ halation })} />
+      </Section>
     </>
   );
 }
@@ -523,8 +586,6 @@ function ImageTab({ props, update, enhanced }: TabContext) {
   return (
     <>
       <Section id="color" title="Color">
-        <ScrubRow label="Exposure" keywords="brightness" value={settings.exposure} min={0.5} max={2} hard={[0.01, 1000]} step={0.01}
-          disabled={!enhanced} onChange={(exposure) => update({ exposure })} />
         <ChoiceRow<ToneMapping> label="Tone mapping" keywords="agx aces film" value={settings.toneMapping} disabled={!enhanced}
           hint="Film curves hold bright light and turn it toward white, as a camera does."
           onChange={(toneMapping) => update({ toneMapping })}>
