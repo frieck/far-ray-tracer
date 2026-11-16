@@ -32,14 +32,17 @@ pub struct PreviewObject {
     /// World directions of the local X, Y and Z axes.
     pub axes: [[f32; 3]; 3],
     pub look: Look,
+    /// The scene file's object it belongs to, so the view can move it while it is dragged.
+    pub object: Option<usize>,
 }
 
-/// All the triangles of one material, three vertices each.
+/// All the triangles of one material in one object, three vertices each.
 #[derive(Serialize)]
 pub struct PreviewMesh {
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub look: Look,
+    pub object: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -48,6 +51,8 @@ pub struct PreviewLight {
     pub color: [f32; 3],
     /// Four corners for a rectangular panel, empty for a point or sphere.
     pub corners: Vec<[f32; 3]>,
+    /// Its index in `Scene::scene_lights`.
+    pub light: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -82,12 +87,14 @@ fn shape(shape: Shape) -> PreviewShape {
 /// Half the side of the square that stands for an infinite plane in the 3D view.
 const GROUND_HALF_SIZE: f32 = 1000.0;
 
-/// Adds triangles to the mesh of `material`, creating it the first time.
-fn mesh_of<'a>(scene: &Scene, meshes: &'a mut Vec<(usize, PreviewMesh)>, material: usize) -> &'a mut PreviewMesh {
-    let at = match meshes.iter().position(|(m, _)| *m == material) {
+/// Adds triangles to the mesh of `material` in `object`, creating it the first time.
+fn mesh_of<'a>(scene: &Scene, meshes: &'a mut Vec<((usize, Option<usize>), PreviewMesh)>, material: usize, object: Option<usize>)
+    -> &'a mut PreviewMesh {
+    let key = (material, object);
+    let at = match meshes.iter().position(|(k, _)| *k == key) {
         Some(at) => at,
         None => {
-            meshes.push((material, PreviewMesh { positions: Vec::new(), normals: Vec::new(), look: look(scene, material) }));
+            meshes.push((key, PreviewMesh { positions: Vec::new(), normals: Vec::new(), look: look(scene, material), object }));
             meshes.len() - 1
         }
     };
@@ -97,20 +104,23 @@ fn mesh_of<'a>(scene: &Scene, meshes: &'a mut Vec<(usize, PreviewMesh)>, materia
 pub fn describe(scene: &Scene) -> PreviewScene {
     const IDENTITY: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
     let mut objects = Vec::new();
-    let mut meshes: Vec<(usize, PreviewMesh)> = Vec::new();
+    let mut meshes: Vec<((usize, Option<usize>), PreviewMesh)> = Vec::new();
     for (index, prim) in scene.prims.iter().enumerate() {
+        let object = scene.object_of(index);
         match prim {
             Primitive::Sphere(s) => objects.push(PreviewObject {
                 shape: PreviewShape::Sphere { radius: s.radius },
                 center: s.center.array(),
                 axes: IDENTITY,
                 look: look(scene, s.material),
+                object,
             }),
             Primitive::Solid(s) => objects.push(PreviewObject {
                 shape: shape(s.shape),
                 center: s.center.array(),
                 axes: s.axes().map(Vec3::array),
                 look: look(scene, s.material),
+                object,
             }),
             Primitive::Ground(g) => {
                 // A large square centered below the objects stands for the infinite plane.
@@ -118,14 +128,14 @@ pub fn describe(scene: &Scene) -> PreviewScene {
                 let center = center - g.normal * (center - g.point).dot(g.normal);
                 let (u, v) = (g.u_axis * GROUND_HALF_SIZE, g.v_axis * GROUND_HALF_SIZE);
                 let [a, b, c, d] = [center - u - v, center - u + v, center + u + v, center + u - v];
-                let mesh = mesh_of(scene, &mut meshes, g.material);
+                let mesh = mesh_of(scene, &mut meshes, g.material, object);
                 for p in [a, b, c, a, c, d] {
                     mesh.positions.extend(p.array());
                     mesh.normals.extend(g.normal.array());
                 }
             }
             Primitive::Triangle(t) => {
-                let mesh = mesh_of(scene, &mut meshes, t.material);
+                let mesh = mesh_of(scene, &mut meshes, t.material, object);
                 for (corner, vertex) in t.vertices.iter().enumerate() {
                     mesh.positions.extend(scene.vertices[*vertex as usize].pos.array());
                     mesh.normals.extend(scene.corner_normals[index][corner].array());
@@ -133,20 +143,25 @@ pub fn describe(scene: &Scene) -> PreviewScene {
             }
         }
     }
-    let mut lights: Vec<PreviewLight> = scene.lights.iter().map(|light| PreviewLight {
+    // A light as the file lists it.
+    let named = |kinds: &[&str], index: usize| scene.scene_lights.iter().position(|l| kinds.contains(&l.kind) && l.index == index);
+    let mut lights: Vec<PreviewLight> = scene.lights.iter().enumerate().map(|(i, light)| PreviewLight {
         position: light.center.array(),
         color: scene.materials[light.material].color.array(),
         corners: Vec::new(),
+        light: named(&["point"], i),
     }).collect();
-    lights.extend(scene.rect_lights.iter().map(|light| PreviewLight {
+    lights.extend(scene.rect_lights.iter().enumerate().map(|(i, light)| PreviewLight {
         position: light.proxy.center.array(),
         color: scene.materials[light.proxy.material].color.array(),
         corners: [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].map(|(u, v)| light.point(u, v).array()).to_vec(),
+        light: named(&["rectangle"], i),
     }));
-    lights.extend(scene.bulbs.iter().map(|light| PreviewLight {
+    lights.extend(scene.bulbs.iter().enumerate().map(|(i, light)| PreviewLight {
         position: light.center.array(),
         color: scene.materials[light.material].color.array(),
         corners: Vec::new(),
+        light: named(&["sphere", "spot", "ies"], i),
     }));
     PreviewScene { objects, meshes: meshes.into_iter().map(|(_, mesh)| mesh).collect(), lights }
 }

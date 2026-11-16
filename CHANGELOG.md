@@ -81,6 +81,12 @@ are not used. The shader is compiled for what
   the Still life, so renders, the 3D view and the outline follow; **Save Scene** writes them
   into the file.
 
+- A move gizmo on the image for the selected object or light: arrows along X, Y and Z and a
+  ring to move across the view, with Shift for steps of a tenth. X, Y or Z locks a move to
+  that axis, and with nothing moving starts one along it, and G a free one, as Blender's
+  grab, placed with a click or Enter and called off with Esc. The quick 3D view follows the
+  move at once, and placing it writes the edit.
+
 - A more compact panel: Render, Render after each change, Open, Save and Export share one
   row, and the tab's title, which the rail already shows, no longer takes one.
 

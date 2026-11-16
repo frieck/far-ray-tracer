@@ -6,6 +6,8 @@ import { AboutDialog } from "./components/AboutDialog";
 import { ControlPanel } from "./components/ControlPanel";
 import { Outliner } from "./components/Outliner";
 import { LIGHT_ID, SelectionOverlay, type IdMap } from "./components/SelectionOverlay";
+import { MoveGizmo } from "./components/MoveGizmo";
+import { anchorOf, type Vec3 } from "./objectFields";
 import { MaterialStage } from "./components/MaterialStage";
 import { Viewport } from "./components/Viewport";
 import { Renderer, type RenderJob, type RenderView } from "./renderer";
@@ -348,6 +350,38 @@ export function App() {
   const showLive = liveReady && (movingCamera || awaitingImage);
   // 2008 and Fixed always render from the scene's own camera.
   const livePose = settings && scene && (activeMode(settings) === "enhanced" ? settings.pose : scenePose(scene));
+
+  // The move gizmo, at the selected object or light. While it is dragged only the 3D view moves
+  // the selection, at once; letting go writes the edit, and the engine reads the scene again.
+  const [dragOffset, setDragOffset] = useState<Vec3 | null>(null);
+  const selectedEntry = selection && scene
+    ? (selection.kind === "light" ? scene.light_list[selection.id] : scene.objects[selection.id]) : null;
+  const editsKey = selection?.kind === "light" ? "lightEdits" : "objectEdits";
+  const anchor = selection && selectedEntry && settings
+    ? anchorOf(selectedEntry.kind, selectedEntry.source, settings[editsKey][selection.id], selection.kind === "light") : null;
+  const pieceKey = selection ? `${selection.kind === "light" ? "l" : "o"}${selection.id}` : null;
+  const dragGizmo = (offset: Vec3 | null) => {
+    setDragOffset(offset);
+    setMovingCamera(offset !== null);
+    if (offset && settings) {
+      sceneView3d.current?.shift(pieceKey, offset);
+      sceneView3d.current?.draw(settings.pose, imageWidth / imageHeight);
+    }
+  };
+  const moveSelection = (point: Vec3) => {
+    if (!selection || !anchor) return;
+    const patch = anchor.moveTo(point);
+    // Until the 3D view reads the edited scene, it keeps the piece where it was dropped. As any
+    // edit, a move changes the light, and the photons with it.
+    publish({ caustics: null, hasPhotonMap: false });
+    setSettings((old) => {
+      if (!old) return old;
+      const all = old[editsKey];
+      return { ...old, [editsKey]: { ...all, [selection.id]: { ...all[selection.id], ...patch } } };
+    });
+  };
+  const gizmoPoint: Vec3 | null = anchor
+    ? (dragOffset ? anchor.point.map((v, k) => v + dragOffset[k]) as Vec3 : anchor.point) : null;
   useEffect(() => {
     if (showLive && livePose) sceneView3d.current?.draw(livePose, imageWidth / imageHeight);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -627,9 +661,21 @@ export function App() {
             const id = point && outline ? idAt(point.x, point.y) : null;
             setHover(id ? id : null);
           }}
-          overlay={outline && outlinable
-            ? <SelectionOverlay map={idMap} selected={selectedCode} hover={hover} xray={xray} onSize={onOverlaySize} />
-            : null}
+          overlay={outlinable ? (
+            <>
+              {outline && !dragOffset && (
+                <SelectionOverlay map={idMap} selected={selectedCode} hover={hover} xray={xray} onSize={onOverlaySize} />
+              )}
+              {gizmoPoint && settings && !pickingFocus && !drawingRegion && (
+                <MoveGizmo pose={settings.pose} aspect={imageWidth / imageHeight} point={gizmoPoint}
+                  onDrag={dragGizmo} onMove={moveSelection} onCancel={() => {
+                    // Back where it was, in the 3D view too.
+                    sceneView3d.current?.shift(null);
+                    if (settings) sceneView3d.current?.draw(settings.pose, imageWidth / imageHeight);
+                  }} />
+              )}
+            </>
+          ) : null}
           navigable={scene !== null && settings !== null && activeMode(settings) === "enhanced"
             && !activeComparison(settings) && !pickingFocus && !(showPhotonMap && view.hasPhotonMap) && !materialStage
             && !drawingRegion}

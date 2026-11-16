@@ -505,3 +505,12 @@ button { font: inherit; color: inherit; cursor: default; }
 /* Three numbers in a row, such as a position. */
 .prop-vector { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; }
 .prop-vector .prop-scrub-value { font-size: 11px; }
+
+/* The move gizmo: arrows along X, Y and Z and a ring for the view, over the image. */
+.move-gizmo { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.move-gizmo-axis { pointer-events: auto; cursor: grab; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6)); }
+.move-gizmo[data-dragging] .move-gizmo-axis { cursor: grabbing; }
+.move-gizmo[data-dragging] .move-gizmo-axis:not([data-active]) { opacity: 0.25; }
+.move-gizmo-hit { stroke: transparent; stroke-width: 16; fill: transparent; }
+.move-gizmo-guide { pointer-events: none; }
+.move-gizmo-hint { fill: #fff; font-size: 11px; font-weight: 500; paint-order: stroke; stroke: rgba(0, 0, 0, 0.7); stroke-width: 3px; pointer-events: none; }

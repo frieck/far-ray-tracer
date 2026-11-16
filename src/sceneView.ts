@@ -18,10 +18,14 @@ type Shape =
   | { type: "torus"; major_radius: number; minor_radius: number };
 
 export interface PreviewScene {
-  objects: { shape: Shape; center: number[]; axes: number[][]; look: Look }[];
-  meshes: { positions: number[]; normals: number[]; look: Look }[];
-  lights: { position: number[]; color: number[]; corners: number[][] }[];
+  /** `object` and `light` are indices in the scene file's objects and lights. */
+  objects: { shape: Shape; center: number[]; axes: number[][]; look: Look; object: number | null }[];
+  meshes: { positions: number[]; normals: number[]; look: Look; object: number | null }[];
+  lights: { position: number[]; color: number[]; corners: number[][]; light: number | null }[];
 }
+
+/** An object or light of the scene file, as the 3D view moves it: "o3" or "l1". */
+export type PieceKey = string;
 
 const IMAGE_DISTANCE = 5;
 const SEGMENTS = 48;
@@ -86,30 +90,61 @@ export class SceneView {
       }
     });
     this.content.clear();
+    this.pieces.clear();
+    this.shifted = null;
+    const keep = (key: PieceKey | null, item: THREE.Object3D) => {
+      this.content.add(item);
+      if (key === null) return;
+      item.matrixAutoUpdate = false;
+      item.updateMatrix();
+      const list = this.pieces.get(key) ?? [];
+      list.push({ item, base: item.matrix.clone() });
+      this.pieces.set(key, list);
+    };
 
-    for (const { shape, center, axes, look } of preview.objects) {
+    for (const { shape, center, axes, look, object } of preview.objects) {
       const mesh = new THREE.Mesh(geometry(shape), material(look));
       const [x, y, z] = axes.map(toThree);
-      mesh.matrixAutoUpdate = false;
       mesh.matrix.makeBasis(x, y, z).setPosition(toThree(center));
-      this.content.add(mesh);
+      mesh.matrix.decompose(mesh.position, mesh.quaternion, mesh.scale);
+      mesh.matrixAutoUpdate = false;
+      keep(object === null ? null : `o${object}`, mesh);
     }
-    for (const { positions, normals, look } of preview.meshes) {
+    for (const { positions, normals, look, object } of preview.meshes) {
       const shape = new THREE.BufferGeometry();
       const flip = (values: number[]) => Float32Array.from(values, (v, i) => (i % 3 === 2 ? -v : v));
       const [points, directions] = [flip(positions), flip(normals)];
       faceAlongNormals(points, directions);
       shape.setAttribute("position", new THREE.BufferAttribute(points, 3));
       shape.setAttribute("normal", new THREE.BufferAttribute(directions, 3));
-      this.content.add(new THREE.Mesh(shape, material(look)));
+      keep(object === null ? null : `o${object}`, new THREE.Mesh(shape, material(look)));
     }
-    for (const { position, color, corners } of preview.lights) {
+    for (const { position, color, corners, light: index } of preview.lights) {
       const tint = new THREE.Color(...color.map((v) => Math.min(v, 1)) as [number, number, number]);
       const light = new THREE.PointLight(tint, 2.5, 0, 0);
       light.position.copy(toThree(position));
-      this.content.add(light);
-      this.content.add(corners.length ? panel(corners, tint) : marker(toThree(position), tint));
+      const key = index === null ? null : `l${index}`;
+      keep(key, light);
+      keep(key, corners.length ? panel(corners, tint) : marker(toThree(position), tint));
     }
+  }
+
+  /** The pieces of each object and light, and where they were loaded. */
+  private pieces = new Map<PieceKey, { item: THREE.Object3D; base: THREE.Matrix4 }[]>();
+  private shifted: PieceKey | null = null;
+
+  /**
+   * Moves one object or light by `offset`, in the engine's coordinates, from where it was
+   * loaded, as a drag moves it before the engine reads the scene again; null puts all back.
+   */
+  shift(key: PieceKey | null, offset: [number, number, number] = [0, 0, 0]) {
+    for (const k of [this.shifted, key]) {
+      for (const { item, base } of (k !== null && this.pieces.get(k)) || []) item.matrix.copy(base);
+    }
+    this.shifted = key;
+    if (key === null) return;
+    const move = new THREE.Matrix4().makeTranslation(toThree(offset));
+    for (const { item, base } of this.pieces.get(key) ?? []) item.matrix.copy(move).multiply(base);
   }
 
   draw(pose: Pose, aspect: number) {

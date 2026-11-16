@@ -112,6 +112,25 @@ export function resizedEdge(edge: Vec3, size: number): Vec3 {
   return edge.map((v) => round((v / current) * size)) as Vec3;
 }
 
+/**
+ * Where an object or light is, for the move gizmo, and the fields that put it elsewhere:
+ * its center or position, or the middle of a plane's corners. Null for fog, which has none.
+ */
+export function anchorOf(kind: string, source: Record<string, unknown>, edits: Record<string, unknown> | undefined, light: boolean)
+  : { point: Vec3; moveTo: (point: Vec3) => Record<string, unknown> } | null {
+  const fields = fieldsFor(kind, source, light);
+  const first = fields[0];
+  if (!first) return null;
+  if (first.type === "corners") {
+    const points = (edits?.points ?? source.points) as Vec3[] | undefined;
+    if (!points) return null;
+    return { point: middle(points), moveTo: (point) => ({ points: movedCorners(points, point) }) };
+  }
+  if (first.type !== "vector") return null;
+  const point = valueOf(first, source, edits) as Vec3;
+  return { point, moveTo: (to) => ({ [first.key]: to.map(round) }) };
+}
+
 /** Rounds away float noise, so files stay readable. */
 function round(v: number): number {
   return Math.round(v * 1e5) / 1e5;

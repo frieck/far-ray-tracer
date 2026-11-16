@@ -140,7 +140,8 @@ Visual gain for the effort:
   with names, selection from the list or the image, its outline on the image, and hiding.
 - [x] **Editing objects and lights**: place, rotation and sizes, and a light's color,
   intensity, size and cone, in the Object tab, saved into the scene file.
-- [ ] **Outliner, next**: a move gizmo on the image; adding, duplicating and deleting objects;
+- [x] **Move gizmo**: arrows along X, Y and Z and a ring across the view, on the image.
+- [ ] **Outliner, next**: rotate and scale gizmos; adding, duplicating and deleting objects;
   a model's parts as children; renaming; undo. Medium.
 - [ ] **Instancing**: many copies of an object for almost no memory. Medium.
 - [ ] **Subdivision surfaces**: smooth meshes from coarse ones. High.

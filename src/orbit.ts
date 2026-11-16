@@ -26,6 +26,34 @@ export function viewHalfSize(aspect: number): [number, number] {
   return aspect >= 4 / 3 ? [3 * aspect, 3] : [4, 4 / aspect];
 }
 
+/**
+ * Where a world point shows on the image, from 0 to 1 across and down, as the engine's
+ * `View::project`; null behind the camera.
+ */
+export function project(pose: Pose, aspect: number, point: Vec): [number, number] | null {
+  const { right, up, forward } = cameraAxes(pose);
+  const [halfWidth, halfHeight] = viewHalfSize(aspect).map((h) => h / pose.zoom);
+  const relative = add(point, pose.position, -1);
+  const depth = dot(relative, forward);
+  if (depth <= 1e-6) return null;
+  const scale = IMAGE_DISTANCE / depth;
+  return [(dot(relative, right) * scale / halfWidth + 1) / 2, (1 - dot(relative, up) * scale / halfHeight) / 2];
+}
+
+/** The camera ray through a point of the image, from 0 to 1 across and down, as the engine's. */
+export function rayThrough(pose: Pose, aspect: number, x: number, y: number): { origin: Vec; direction: Vec } {
+  const { right, up, forward } = cameraAxes(pose);
+  const [halfWidth, halfHeight] = viewHalfSize(aspect).map((h) => h / pose.zoom);
+  const direction = add(add(add([0, 0, 0], forward, IMAGE_DISTANCE), right, (2 * x - 1) * halfWidth), up, (1 - 2 * y) * halfHeight);
+  return { origin: pose.position, direction: unit(direction) };
+}
+
+/** World units a screen pixel spans at `point`'s depth, on a stage `stageHeight` pixels tall. */
+export function unitsPerPixel(pose: Pose, aspect: number, point: Vec, stageHeight: number): number {
+  const depth = Math.max(1e-3, dot(add(point, pose.position, -1), cameraAxes(pose).forward));
+  return (2 * viewHalfSize(aspect)[1] / pose.zoom * depth) / (IMAGE_DISTANCE * stageHeight);
+}
+
 /** Moves the target along the view axis to the depth of `center`, without changing the image. */
 export function retarget(pose: Pose, center: Vec | null): Pose {
   if (!center) return pose;

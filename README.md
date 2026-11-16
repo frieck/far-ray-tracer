@@ -650,6 +650,18 @@ in the scene file:
 | Area light | Position, color, intensity, width, height |
 | Sphere light, spotlight, IES light | Position, radius, color, intensity; a spotlight's and an IES light's direction, a spotlight's cone and soft edge |
 
+**Moving on the image.** A selected object or light shows a move gizmo, as in Blender: drag
+the red, green or blue arrow to move it along X, Y or Z, or the white ring to move it across
+the view; hold Shift to move in steps of a tenth of a unit. While moving, **X**, **Y** or **Z**
+locks the move to that axis, shown as a line across the image, and the same key again frees
+it. With nothing moving, **X**, **Y** or **Z** starts a move along that axis, and **G** a free
+one, as Blender's grab: it follows the mouse without a button held, a click or Enter places it
+and Esc or a right click calls it off. Keys typed into a field are left alone. An arrow that
+points at the camera is hidden, as there is nothing to drag along. While it is dragged, the quick 3D view moves the
+object at once and renders wait; letting go writes the new place as an edit, and the scene is
+rendered again. A plane moves all four corners together; fog, which fills the scene, has no
+gizmo.
+
 Each field drags or takes a typed value; vectors have one per axis. **Reset** goes back to the
 file's values, and **Save Scene** writes the edits into the file. An edit replaces those
 fields of the entry and the engine reads the scene again, as it would the saved file: about
