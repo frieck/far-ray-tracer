@@ -138,7 +138,7 @@ Example scenes are in **File > Open Example**, in `assets/scenes`:
 | --- | --- | --- |
 | (top) | `assets/scenes` | Showcase, Cornell box, Christmas, Still life |
 | Materials | `materials` | Glass, Coatings, Subsurface, Maps, GGX materials, Bump maps, Displacement |
-| Techniques | `techniques` | Infinite ground, HDRI studio (also as EXR, PNG and JPEG), Sun and sky, Depth of field, Bokeh, Rectangular lights, Spotlights, Light shafts, Smoke, Models, Primitives |
+| Techniques | `techniques` | Infinite ground, HDRI studio (also as EXR, PNG and JPEG), Glowing surfaces, Sun and sky, Depth of field, Bokeh, Rectangular lights, Spotlights, Light shafts, Smoke, Models, Primitives |
 | From 2008 | `2008` | The final project's own scenes, including Rhino, Knot show and the thesis test scenes A and B |
 
 `2008/validation` and `debug` hold the simplest 2008 scenes, kept for the tests and the
@@ -727,6 +727,19 @@ coordinates like the color texture:
 `roughness_map` and `metallic_map` scale those values; `emission` makes the surface give off
 light, colored by its map; `alpha_map` cuts the surface away where the map is darker than half
 gray, and rays and shadows pass through the holes.
+
+**Mesh lights.** In Enhanced mode, triangles that glow (planes, meshes and models with
+`emission`) are lights: each shading point aims a shadow ray at one of them, drawn by the light
+it gives off (its mean radiance, map included, times its area), so even a small bright one,
+such as a candle flame, lights the scene with clean shadows. Before, a glowing surface lit
+others only when a bounced ray happened to meet it, which left small ones as scattered dots
+of light. A GGX reflection that meets one weighs it against that sampling (multiple
+importance sampling), as for panels. On a floor lit by a small glowing panel, the error at the
+same samples is about a tenth. The units are those of panels: a strength of 1 is as bright as
+a panel of intensity 1, from both sides. Glowing spheres and solids, and displaced triangles,
+still light the scene only through bounces, and glowing surfaces send no photons for caustics.
+Open **File → Open Example → Techniques → Glowing surfaces** for a scene lit only by three
+glowing strips.
 
 How it works: the clear coat is a second GGX lobe whose reflection takes light from the base,
 picked at random in proportion to its Fresnel reflectance; sheen is added to the diffuse lobe;

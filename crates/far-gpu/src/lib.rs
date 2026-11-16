@@ -45,7 +45,9 @@ struct Params {
     /// the environment's light.
     caustic_strength: f32, caustics_only: u32, photon_env: u32,
     /// The pixels to render, from (x0, y0) up to (x1, y1): the whole image or a region.
-    x0: u32, y0: u32, x1: u32, y1: u32, pad: u32,
+    x0: u32, y0: u32, x1: u32, y1: u32,
+    /// Glowing triangles sampled as lights, in `lights` after the `light_count` lamps.
+    mesh_lights: u32,
 }
 
 #[repr(C)]
@@ -129,6 +131,8 @@ struct Packed {
     texels: Vec<u32>,
     materials: Vec<Material>,
     lights: Vec<Light>,
+    /// How many of `lights`, at the end, are glowing triangles.
+    mesh_lights: u32,
     /// What the scene uses that this renderer leaves out.
     notes: Vec<String>,
 }
@@ -276,6 +280,19 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
             u: l.edge_u.array(), area: l.area, v: l.edge_v.array(), pad1: 0, normal: l.normal.array(), pad2: 0,
         });
     }
+    // Glowing triangles after the lamps, as trace.wgsl's from_mesh_light reads them: a corner in
+    // pos, the edges in u and v, the plane's normal and the area; the chance it is drawn in
+    // radius and the chances up to it in pad1, as float bits; its triangle in pad2. The triangle
+    // points back with one more than its index among them, in its pad[1].
+    let mesh = scene.mesh_lights();
+    for (k, l) in mesh.lights.iter().enumerate() {
+        let tri = slot[l.prim];
+        tris[tri as usize].pad[1] = k as u32 + 1;
+        lights.push(Light {
+            pos: l.p0.array(), kind: 3, color: l.radiance.array(), radius: l.chance,
+            u: l.e1.array(), area: l.area, v: l.e2.array(), pad1: l.cumulative.to_bits(), normal: l.normal.array(), pad2: tri,
+        });
+    }
 
     // Each volume as two entries after the shapes, never reached through the BVH: its shape
     // (kind 0 a box with its axes and half sizes, 1 a sphere), then its medium, as trace.wgsl's
@@ -335,7 +352,8 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
         lights[light].pad1 = texels.len() as u32;
         texels.extend(table.iter().map(|v| v.to_bits()));
     }
-    Packed { nodes, refs, tris, shapes, plane_count, volume_first, volume_count, texels, materials, lights, notes }
+    let mesh_lights = mesh.lights.len() as u32;
+    Packed { nodes, refs, tris, shapes, plane_count, volume_first, volume_count, texels, materials, lights, mesh_lights, notes }
 }
 
 /// What the scene uses that the GPU renderer leaves out, as `Rendered::notes` reports it.
@@ -424,7 +442,7 @@ impl Features {
             uses(&|m| m.roughness_map != NO_TEXTURE || m.metallic_map != NO_TEXTURE || m.emission_map != NO_TEXTURE),
             uses(&|m| m.alpha_map != NO_TEXTURE),
             uses(&|m| m.kind == 1 && (m.clearcoat > 0.0 || m.sheen > 0.0 || m.anisotropy != 0.0)),
-            packed.lights.iter().any(|l| l.pad2 & 2 != 0),
+            packed.lights.iter().any(|l| l.kind == 1 && l.pad2 & 2 != 0),
             uses(&|m| m.kind == 2 && m.abbe > 0.0),
             uses(&|m| m.displacement != NO_TEXTURE),
             uses(&|m| m.subsurface > 0.0),
@@ -551,7 +569,7 @@ impl Gpu {
             dx: (view.right * (2.0 * view.half_width / w as f32)).array(), pass_index: 0,
             dy: (view.up * (-2.0 * view.half_height / h as f32)).array(),
             max_bounces: if op.indirect && !caustics_only { bounces.max } else { 0 },
-            plane_count: packed.plane_count, light_count: packed.lights.len() as u32,
+            plane_count: packed.plane_count, light_count: packed.lights.len() as u32 - packed.mesh_lights,
             has_env: environment.is_some() as u32,
             env_visible: environment.is_some_and(|e| e.config.visible) as u32,
             // The CPU's compensation for 2008 lights, which add up with no falloff.
@@ -577,7 +595,7 @@ impl Gpu {
             photon_buckets: 0, bucket_first: 0, photon_first: 0, photon_radius: op.caustic_radius.max(1e-3),
             caustic_strength: op.caustic_strength, caustics_only: caustics_only as u32,
             photon_env: photons.is_some_and(|map| map.carries_environment()) as u32,
-            x0: area.x0, y0: area.y0, x1: area.x1, y1: area.y1, pad: 0,
+            x0: area.x0, y0: area.y0, x1: area.x1, y1: area.y1, mesh_lights: packed.mesh_lights,
         };
 
         // The environment's sampling tables go after the texels, as float bits.
@@ -795,6 +813,45 @@ mod tests {
             assert!(cpu > 0.02, "{name}: the CPU image is black");
             assert!((gpu - cpu).abs() < 0.05 * cpu + 0.005, "{name}: CPU {cpu} against GPU {gpu}");
         }
+    }
+
+    #[test]
+    fn glowing_triangles_light_the_scene_on_the_gpu_as_on_the_cpu() {
+        // A floor, a glossy metal ball and a small glowing panel made of two triangles.
+        let text = br#"{"lights": [], "objects": [
+            {"type": "plane", "points": [[-20, -2, -6], [20, -2, -6], [20, -2, 30], [-20, -2, 30]],
+             "material": {"color": [0.8, 0.8, 0.8], "specular": 0}},
+            {"type": "sphere", "center": [1.6, -1, 8], "radius": 1,
+             "material": {"color": [0.9, 0.9, 0.9], "surface": {"preset": "metal", "roughness": 0.3}}},
+            {"type": "plane", "points": [[-0.6, 1, 7.4], [0.6, 1, 7.4], [0.6, 1, 8.6], [-0.6, 1, 8.6]],
+             "material": {"color": [0, 0, 0], "emission": {"color": [1, 0.8, 0.6], "strength": 2}}}]}"#;
+        let path = std::env::temp_dir().join(format!("far-gpu-mesh-light-{}.far", std::process::id()));
+        std::fs::write(&path, text).unwrap();
+        let (sampled, found) = (Scene::open(&path).unwrap(), Scene::open(&path).unwrap());
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(sampled.mesh_lights().lights.len(), 2);
+        // As before mesh lights: only rebounds that meet the panel find its light.
+        found.mesh_lights.set(std::sync::Arc::new(far_core::mesh_light::MeshLights::default())).unwrap();
+        let light = |scene: &Scene, samples: u32| {
+            let op = Options { mode: Mode::Enhanced, width: 96, height: 72, samples, ..Options::default() };
+            render(scene, &Bvh::build(scene), &op, &|| false).map(|r| r.sums.mean())
+        };
+        let gpu = match light(&sampled, 128) {
+            Ok(mean) => mean,
+            Err(e) if e.contains("no graphics card") => return eprintln!("skipped: {e}"),
+            Err(e) => panic!("{e}"),
+        };
+        let op = Options { mode: Mode::Enhanced, width: 96, height: 72, samples: 128, ..Options::default() };
+        let cpu = far_core::enhanced::render_continuing(&sampled, Some(&KdTree::build_corrected(&sampled)), &op,
+            &Image::new(96, 72), &Progress::default(), None).unwrap().layers(&op).light;
+        let total = |l: &[[f32; 3]]| l.iter().map(|c| (c[0] + c[1] + c[2]) as f64).sum::<f64>();
+        assert!((total(&gpu) / total(&cpu) - 1.0).abs() < 0.03, "GPU {} against CPU {}", total(&gpu), total(&cpu));
+        // Far less noise than finding the panel by chance, at the same samples.
+        let reference = light(&sampled, 1024).unwrap();
+        let error = |l: &[[f32; 3]]| l.iter().zip(&reference)
+            .map(|(c, r)| (0..3).map(|k| ((c[k] - r[k]) as f64).powi(2)).sum::<f64>()).sum::<f64>();
+        let (sampled_error, found_error) = (error(&gpu), error(&light(&found, 128).unwrap()));
+        assert!(sampled_error * 4.0 < found_error, "{sampled_error} against {found_error}");
     }
 
     #[test]

@@ -325,6 +325,8 @@ pub struct Scene {
     pub extends: Aabb,
     /// Problems that do not stop the render, such as a missing texture.
     pub warnings: Vec<String>,
+    /// The triangles that glow, sampled as lights in Enhanced mode: found on first use.
+    pub mesh_lights: std::sync::OnceLock<std::sync::Arc<crate::mesh_light::MeshLights>>,
 }
 
 pub(crate) struct MaterialData {
@@ -440,6 +442,7 @@ impl Scene {
             corner_normals: Vec::new(),
             displaced: Vec::new(),
             displaced_sources: Vec::new(),
+            mesh_lights: Default::default(),
             cutouts: false,
             volumes: Vec::new(),
             materials: Vec::new(),
@@ -744,6 +747,11 @@ impl Scene {
     /// Texture coordinates at a point of a primitive, as its Enhanced color lookup reads them,
     /// scale included. The point may lie slightly off the surface. The primitive need not be in
     /// `prims`: displaced shapes keep their original here.
+    /// The triangles that glow, sampled as lights in Enhanced mode.
+    pub fn mesh_lights(&self) -> &crate::mesh_light::MeshLights {
+        self.mesh_lights.get_or_init(|| std::sync::Arc::new(crate::mesh_light::MeshLights::build(self)))
+    }
+
     pub fn texture_uv_on(&self, p: &Primitive, pos: Vec3) -> Option<(f32, f32)> {
         let m = &self.materials[p.material()];
         Some(match p {

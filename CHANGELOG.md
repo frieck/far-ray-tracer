@@ -35,6 +35,12 @@ are not used. The shader is compiled for what
   into linear light, in the app (**Light > Environment > Image**) and in scene files. The
   HDRI studio example comes in EXR, PNG and JPEG versions too.
 
+- Mesh lights: in Enhanced rendering, on the CPU and the GPU, triangles that glow are sampled
+  as lights, with multiple importance sampling against GGX reflections, so small bright ones,
+  such as the Still life's candle flame, light the scene with clean shadows instead of
+  scattered dots. About a tenth of the error at the same samples on a floor lit by a small
+  glowing panel. New example: Techniques > Glowing surfaces.
+
 - A camera much like V-Ray's physical camera, in the **Camera** tab and on the command line,
   for Enhanced rendering: exposure by ISO and shutter speed (`--iso`, `--shutter`), or one
   Brightness in stops that says which ISO and shutter a camera would pick; white balance and

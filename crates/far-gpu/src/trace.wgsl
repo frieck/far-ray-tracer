@@ -39,7 +39,9 @@ struct Params {
     // the environment's light.
     caustic_strength: f32, caustics_only: u32, photon_env: u32,
     // The pixels to render, from (x0, y0) up to (x1, y1): the whole image or a region.
-    x0: u32, y0: u32, x1: u32, y1: u32, pad: u32,
+    x0: u32, y0: u32, x1: u32, y1: u32,
+    // Glowing triangles sampled as lights, in `lights` after the `light_count` lamps.
+    mesh_lights: u32,
 }
 
 struct Node { low: vec3<f32>, first: u32, high: vec3<f32>, count: u32 }
@@ -53,7 +55,9 @@ struct Tri {
     n2: vec3<f32>, u2: f32,
     // For a displaced triangle, one more than the index of its record in `tris`: the shape
     // under it, as lib.rs packs it. 0 for others.
-    v2: f32, displaced: u32, pad2: u32, pad3: u32,
+    v2: f32, displaced: u32,
+    // For a glowing triangle, one more than its index among the mesh lights; 0 for others.
+    mesh_light: u32, pad3: u32,
 }
 // A sphere (kind 0), or a solid with its own axes, its own Y the axis of revolution: a box (1,
 // with `half`), a cylinder (2), a tube (3, inner radius in half.x), a cone (4, apex at +Y) or a
@@ -726,6 +730,7 @@ fn direct(pos: vec3<f32>, m: Material, albedo: vec3<f32>, spec: f32, n: vec3<f32
         }
         diffuse_only = photons_carry;
     }
+    if (params.mesh_lights > 0u) { sum += from_mesh_light(pos, m, albedo, spec, n, ng, wo, reflect_chance); }
     if (emitters <= 4u) {
         for (var i = 0u; i < params.light_count; i++) {
             if (lights[i].kind != 0u) { sum += from_light(i, 1.0, pos, m, albedo, spec, n, ng, wo, reflect_chance); }
@@ -748,6 +753,55 @@ fn direct(pos: vec3<f32>, m: Material, albedo: vec3<f32>, spec: f32, n: vec3<f32
     }
     if (picked < params.light_count) { sum += from_light(picked, chance, pos, m, albedo, spec, n, ng, wo, reflect_chance); }
     return sum;
+}
+
+// Mesh lights, as far-core's mesh_light.rs: glowing triangles after the lamps in `lights`, as
+// lib.rs packs them (a corner in pos, the edges in u and v, the plane's normal and area; the
+// chance it is drawn in radius, the chances up to it in pad1 as float bits, its triangle in pad2).
+
+// The density, over directions from a point `distance` away, of drawing mesh light `k` and a
+// point on it seen at `cosine` to its plane.
+fn mesh_light_pdf(k: u32, distance: f32, cosine: f32) -> f32 {
+    let light = lights[params.light_count + k];
+    let c = abs(cosine);
+    if (c <= 0.0) { return 0.0; }
+    return light.radius * distance * distance / (light.area * c);
+}
+
+// One glowing triangle, drawn by the light it gives off, at one point, as the surface sends its
+// light along `wo`: the CPU's mesh_light.
+fn from_mesh_light(pos: vec3<f32>, m: Material, albedo: vec3<f32>, spec: f32, n: vec3<f32>, ng: vec3<f32>,
+    wo: vec3<f32>, reflect_chance: f32) -> vec3<f32> {
+    let pick = rand();
+    let s = rand2();
+    var low = 0u;
+    var high = params.mesh_lights - 1u;
+    while (low < high) {
+        let middle = (low + high) / 2u;
+        if (bitcast<f32>(lights[params.light_count + middle].pad1) <= pick) { low = middle + 1u; } else { high = middle; }
+    }
+    let light = lights[params.light_count + low];
+    let root = sqrt(s.x);
+    let target_point = light.pos + light.u * ((1.0 - s.y) * root) + light.v * (s.y * root);
+    let delta = target_point - pos;
+    let distance = length(delta);
+    if (distance <= OFFSET) { return vec3<f32>(0.0); }
+    let l = delta / distance;
+    let light_pdf = mesh_light_pdf(low, distance, dot(light.normal, l));
+    if (light_pdf <= 0.0) { return vec3<f32>(0.0); }
+    let f = respond(m, albedo, spec, n, ng, wo, l, light_pdf, reflect_chance);
+    if (all(f <= vec3<f32>(0.0))) { return vec3<f32>(0.0); }
+    let glowing = materials[tris[light.pad2].material];
+    var emitted = glowing.emission;
+    if (HAS_MAPS && glowing.emission_map != NO_TEXTURE) {
+        emitted *= texture_color(glowing.emission_map, uv_on(light.pad2, target_point, glowing));
+    }
+    // Stops short of the triangle, which would otherwise shade its own light.
+    let start = pos + ng * OFFSET;
+    let to = target_point - start;
+    let reach = length(to);
+    let passed = visibility(start, to / reach, reach * 0.999);
+    return f * emitted * passed / light_pdf;
 }
 
 // Roughly how much light panel or bulb `i` sends to `pos`, as the CPU's emitter_weight; 0 for a
@@ -1963,7 +2017,18 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
             first_depth = hit.t;
         }
         let wo = -d;
-        if (params.caustics_only == 0u) { light += capped(through * m.emission, rebound); }
+        // A mesh light's glow after a diffuse rebound was sampled as light already; after a GGX
+        // reflection it is weighed against that sampling, as on the CPU.
+        var glow = m.emission;
+        if (params.mesh_lights > 0u && (hit.prim & 0x80000000u) == 0u && tris[hit.prim].mesh_light != 0u) {
+            let k = tris[hit.prim].mesh_light - 1u;
+            if (!sees_lights) {
+                glow = vec3<f32>(0.0);
+            } else if (HAS_GGX && mis_pdf > 0.0) {
+                glow *= power_weight(mis_pdf, mesh_light_pdf(k, hit.t, dot(d, lights[params.light_count + k].normal)));
+            }
+        }
+        if (params.caustics_only == 0u) { light += capped(through * glow, rebound); }
         // The caustic light where the camera sees a diffuse surface, directly or through mirrors
         // and glass, as the CPU gathers it.
         if (caustics && diffuse_bounces == 0u && front) {

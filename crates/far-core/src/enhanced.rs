@@ -410,6 +410,9 @@ struct Tracer<'a> {
     /// How many numbers this camera sample has drawn from its sequences.
     dimension: u32,
     limits: Limits,
+    /// The density a GGX reflection ray was drawn with, for MIS when it meets a mesh light;
+    /// taken by the next surface the ray meets.
+    emission_mis: Option<f32>,
 }
 
 /// Separate limits for mirror-like reflections and for crossings of glass, within the ray
@@ -801,6 +804,9 @@ impl<'a> Tracer<'a> {
             self.shade_area_light(&mut acc, a, d, l, dot, radiance, light_pdf, photons_carry);
         }
         if !self.fixed {
+            self.mesh_light(&mut acc, a, d, photons_carry);
+        }
+        if !self.fixed {
             if let Some(environment) = scene.environment.as_ref().filter(|e| e.active()) {
                 let (u, v) = self.pair();
                 let (l, radiance, pdf) = environment.sample(u, v);
@@ -822,6 +828,40 @@ impl<'a> Tracer<'a> {
             }
         }
         acc
+    }
+
+    /// Adds the light of one glowing triangle, drawn by the light it gives off, at one point.
+    fn mesh_light(&mut self, acc: &mut Color, a: &Hit, d: Vec3, photons_carry: bool) {
+        let scene = self.ctx.scene;
+        let lights = scene.mesh_lights();
+        if lights.is_empty() {
+            return;
+        }
+        let pick = self.random();
+        let (u, v) = self.pair();
+        let Some(light) = lights.pick(pick) else { return };
+        let target = light.point(u, v);
+        let delta = target - a.pos;
+        let distance = delta.length();
+        if distance <= SURFACE_OFFSET {
+            return;
+        }
+        let l = delta * (1.0 / distance);
+        let dot = l.dot(a.original);
+        let light_pdf = light.pdf(distance, light.normal.dot(l));
+        if dot <= 0.0 || light_pdf <= 0.0 {
+            return;
+        }
+        let start = a.pos + a.geo * SURFACE_OFFSET;
+        let shadow = target - start;
+        let length = shadow.length();
+        // Stops short of the triangle, which would otherwise shade its own light.
+        let transmitted = self.visibility(start, shadow * (1.0 / length), length * (1.0 - 1e-4) - SURFACE_OFFSET);
+        if transmitted.x <= 0.0 && transmitted.y <= 0.0 && transmitted.z <= 0.0 {
+            return;
+        }
+        let radiance = crate::mesh_light::emission_at(scene, light.prim, target) * transmitted * (1.0 / (PI * light_pdf));
+        self.shade_area_light(acc, a, d, l, dot, radiance, Some(light_pdf), photons_carry);
     }
 
     /// Adds the response of the surface to light arriving from an emitter sample.
@@ -890,7 +930,10 @@ impl<'a> Tracer<'a> {
                 let Some((dir, weight)) = ggx.sample(a.smooth, -d, u, v, self.random(), a.color, a.m.ior) else { return Color::default(); };
                 if dir.dot(a.geo) <= 0.0 { return Color::default(); }
                 let ray = Ray { o: a.pos + a.geo * SURFACE_OFFSET, d: dir };
+                // A mesh light it meets weighs its glow against light sampling there.
+                self.emission_mis = Some(chance * ggx.pdf(a.smooth, -d, dir, a.color, a.m.ior));
                 let (color, distance) = self.trace(&ray, depth + 1, bounces, true);
+                self.emission_mis = None;
                 let mut mis = 1.0;
                 if distance == MAX_DISTANCE {
                     if let Some(environment) = self.ctx.scene.environment.as_ref().filter(|e| e.active()) {
@@ -1220,7 +1263,10 @@ impl<'a> Tracer<'a> {
     /// the light gets through.
     fn trace(&mut self, r: &Ray, depth: i32, bounces: u32, allow_emission: bool) -> (Color, f32) {
         let scene = self.ctx.scene;
+        // For the surface this ray meets, not for rays scattered by fog on the way.
+        let emission_mis = self.emission_mis.take();
         if self.fixed || self.caustics_only || scene.volumes.is_empty() {
+            self.emission_mis = emission_mis;
             return self.trace_surface(r, depth, bounces, allow_emission, None);
         }
         let hit = self.nearest(r, MAX_DISTANCE);
@@ -1233,6 +1279,7 @@ impl<'a> Tracer<'a> {
         }
         let depth_to_surface = volume::optical_depth(&scene.volumes, r.o, r.d, closest);
         if depth_to_surface <= 0.0 {
+            self.emission_mis = emission_mis;
             return self.trace_surface(r, depth, bounces, allow_emission, Some(hit));
         }
         let through = (-depth_to_surface).exp();
@@ -1244,13 +1291,17 @@ impl<'a> Tracer<'a> {
             if let Some((t, v)) = volume::distance_at_depth(&scene.volumes, r.o, r.d, closest, target, pick) {
                 acc += self.in_scattered(r.o + r.d * t, r.d, v, depth, bounces) * (1.0 - through);
             }
+            self.emission_mis = emission_mis;
             let (surface, dist) = self.trace_surface(r, depth, bounces, allow_emission, Some(hit));
             return (acc + surface * through, dist);
         }
         let target = -(1.0 - u).max(1e-30).ln();
         match volume::distance_at_depth(&scene.volumes, r.o, r.d, closest, target, pick) {
             Some((t, v)) => (self.in_scattered(r.o + r.d * t, r.d, v, depth, bounces), t),
-            None => self.trace_surface(r, depth, bounces, allow_emission, Some(hit)),
+            None => {
+                self.emission_mis = emission_mis;
+                self.trace_surface(r, depth, bounces, allow_emission, Some(hit))
+            }
         }
     }
 
@@ -1308,6 +1359,23 @@ impl<'a> Tracer<'a> {
             let transmitted = self.visibility(pos, l, distance);
             acc += scene.materials[light.material].color * transmitted * (weight * volume::phase(l.dot(d), g));
         }
+        let lights = scene.mesh_lights();
+        if !lights.is_empty() {
+            let pick = self.random();
+            let (u, v) = self.pair();
+            if let Some(light) = lights.pick(pick) {
+                let target = light.point(u, v);
+                let delta = target - pos;
+                let distance = delta.length();
+                let l = delta * (1.0 / distance.max(1e-12));
+                let pdf = light.pdf(distance, light.normal.dot(l));
+                if distance > 0.0 && pdf > 0.0 {
+                    let transmitted = self.visibility(pos, l, distance * (1.0 - 1e-4));
+                    acc += crate::mesh_light::emission_at(scene, light.prim, target) * transmitted
+                        * (volume::phase(l.dot(d), g) / pdf);
+                }
+            }
+        }
         if let Some(environment) = scene.environment.as_ref().filter(|e| e.active()) {
             let (u, v) = self.pair();
             let (l, radiance, pdf) = environment.sample(u, v);
@@ -1336,6 +1404,7 @@ impl<'a> Tracer<'a> {
 
     fn trace_surface(&mut self, r: &Ray, depth: i32, bounces: u32, allow_emission: bool,
         found: Option<Option<(usize, f32, i32)>>) -> (Color, f32) {
+        let emission_mis = self.emission_mis.take();
         let hit = match found {
             Some(hit) => hit,
             None => self.nearest(r, MAX_DISTANCE),
@@ -1387,7 +1456,18 @@ impl<'a> Tracer<'a> {
             }
             return (color, MAX_DISTANCE);
         };
-        let a = self.hit_at(r, prim, dist, result);
+        let mut a = self.hit_at(r, prim, dist, result);
+        // A mesh light's glow after a diffuse rebound was sampled as light already; after a GGX
+        // reflection it is weighed against that sampling.
+        if !self.fixed {
+            if let Some(light) = self.ctx.scene.mesh_lights().of(prim) {
+                if !allow_emission {
+                    a.emission = Color::default();
+                } else if let Some(pdf) = emission_mis {
+                    a.emission *= crate::ggx::power_weight(pdf, light.pdf(dist, r.d.dot(light.normal)));
+                }
+            }
+        }
         self.first_hit = depth == 1 && bounces == 0;
         if self.first_hit {
             self.primary = Primary { albedo: a.color.array(), normal: a.smooth.array(), depth: dist };
@@ -1616,6 +1696,7 @@ fn build_photon_map(scene: &Scene, kd: Option<&KdTree>, op: &Options, progress: 
             sequence: None,
             dimension: 0,
             limits: Limits::new(op.glossy_depth, op.transmission_depth),
+            emission_mis: None,
         };
         loop {
             let batch = next_batch.fetch_add(1, Relaxed) as u32;
@@ -2307,6 +2388,7 @@ pub fn render_continuing(scene: &Scene, kd: Option<&KdTree>, op: &Options, image
                 sequence: None,
                 dimension: 0,
                 limits: Limits::new(op.glossy_depth, op.transmission_depth),
+                emission_mis: None,
             };
             loop {
                 if progress.cancel.load(Relaxed) {
@@ -2615,6 +2697,41 @@ mod tests {
     }
 
     #[test]
+    fn mesh_lights_give_the_light_bounces_found_with_far_less_noise() {
+        // A floor, a glossy metal ball and a small glowing panel above them, made of triangles,
+        // dim enough that no sample reaches the caps on rebounds and samples, which would darken
+        // the light rebounds find.
+        let text = r#"{"lights": [], "objects": [
+            {"type": "plane", "points": [[-20, -2, -6], [20, -2, -6], [20, -2, 30], [-20, -2, 30]],
+             "material": {"color": [0.8, 0.8, 0.8], "specular": 0}},
+            {"type": "sphere", "center": [1.6, -1, 8], "radius": 1,
+             "material": {"color": [0.9, 0.9, 0.9], "surface": {"preset": "metal", "roughness": 0.3}}},
+            {"type": "plane", "points": [[-0.6, 1, 7.4], [0.6, 1, 7.4], [0.6, 1, 8.6], [-0.6, 1, 8.6]],
+             "material": {"color": [0, 0, 0], "emission": {"color": [1, 0.8, 0.6], "strength": 2}}}]}"#;
+        let sampled = test_scene(text);
+        assert_eq!(sampled.mesh_lights().lights.len(), 2);
+        let chances: f32 = sampled.mesh_lights().lights.iter().map(|l| l.chance).sum();
+        assert!((chances - 1.0).abs() < 1e-5);
+        // As before mesh lights: only rebounds that meet the panel find its light.
+        let found = test_scene(text);
+        found.mesh_lights.set(std::sync::Arc::new(crate::mesh_light::MeshLights::default())).unwrap();
+        let light = |scene: &Scene, samples: u32| {
+            let op = Options { samples, ..small(samples) };
+            rendered(scene, &op, None).1.unwrap().layers(&op).light
+        };
+        let (with, without) = (light(&sampled, 64), light(&found, 1024));
+        let total = |l: &[[f32; 3]]| l.iter().map(|c| (c[0] + c[1] + c[2]) as f64).sum::<f64>();
+        let (a, b) = (total(&with), total(&without));
+        assert!((a / b - 1.0).abs() < 0.04, "the same light: {a} against {b}");
+        // Noise: the error against many samples, at the same number of samples each way.
+        let reference = light(&sampled, 1024);
+        let error = |l: &[[f32; 3]]| l.iter().zip(&reference)
+            .map(|(c, r)| (0..3).map(|k| ((c[k] - r[k]) as f64).powi(2)).sum::<f64>()).sum::<f64>();
+        let (sampled_error, found_error) = (error(&with), error(&light(&found, 64)));
+        assert!(sampled_error * 4.0 < found_error, "{sampled_error} against {found_error}");
+    }
+
+    #[test]
     fn many_lights_are_picked_by_the_light_they_bring() {
         let christmas = Scene::open(std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/scenes/christmas.far"))).unwrap();
         assert!(emitter_count(&christmas) > ALL_LIGHTS_UP_TO);
@@ -2706,6 +2823,7 @@ mod tests {
             has_glass: false, indirect: false, bounces: Bounces::for_scene(scene), caustics: None, caustic_strength: 1.0,
             caustics_only: false, photon_lookups: 0, photons_gathered: 0,
             stratum: (0.0, 0.0), grid: 1.0, first_hit: false, primary: Primary::default(), wavelength: None, sequence: None, dimension: 0, limits: Limits::new(None, None),
+            emission_mis: None,
         };
         tracer.trace(&Ray { o: Vec3::new(0.0, 0.0, -5.0), d: Vec3::new(0.0, 0.0, 1.0) }, 1, 0, allow_emission).0
     }
@@ -2716,6 +2834,7 @@ mod tests {
             has_glass: false, indirect: false, bounces: Bounces::for_scene(scene), caustics: None, caustic_strength: 1.,
             caustics_only: false, photon_lookups: 0, photons_gathered: 0,
             stratum: (0., 0.), grid: 1., first_hit: false, primary: Primary::default(), wavelength: None, sequence: None, dimension: 0, limits: Limits::new(None, None),
+            emission_mis: None,
         }
     }
 
