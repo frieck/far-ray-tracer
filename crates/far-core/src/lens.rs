@@ -108,6 +108,20 @@ pub fn white_balance(kelvin: f32, tint: f32) -> [f32; 3] {
     factors.map(|f| f / grey)
 }
 
+/// The range of a light's color temperature: candle flame to clear blue sky, past the fit's ends.
+pub const MIN_LIGHT_KELVIN: f32 = 1000.0;
+pub const MAX_LIGHT_KELVIN: f32 = 40000.0;
+
+/// The color of light from a black body at `kelvin`, as V-Ray's temperature color mode gives
+/// it: linear sRGB of unit luminance, so a light keeps its brightness as its color warms or
+/// cools. 6500 K is about white; 2700 K a household bulb, 5500 K midday sun.
+pub fn blackbody(kelvin: f32) -> [f32; 3] {
+    let kelvin = if kelvin.is_finite() { kelvin.clamp(1667.0, 25000.0) } else { NEUTRAL_KELVIN };
+    let rgb = planck_rgb(kelvin);
+    let luminance = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+    rgb.map(|v| v / luminance.max(1e-6))
+}
+
 /// The linear sRGB color of a black body at `kelvin`, of unit luminance: the Planckian locus
 /// in CIE xy by the cubic fit of Kim et al. (2002), from 1667 K to 25000 K.
 fn planck_rgb(kelvin: f32) -> [f32; 3] {
@@ -227,6 +241,20 @@ pub fn grain_at_iso(grain: f32, iso: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_black_body_keeps_its_brightness_and_warms_below_daylight() {
+        let luminance = |c: [f32; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+        for kelvin in [1000.0, 1900.0, 2700.0, 4000.0, 6500.0, 9000.0, 40000.0] {
+            assert!((luminance(blackbody(kelvin)) - 1.0).abs() < 1e-4, "{kelvin} K");
+        }
+        // Daylight is close to the screen's white; a bulb is orange, a blue sky blue.
+        assert!(blackbody(6500.0).iter().all(|v| (v - 1.0).abs() < 0.05), "{:?}", blackbody(6500.0));
+        let bulb = blackbody(2700.0);
+        assert!(bulb[0] > 1.3 && bulb[2] < 0.5, "{bulb:?}");
+        let sky = blackbody(12000.0);
+        assert!(sky[2] > sky[0], "{sky:?}");
+    }
 
     #[test]
     fn white_balance_is_neutral_at_daylight_and_cools_warm_light() {

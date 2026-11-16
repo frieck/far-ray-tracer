@@ -60,6 +60,9 @@ struct SphereLightFile {
     radius: f32,
     #[serde(default = "white")]
     color: Point,
+    /// A color temperature in kelvin, which tints `color`; see `lens::blackbody`.
+    #[serde(default)]
+    temperature: Option<f32>,
 }
 
 #[derive(Deserialize)]
@@ -86,6 +89,8 @@ enum AreaLightFile {
         edge_v: Point,
         #[serde(default = "white")]
         color: Point,
+        #[serde(default)]
+        temperature: Option<f32>,
         #[serde(default = "default_intensity")]
         intensity: f32,
     },
@@ -94,6 +99,8 @@ enum AreaLightFile {
         radius: f32,
         #[serde(default = "white")]
         color: Point,
+        #[serde(default)]
+        temperature: Option<f32>,
         #[serde(default = "default_intensity")]
         intensity: f32,
         /// Where a spotlight or an IES fixture points; straight down by default.
@@ -465,6 +472,16 @@ fn up() -> Point {
     [0.0, 1.0, 0.0]
 }
 
+/// A light's color tinted by its color temperature, if it has one.
+fn warmed(color: Point, temperature: Option<f32>) -> Result<Point, String> {
+    let Some(kelvin) = temperature else { return Ok(color) };
+    if !(crate::lens::MIN_LIGHT_KELVIN..=crate::lens::MAX_LIGHT_KELVIN).contains(&kelvin) {
+        return Err(format!("A light's temperature is {} to {} K", crate::lens::MIN_LIGHT_KELVIN, crate::lens::MAX_LIGHT_KELVIN));
+    }
+    let tint = crate::lens::blackbody(kelvin);
+    Ok([0, 1, 2].map(|k| color[k] * tint[k]))
+}
+
 fn require_positive(values: &[f32], what: &str) -> Result<(), String> {
     if values.iter().all(|v| *v > 0.0) {
         Ok(())
@@ -654,11 +671,13 @@ impl Scene {
             match light {
                 LightFile::Sphere(light) => {
                     if light.radius < 0.0 { return Err("A light radius must be nonnegative".into()); }
-                    let material = light.material.unwrap_or(MaterialFile { color: light.color, ..MaterialFile::default() });
+                    let color = warmed(light.color, light.temperature)?;
+                    let material = light.material.unwrap_or(MaterialFile { color, ..MaterialFile::default() });
                     let material = scene.add_material(material.into(), dir.as_deref(), &mut cache);
                     scene.lights.push(Sphere::new(vector(light.position), light.radius, material));
                 }
-                LightFile::Area(AreaLightFile::Rectangle { position, edge_u, edge_v, color, intensity }) => {
+                LightFile::Area(AreaLightFile::Rectangle { position, edge_u, edge_v, color, temperature, intensity }) => {
+                    let color = warmed(color, temperature)?;
                     let (u, v) = (vector(edge_u), vector(edge_v));
                     let (width, height) = (u.length(), v.length());
                     require_positive(&[width, height], "A rectangular light")?;
@@ -677,7 +696,8 @@ impl Scene {
                         edge_u: u, edge_v: v, normal, area: width * height,
                     });
                 }
-                LightFile::Area(AreaLightFile::Sphere { position, radius, color, intensity, direction, spot_angle, spot_blend, ies }) => {
+                LightFile::Area(AreaLightFile::Sphere { position, radius, color, temperature, intensity, direction, spot_angle, spot_blend, ies }) => {
+                    let color = warmed(color, temperature)?;
                     require_positive(&[radius], "A spherical light")?;
                     if !radius.is_finite() || !intensity.is_finite() || intensity < 0.0 || color.iter().any(|c| *c < 0.0) {
                         return Err("Light intensity and color must be nonnegative".into());

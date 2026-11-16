@@ -142,6 +142,10 @@ Visual gain for the effort:
   intensity, size and cone, in the Object tab, saved into the scene file.
 - [x] **Move gizmo**: arrows along X, Y and Z and a ring across the view, on the image.
 - [x] **Undo and redo** of scene and settings edits.
+- [x] **Lights panel and color temperature**: every light with on/off, solo, color or kelvin,
+  and intensity.
+- [ ] **More for lights**: turning and aiming area lights and spots (at the selection),
+  changing a light's kind, loading an IES file, lights invisible to the camera. Medium.
 - [ ] **Outliner, next**: rotate and scale gizmos; adding, duplicating and deleting objects;
   a model's parts as children; renaming. Medium.
 - [ ] **Instancing**: many copies of an object for almost no memory. Medium.

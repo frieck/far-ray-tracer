@@ -12,7 +12,8 @@ use serde_json::{json, Map, Value};
 use std::path::{Component, Path, PathBuf};
 
 /// Changes to the scene file's objects and lights, by index: each one's fields replace those
-/// of the entry. Fields that say what an entry is or where its data lives (`type`, `file`,
+/// of the entry, and a null removes the field, as when a light goes back from a temperature to
+/// a plain color. Fields that say what an entry is or where its data lives (`type`, `file`,
 /// `material`, `ies`, `name`) are left alone.
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct EntryEdits {
@@ -37,7 +38,12 @@ impl EntryEdits {
             for (index, fields) in edits {
                 let Some(entry) = entries.get_mut(*index).and_then(Value::as_object_mut) else { continue };
                 for (key, value) in fields {
-                    if !FIXED_FIELDS.contains(&key.as_str()) {
+                    if FIXED_FIELDS.contains(&key.as_str()) {
+                        continue;
+                    }
+                    if value.is_null() {
+                        entry.remove(key);
+                    } else {
                         entry.insert(key.clone(), value.clone());
                     }
                 }

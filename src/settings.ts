@@ -518,6 +518,13 @@ export function sceneSaveRequest(settings: Settings) {
   };
 }
 
+/** The settings with fields of object or light `id` edited; null takes a field away. */
+export function withEntryEdit(settings: Settings, light: boolean, id: number, patch: Record<string, unknown>): Partial<Settings> {
+  const key = light ? "lightEdits" : "objectEdits";
+  const all = settings[key];
+  return { [key]: { ...all, [id]: { ...all[id], ...patch } } } as Partial<Settings>;
+}
+
 /** The edits to the file's objects and lights, as the engine takes them. */
 export function entryEdits(settings: Settings): import("./types").EntryEdits {
   const list = (edits: Record<number, Record<string, unknown>>) => Object.entries(edits)

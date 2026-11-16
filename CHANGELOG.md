@@ -91,6 +91,13 @@ are not used. The shader is compiled for what
   settings: a drag or slider move is one step, orbiting the camera is not undone, and a text
   field still undoes its typing.
 
+- A Lights panel at the top of the Light tab, as V-Ray's Light Lister: every light with an
+  on/off box, Solo, its color and its intensity.
+
+- Lights can take their color from a temperature in kelvin (`"temperature": 2700`), the color
+  of a black body of the same brightness as white, from 1000 to 40000 K. The Object tab's
+  **Color by** switches between a color and a temperature. An edit can now remove a field.
+
 - A more compact panel: Render, Render after each change, Open, Save and Export share one
   row, and the tab's title, which the rail already shows, no longer takes one.
 

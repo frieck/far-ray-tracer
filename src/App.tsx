@@ -856,6 +856,7 @@ export function App() {
             onSelectMaterial={setSelectedMaterial}
             openTab={openTab}
             selection={selection}
+            onSelect={select}
             onExpandMaterial={() => {
               setShowPhotonMap(false);
               setShowMaterial(true);

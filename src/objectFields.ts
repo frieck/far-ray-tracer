@@ -13,7 +13,9 @@ export type Field =
   /** A plane's four corners, moved together by where their middle goes. */
   | { type: "corners"; key: string; label: string }
   /** One of a rectangular light's edges, by its length; its direction stays. */
-  | { type: "edge"; key: string; label: string };
+  | { type: "edge"; key: string; label: string }
+  /** A light's color, as RGB or as a color temperature. */
+  | { type: "lightColor"; key: string; label: string };
 
 /** The usual reach of a drag; typing goes past it. */
 const PLACE = { min: -20, max: 20, step: 0.01, hard: [-1e6, 1e6] as [number, number] };
@@ -26,6 +28,7 @@ const turned: Field = {
 };
 const length = (key: string, label: string): Field => ({ type: "number", key, label, default: 1, ...SIZE });
 const color: Field = { type: "color", key: "color", label: "Color", default: [1, 1, 1] };
+const glow: Field = { type: "lightColor", key: "color", label: "Color" };
 const intensity: Field = {
   type: "number", key: "intensity", label: "Intensity", default: 1, min: 0, max: 50, step: 0.05, hard: [0, 1e6],
   hint: "The light's strength, times its color.",
@@ -56,17 +59,17 @@ export const OBJECT_FIELDS: Record<string, Field[]> = {
 };
 
 export const LIGHT_FIELDS: Record<string, Field[]> = {
-  point: [at("position"), length("radius", "Radius"), color],
-  rectangle: [at("position"), color, intensity, { type: "edge", key: "edge_u", label: "Width" }, { type: "edge", key: "edge_v", label: "Height" }],
-  sphere: [at("position"), length("radius", "Radius"), color, intensity],
+  point: [at("position"), length("radius", "Radius"), glow],
+  rectangle: [at("position"), glow, intensity, { type: "edge", key: "edge_u", label: "Width" }, { type: "edge", key: "edge_v", label: "Height" }],
+  sphere: [at("position"), length("radius", "Radius"), glow, intensity],
   spot: [
-    at("position"), length("radius", "Radius"), color, intensity, aimed,
+    at("position"), length("radius", "Radius"), glow, intensity, aimed,
     { type: "number", key: "spot_angle", label: "Cone", default: 45, min: 1, max: 179, step: 1, strict: true, angle: true,
       hint: "The cone's full angle, in degrees." },
     { type: "number", key: "spot_blend", label: "Soft edge", default: 0.15, min: 0, max: 1, step: 0.01, strict: true,
       hint: "The share of the cone that fades out at its edge." },
   ],
-  ies: [at("position"), length("radius", "Radius"), color, intensity, aimed],
+  ies: [at("position"), length("radius", "Radius"), glow, intensity, aimed],
 };
 
 /**
@@ -87,11 +90,17 @@ export function fieldsFor(kind: string, source: Record<string, unknown>, light: 
   return fields;
 }
 
-/** A field's value: the edit, else the file's, else the format's default. */
+/** A field's value: the edit, else the file's, else the format's default. An edit of null took the field away. */
 export function valueOf(field: Field, source: Record<string, unknown>, edits: Record<string, unknown> | undefined): unknown {
-  const value = edits?.[field.key] ?? source[field.key];
+  const value = entryValue(field.key, source, edits);
   if (value !== undefined) return value;
   return "default" in field ? field.default : undefined;
+}
+
+/** A field of an entry as edited: the edit if there is one (null meaning none), else the file's. */
+export function entryValue(key: string, source: Record<string, unknown>, edits: Record<string, unknown> | undefined): unknown {
+  const value = edits && key in edits ? edits[key] : source[key];
+  return value === null ? undefined : value;
 }
 
 /** The middle of a plane's corners. */

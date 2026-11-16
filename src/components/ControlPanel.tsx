@@ -37,6 +37,7 @@ import {
   CAMERA_PRESETS,
   cameraPresetOf,
   withCameraPreset,
+  withEntryEdit,
   LOOKS,
   lutLabel,
 } from "../settings";
@@ -50,6 +51,7 @@ import { NumberField } from "./NumberField";
 import { Segmented } from "./Segmented";
 import { ButtonRow, CheckRow, Choice, ChoiceRow, ColorRow, Hint, Row, ScrubRow, SearchContext, Section, VectorRow } from "./props";
 import { fieldsFor, middle, movedCorners, resizedEdge, valueOf, type Field, type Vec3 } from "../objectFields";
+import { LightColorRows, LightsPanel } from "./LightControls";
 
 interface ControlPanelProps {
   loadingEnvironment: boolean;
@@ -87,6 +89,7 @@ interface ControlPanelProps {
   openTab: { tab: string; serial: number } | null;
   /** What the outliner has selected, which the Object tab edits. */
   selection: import("../types").Selection;
+  onSelect: (selection: import("../types").Selection) => void;
 }
 
 /** Most rebound limit the field shows as a number; one step past it means no limit. */
@@ -346,6 +349,12 @@ function LightTab({ props, update, enhanced }: TabContext) {
   const caustic = causticSettings(settings);
   return (
     <>
+      {scene && (
+        <LightsPanel lights={scene.light_list} edits={settings.lightEdits} hidden={settings.hiddenLights}
+          selection={props.selection} onSelect={props.onSelect}
+          onEdit={(id, patch) => update(withEntryEdit(settings, true, id, patch))}
+          onHiddenChange={(hiddenLights) => update({ hiddenLights })} />
+      )}
       <Section id="indirect" title="Indirect light"
         enabled={{ checked: settings.indirect, onChange: (indirect) => update({ indirect }) }}
         extra={auto && (
@@ -720,7 +729,10 @@ function ObjectTab({ props, update }: TabContext) {
         </button>
       }>
       {fields.length === 0 && <Hint>Fog fills the scene; its density and color are in the scene file.</Hint>}
-      {fields.map((field) => <FieldRow key={field.key} field={field} source={entry.source} edits={edits} onChange={set} />)}
+      {fields.map((field) => field.type === "lightColor" && light
+        ? <LightColorRows key={field.key} light={entry} edits={edits}
+            onChange={(patch) => update(withEntryEdit(settings, true, selection.id, patch))} />
+        : <FieldRow key={field.key} field={field} source={entry.source} edits={edits} onChange={set} />)}
       <Hint>Saved into the scene file with Save Scene.</Hint>
     </Section>
   );

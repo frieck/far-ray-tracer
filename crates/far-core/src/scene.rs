@@ -1072,6 +1072,17 @@ mod outliner_tests {
         assert_eq!(ball(&edited), ball(&expected));
         assert_eq!(edited.materials[edited.bulbs[0].material].color.array(), expected.materials[expected.bulbs[0].material].color.array());
         assert_eq!(edited.objects, scene.objects, "names and materials stay");
+        // A temperature tints a light's color, and a null takes the field away again.
+        let warm = EntryEdits { lights: vec![(0, fields(serde_json::json!({"temperature": 2700, "intensity": 1})))], ..Default::default() };
+        let warmed = scene.edited(Path::new("test.far"), &warm).unwrap();
+        let rect = warmed.materials[warmed.rect_lights[0].proxy.material].color.array();
+        assert_eq!(rect.map(|v| (v * 1e4).round()), crate::lens::blackbody(2700.0).map(|v| (v * 1e4).round()));
+        let mut back = warm.clone();
+        back.lights[0].1.insert("temperature".into(), serde_json::Value::Null);
+        let plain = scene.edited(Path::new("test.far"), &back).unwrap();
+        assert_eq!(plain.materials[plain.rect_lights[0].proxy.material].color.array(), [1.0; 3]);
+        let hot = EntryEdits { lights: vec![(0, fields(serde_json::json!({"temperature": 90000})))], ..Default::default() };
+        assert!(scene.edited(Path::new("test.far"), &hot).err().is_some_and(|e| e.contains("temperature")));
         // A bad value is an error, not a broken scene.
         let bad = EntryEdits { objects: vec![(1, fields(serde_json::json!({"radius": -1})))], ..Default::default() };
         assert!(scene.edited(Path::new("test.far"), &bad).is_err());

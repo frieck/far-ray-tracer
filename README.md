@@ -515,6 +515,30 @@ sampling with GGX reflections, like panels. Fixed lights from the center for har
 Classic treats each one as a legacy point light. They do not emit caustic photons yet.
 Open `assets/scenes/christmas.far` for a scene lit by strings of them.
 
+#### Color temperature
+
+Any light can take its color from a temperature in kelvin instead, as V-Ray's lights can:
+
+```json
+{ "type": "sphere", "position": [0, 3, 6], "radius": 0.05, "temperature": 2700, "intensity": 22 }
+```
+
+The color is that of a black body at that temperature, from 1000 to 40000 K, of the same
+brightness as white, so warming or cooling a light keeps how much it lights: about 1900 K for
+a candle, 2700 K a household bulb, 4000 K a cool white tube, 5500 K the midday sun and 6500 K
+daylight, the screen's white. A `color` given with it tints it further. Versions of the app
+before color temperature refuse a scene that uses it.
+
+#### The Lights panel
+
+**Light > Lights** lists every light of the scene, as V-Ray's Light Lister: a box turns each
+one on or off, as the outliner's eye does; **Solo** turns every other light off, and again
+turns them all back on; and each has its color, or its temperature with a dot of its color,
+and its intensity. A 2008 point light has no intensity: its color alone sets how bright it is.
+Clicking a name selects the light, to move it with the gizmo or edit the rest in the
+**Object** tab, where **Color by** switches between a color and a temperature, keeping the
+color as it looks. Solo leaves glowing objects and the environment on.
+
 #### Spotlights and IES profiles
 
 A spherical light becomes a spotlight with a cone, or a real fixture with an IES file:
