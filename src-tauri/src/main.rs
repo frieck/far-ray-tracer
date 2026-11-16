@@ -635,9 +635,9 @@ fn ball_on_gpu(gpu: &far_gpu::Gpu, ball: &Scene, options: &Options, strict: bool
     }
 }
 
-fn render_environment(config: &EnvironmentConfig, scene: &Scene, state: &AppState) -> Result<Environment, String> {
+fn render_environment(config: &EnvironmentConfig, scene: Option<&Scene>, state: &AppState) -> Result<Environment, String> {
     config.validate()?;
-    if let Some(environment) = &scene.environment {
+    if let Some(environment) = scene.and_then(|scene| scene.environment.as_ref()) {
         if environment.config.map_key() == config.map_key() {
             return Ok(Environment { config: config.clone(), map: environment.map.clone() });
         }
@@ -650,6 +650,39 @@ fn render_environment(config: &EnvironmentConfig, scene: &Scene, state: &AppStat
     let environment = Environment::load(config.clone())?;
     *state.environment_cache.lock().unwrap() = Some((config.map_key(), environment.map.clone()));
     Ok(environment)
+}
+
+/// Widest environment preview, in pixels.
+const MAX_ENVIRONMENT_PREVIEW: u32 = 1024;
+
+/// The environment as a panorama for the Light panel, `width` by `width / 2` RGBA pixels: at its
+/// intensity, exposed and tone-mapped as renders show light, and unrotated, since the panel
+/// turns it. The map is the one renders use, loaded once.
+#[tauri::command(async)]
+fn environment_preview(
+    environment: EnvironmentConfig,
+    width: u32,
+    exposure: f32,
+    tone_mapping: far_core::tonemap::ToneMapping,
+    state: State<'_, AppState>,
+) -> Result<Response, String> {
+    if !(2..=MAX_ENVIRONMENT_PREVIEW).contains(&width) || !exposure.is_finite() || exposure < 0.0 {
+        return Err(format!("Environment previews need 2 to {MAX_ENVIRONMENT_PREVIEW} pixels and a finite exposure"));
+    }
+    let open = state.scene.lock().unwrap().clone();
+    let environment = guarded("preview the environment", || {
+        render_environment(&environment, open.as_ref().map(|open| &open.scene), &state)
+    })?;
+    Ok(Response::new(environment_pixels(&environment, width, exposure, tone_mapping)))
+}
+
+/// The RGBA pixels of `environment_preview`.
+fn environment_pixels(environment: &Environment, width: u32, exposure: f32, tone_mapping: far_core::tonemap::ToneMapping) -> Vec<u8> {
+    let scale = environment.config.intensity * exposure;
+    environment.map.thumbnail(width as usize).iter().flat_map(|c| {
+        let [r, g, b] = far_core::tonemap::display(tone_mapping, [c.x * scale, c.y * scale, c.z * scale]);
+        [r, g, b].map(|v| (v * 255.0 + 0.5).clamp(0.0, 255.0) as u8).into_iter().chain([255])
+    }).collect()
 }
 
 #[tauri::command(async)]
@@ -906,7 +939,7 @@ fn render_scene(
         || request.environment.is_some() || open.scene.environment.is_some()) {
         let mut copy = open.scene.clone();
         copy.environment = request.environment.as_ref()
-            .map(|config| render_environment(config, &open.scene, &state)).transpose()?;
+            .map(|config| render_environment(config, Some(&open.scene), &state)).transpose()?;
         for edit in &request.material_overrides {
             if !copy.prims.iter().any(|p| p.material() == edit.id) {
                 return Err("Unknown object material".into());
@@ -1176,6 +1209,7 @@ fn main() {
             open_repository,
             choose_scene,
             choose_environment,
+            environment_preview,
             load_scene,
             cancel,
             save_image,
@@ -1241,6 +1275,31 @@ mod tests {
         assert_eq!(result.unwrap_err(), "Render failed: photon regression");
         // A later job can still complete normally.
         assert!(render_with_frames(|| {}, Duration::from_millis(1), || {}).is_ok());
+    }
+
+    #[test]
+    fn the_environment_preview_shows_the_map_as_renders_do() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let config = EnvironmentConfig {
+            path: root.join("assets/environments/studio.hdr").to_string_lossy().into_owned(), ..EnvironmentConfig::default()
+        };
+        let environment = Environment::load(config).unwrap();
+        let tone = far_core::tonemap::ToneMapping::Agx;
+        let pixels = environment_pixels(&environment, 256, 1.0, tone);
+        assert_eq!(pixels.len(), 256 * 128 * 4);
+        assert!(pixels.chunks_exact(4).all(|p| p[3] == 255));
+        // The warm panel, left of the back (+Z at the center), is the brightest thing in it.
+        let brightness = |p: &[u8]| p[0] as u32 + p[1] as u32 + p[2] as u32;
+        let brightest = pixels.chunks_exact(4).enumerate().max_by_key(|(_, p)| brightness(p)).unwrap().0;
+        let (x, y) = (brightest % 256, brightest / 256);
+        assert!(y > 20 && y < 60 && (x as f32 / 256.0 - (3.9 / std::f32::consts::TAU)).abs() < 0.1, "{x} {y}");
+        // Brighter light shows brighter, and intensity counts as exposure does.
+        let mean = |p: &[u8]| p.iter().map(|&v| v as u64).sum::<u64>();
+        let brighter = environment_pixels(&environment, 256, 2.0, tone);
+        assert!(mean(&brighter) > mean(&pixels));
+        let mut doubled = environment.clone();
+        doubled.config.intensity = 2.0;
+        assert_eq!(environment_pixels(&doubled, 256, 1.0, tone), brighter);
     }
 
     #[test]

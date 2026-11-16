@@ -3,6 +3,7 @@ import {
   Sun, X, type LucideIcon,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
+import { EnvironmentPreview } from "./EnvironmentPreview";
 import {
   activeMode,
   causticSettings,
@@ -377,6 +378,8 @@ function LightTab({ props, update, enhanced }: TabContext) {
         )}>
         {environment ? (
           <>
+            <EnvironmentPreview environment={environment} exposure={settings.exposure} toneMapping={settings.toneMapping}
+              pose={settings.pose} onRotate={sky ? undefined : (rotation) => setEnvironment({ rotation })} />
             {sky ? (
               <>
                 <ChoiceRow<"angles" | "time"> label="Sun from" keywords="sun sky" value={sky.time ? "time" : "angles"}

@@ -35,6 +35,9 @@ are not used. The shader is compiled for what
   into linear light, in the app (**Light > Environment > Image**) and in scene files. The
   HDRI studio example comes in EXR, PNG and JPEG versions too.
 
+- **Light > Environment** shows the environment as a panorama, tone-mapped as renders show
+  it, with a ring where the camera looks; dragging it sideways turns the environment.
+
 - Images save as OpenEXR, in the app (**File > Export Image**) and on the command line
   (`-o image.exr`): the linear light of an Enhanced render before tone mapping and, when it
   denoised, the denoised light, albedo, normal and depth passes.

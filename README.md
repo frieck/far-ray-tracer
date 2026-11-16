@@ -1038,6 +1038,10 @@ opens a latitude-longitude panorama, or **Physical sky** (below). Radiance `.hdr
 ones are read as sRGB and turned into linear light up to 1, so they light dimly and without
 sharp shadows, and suit backgrounds more than lighting.
 Intensity changes its brightness; Rotation turns an image around the vertical axis.
+Below the menu, the whole environment shows as a panorama, as seen from inside: brightened
+and tone-mapped as renders show it, with the current Exposure and Tone mapping, and turned
+by its rotation. A ring marks where the camera looks. Dragging the panorama sideways turns
+an image environment; a physical sky shows where the sun stands.
 **Background** affects camera misses only: turning it off keeps lighting,
 reflections and refraction. The check box in the Environment header disables the entire
 environment, and None removes it. UI changes last for the current scene session.

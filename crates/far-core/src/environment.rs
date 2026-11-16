@@ -180,6 +180,32 @@ impl EnvironmentMap {
         (self.width, self.height, &self.pixels)
     }
 
+    /// The map shrunk to `width` by `width / 2` texels for a preview, row by row from the top,
+    /// unrotated: each the mean of the texels it covers, so small bright lamps keep their share.
+    pub fn thumbnail(&self, width: usize) -> Vec<Color> {
+        let width = width.max(2);
+        let height = width / 2;
+        let span = |i: usize, n: usize, of: usize| {
+            let start = i * of / n;
+            start..((i + 1) * of / n).max(start + 1).min(of)
+        };
+        let mut thumbnail = Vec::with_capacity(width * height);
+        for ty in 0..height {
+            let rows = span(ty, height, self.height);
+            for tx in 0..width {
+                let columns = span(tx, width, self.width);
+                let mut sum = Color::default();
+                for y in rows.clone() {
+                    for x in columns.clone() {
+                        sum += self.pixels[y * self.width + x];
+                    }
+                }
+                thumbnail.push(sum * (1. / (rows.len() * columns.len()) as f32));
+            }
+        }
+        thumbnail
+    }
+
     /// The sampling tables of `sample` for a GPU, in single precision: the share of light up
     /// to the top of each row (height + 1 values), then for each row the share of that row up
     /// to the left of each texel (width + 1 values per row). Kept per row, they keep their
@@ -413,6 +439,24 @@ mod tests {
                 .filter(|(l, h)| (0..3).all(|k| (l.array()[k] - h.array()[k].min(1.)).abs() < 0.03)).count();
             assert!(close * 100 > hdr.pixels.len() * 99, "{name}: the HDR's light, clipped at 1");
         }
+    }
+    #[test]
+    fn the_thumbnail_keeps_the_mean_light_and_its_place() {
+        let (width, height) = (64, 32);
+        let mut pixels = vec![Color::new(0.5, 0.5, 0.5); width * height];
+        // A lamp of 2 by 2 texels at the right of the top half.
+        for (x, y) in [(48, 8), (49, 8), (48, 9), (49, 9)] {
+            pixels[y * width + x] = Color::new(100., 50., 25.);
+        }
+        let map = EnvironmentMap::new(width, height, pixels).unwrap();
+        let small = map.thumbnail(16);
+        assert_eq!(small.len(), 16 * 8);
+        let mean = |p: &[Color]| p.iter().map(|c| c.x as f64).sum::<f64>() / p.len() as f64;
+        assert!((mean(&small) - mean(&map.pixels)).abs() < 1e-4, "the light is kept");
+        let brightest = (0..small.len()).max_by(|&a, &b| small[a].x.total_cmp(&small[b].x)).unwrap();
+        assert_eq!((brightest % 16, brightest / 16), (12, 2));
+        // Larger than the map, each texel repeats.
+        assert_eq!(map.thumbnail(128).len(), 128 * 64);
     }
     #[test]
     fn invalid_configuration_is_rejected() {
