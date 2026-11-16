@@ -75,6 +75,12 @@ are not used. The shader is compiled for what
   the pointer is over is outlined in white: a smooth line at the screen's resolution, from an
   ID map the engine traces in milliseconds.
 
+- Objects and lights can be edited: the **Object** tab shows the selection's position,
+  rotation and sizes, and a light's color, intensity, size, direction and cone, as fields of
+  its entry in the scene file. The engine reads the scene again with them, in some 70 ms for
+  the Still life, so renders, the 3D view and the outline follow; **Save Scene** writes them
+  into the file.
+
 - A more compact panel: Render, Render after each change, Open, Save and Export share one
   row, and the tab's title, which the rail already shows, no longer takes one.
 

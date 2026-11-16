@@ -372,6 +372,26 @@ export function ColorRow({ label, value, onChange, disabled }: {
   );
 }
 
+/** Three numbers side by side, X, Y and Z, each dragged or typed as a Scrub. */
+export function VectorRow({ label, value, onChange, hint, keywords, ...range }: Omit<ScrubProps, "label" | "value" | "onChange"> & {
+  label: string;
+  value: [number, number, number];
+  onChange: (value: [number, number, number]) => void;
+  hint?: string;
+  keywords?: string;
+}) {
+  return (
+    <Row label={label} hint={hint} keywords={keywords}>
+      <div className="prop-vector">
+        {(["X", "Y", "Z"] as const).map((axis, k) => (
+          <Scrub key={axis} label={`${label} ${axis}`} value={value[k]} {...range}
+            onChange={(v) => onChange(value.map((old, i) => (i === k ? v : old)) as [number, number, number])} />
+        ))}
+      </div>
+    </Row>
+  );
+}
+
 /** Small buttons in a row, such as Reset camera. */
 export function ButtonRow({ label, children }: { label: string; children: ReactNode }) {
   return <Row label={label}><div className="prop-buttons">{children}</div></Row>;

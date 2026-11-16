@@ -11,6 +11,41 @@ use crate::scene::{find_data_folder, MaterialSource, Scene};
 use serde_json::{json, Map, Value};
 use std::path::{Component, Path, PathBuf};
 
+/// Changes to the scene file's objects and lights, by index: each one's fields replace those
+/// of the entry. Fields that say what an entry is or where its data lives (`type`, `file`,
+/// `material`, `ies`, `name`) are left alone.
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct EntryEdits {
+    #[serde(default)]
+    pub objects: Vec<(usize, Map<String, Value>)>,
+    #[serde(default)]
+    pub lights: Vec<(usize, Map<String, Value>)>,
+}
+
+/// Fields an edit cannot change.
+const FIXED_FIELDS: [&str; 5] = ["type", "file", "material", "ies", "name"];
+
+impl EntryEdits {
+    pub fn is_empty(&self) -> bool {
+        self.objects.iter().all(|(_, f)| f.is_empty()) && self.lights.iter().all(|(_, f)| f.is_empty())
+    }
+
+    /// Writes the edits into a scene file's root object.
+    pub fn apply(&self, root: &mut Map<String, Value>) {
+        for (list, edits) in [("objects", &self.objects), ("lights", &self.lights)] {
+            let Some(entries) = root.get_mut(list).and_then(Value::as_array_mut) else { continue };
+            for (index, fields) in edits {
+                let Some(entry) = entries.get_mut(*index).and_then(Value::as_object_mut) else { continue };
+                for (key, value) in fields {
+                    if !FIXED_FIELDS.contains(&key.as_str()) {
+                        entry.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// What the app changed.
 pub struct SceneEdits {
     pub camera: crate::camera::Camera,
@@ -21,6 +56,8 @@ pub struct SceneEdits {
     pub materials: Vec<(usize, crate::surface::MaterialEdit)>,
     /// The app's render settings, stored as they are.
     pub render: Option<Value>,
+    /// Moved, turned, resized or retuned objects and lights.
+    pub entries: EntryEdits,
 }
 
 /// Writes `scene`, read from `original`, with `edits` to `target`. Returns the edits that
@@ -32,6 +69,7 @@ pub fn save(scene: &Scene, original: &Path, target: &Path, edits: &SceneEdits) -
     let from = original.parent().unwrap_or(Path::new(".")).to_path_buf();
     let to = absolute(target.parent().unwrap_or(Path::new(".")));
     let mut warnings = Vec::new();
+    edits.entries.apply(root);
 
     if from != to {
         relocate_paths(root, &from, &to, original, target);
@@ -231,6 +269,11 @@ mod tests {
                 }),
             ],
             render: Some(json!({"samples": 256})),
+            // The second sphere moved, the light grew brighter; `type` cannot change.
+            entries: EntryEdits {
+                objects: vec![(1, json!({"center": [3, 1, 5], "type": "box"}).as_object().unwrap().clone())],
+                lights: vec![(0, json!({"intensity": 4}).as_object().unwrap().clone()), (7, Map::new())],
+            },
         };
         // Saved elsewhere: the IES path and the data folder are rewritten.
         let elsewhere = folder("edits-out");
@@ -248,6 +291,9 @@ mod tests {
         assert_eq!(saved["objects"][1]["material"]["surface"]["preset"], "metal");
         assert_eq!(saved["objects"][1]["material"]["emission"], json!({"color": [1.0, 0.5, 0.0], "strength": 3.0}));
         assert!(saved["objects"][0]["material"].get("emission").is_none());
+        assert_eq!(saved["objects"][1]["center"], json!([3, 1, 5]));
+        assert_eq!(saved["objects"][1]["type"], "sphere");
+        assert_eq!(saved["lights"][0]["intensity"], 4);
         let name = dir.file_name().unwrap().to_string_lossy().into_owned();
         assert_eq!(saved["lights"][0]["ies"], format!("../{name}/scenes/lamp.ies"));
         assert_eq!(saved["data_folder"], format!("../{name}/scene-data"));

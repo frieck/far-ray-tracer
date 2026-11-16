@@ -631,6 +631,7 @@ fn every_scene_saved_elsewhere_opens_the_same() {
             environment: scene.environment.as_ref().map(|e| e.config.clone()),
             materials: Vec::new(),
             render: Some(serde_json::json!({"app": 1, "exposure": 1.2})),
+            entries: Default::default(),
         };
         let target = out.join(path.file_name().unwrap());
         far_core::scene_save::save(&scene, &path, &target, &edits).unwrap();

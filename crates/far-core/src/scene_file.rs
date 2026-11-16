@@ -477,6 +477,12 @@ impl Scene {
     pub(crate) fn from_far(data: &[u8], path: &Path) -> Result<Self, String> {
         let source: serde_json::Value =
             serde_json::from_slice(data).map_err(|e| format!("{}: {e}", path.display()))?;
+        Self::from_source(source, path)
+    }
+
+    /// The scene a `.far` file's JSON describes, its paths relative to `path`: how a scene is
+    /// read again with edits to its objects and lights; see `Scene::edited`.
+    pub fn from_source(source: serde_json::Value, path: &Path) -> Result<Self, String> {
         let mut read = source.clone();
         let names = take_names(&mut read);
         let file: SceneFile = serde_json::from_value(read).map_err(|e| format!("{}: {e}", path.display()))?;

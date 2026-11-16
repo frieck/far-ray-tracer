@@ -13,7 +13,7 @@ import { alignView, dolly, orbit, pan, retarget } from "./orbit";
 import { SceneView, type PreviewScene } from "./sceneView";
 import {
   activeComparison, activeMode, buildPreview, buildRequest, defaultSettings, DOF_PRESETS, fNumberFor, focalLength, imageSize,
-  sceneSaveRequest, withSavedRenderSettings,
+  sceneSaveRequest, sceneView, withSavedRenderSettings,
 } from "./settings";
 import type { Area, EnvironmentConfig, MenuAction, Pose, RenderRequest, SceneInfo, Selection, Settings, Startup } from "./types";
 
@@ -105,7 +105,7 @@ export function App() {
   const beforeRef = useRef<HTMLCanvasElement>(null);
   const photonRef = useRef<HTMLCanvasElement>(null);
   const liveRef = useRef<HTMLCanvasElement>(null);
-  const sceneView = useRef<SceneView | null>(null);
+  const sceneView3d = useRef<SceneView | null>(null);
   /** The scene whose geometry the 3D view holds. */
   const [liveScene, setLiveScene] = useState<SceneInfo | null>(null);
   const [webgl, setWebgl] = useState(true);
@@ -181,7 +181,7 @@ export function App() {
           setDrawingRegion(false);
           setSettings((old) => old && ({
             // What another scene hid means nothing here.
-            ...withSavedRenderSettings({ ...old, hiddenObjects: [], hiddenLights: [] }, info.render),
+            ...withSavedRenderSettings({ ...old, hiddenObjects: [], hiddenLights: [], objectEdits: {}, lightEdits: {} }, info.render),
             environment: info.environment,
             materialOverrides: [],
             pose: scenePose(info),
@@ -248,7 +248,7 @@ export function App() {
   const idHeight = Math.max(1, Math.round((idWidth * imageHeight) / imageWidth));
   const outlinable = scene !== null && settings !== null && activeMode(settings) === "enhanced" && !activeComparison(settings);
   const idArgs = outlinable && settings ? {
-    pose: settings.pose, width: idWidth, height: idHeight, hiddenObjects: settings.hiddenObjects, hiddenLights: settings.hiddenLights,
+    pose: settings.pose, width: idWidth, height: idHeight, view: sceneView(settings),
   } : null;
   const idKey = idArgs && scene ? JSON.stringify({ path: scene.path, ...idArgs }) : null;
   const ids = useLatest(idKey, async () => {
@@ -262,7 +262,7 @@ export function App() {
   const xrayKey = idKey && xrayObject !== null ? `${idKey}|${xrayObject}` : null;
   const xrays = useLatest(xrayKey, async () => ({
     path: scene!.path, object: xrayObject!, width: idWidth,
-    mask: new Uint8Array(await invoke<ArrayBuffer>("object_xray", { pose: settings!.pose, width: idWidth, height: idHeight, object: xrayObject })),
+    mask: new Uint8Array(await invoke<ArrayBuffer>("object_xray", { pose: settings!.pose, width: idWidth, height: idHeight, object: xrayObject, view: sceneView(settings!) })),
   }));
   const xray = xrays && idMap && xrays.value.path === idMap.path && xrays.value.object === xrayObject && xrays.value.width === idWidth
     ? xrays.value.mask : null;
@@ -309,36 +309,47 @@ export function App() {
   }, [scene, jobKey, renderer, movingCamera, liveReady, renderAlone, start]);
 
   useEffect(() => {
-    if (!liveRef.current || sceneView.current) return;
+    if (!liveRef.current || sceneView3d.current) return;
     try {
-      sceneView.current = new SceneView(liveRef.current);
+      sceneView3d.current = new SceneView(liveRef.current);
     } catch {
-      sceneView.current = null;
+      sceneView3d.current = null;
       setWebgl(false);
     }
   }, []);
 
+  // The 3D view shows the scene as edited and hidden here; edits wait a moment, as a drag
+  // changes them many times a second.
+  const viewArgs = settings ? sceneView(settings) : null;
+  const viewKey = JSON.stringify(viewArgs);
+  const geometryScene = useRef<SceneInfo | null>(null);
   useEffect(() => {
-    if (!scene || !sceneView.current) return;
+    if (!scene || !sceneView3d.current) return;
     let current = true;
-    invoke<PreviewScene>("scene_geometry").then((preview) => {
-      if (!current) return;
-      sceneView.current?.load(preview);
-      setLiveScene(scene);
-    }).catch(() => {
-      // Without geometry the 3D view cannot stand in for the render.
-      if (current) setWebgl(false);
-    });
+    const first = geometryScene.current !== scene;
+    const timer = window.setTimeout(() => {
+      invoke<PreviewScene>("scene_geometry", { view: viewArgs }).then((preview) => {
+        if (!current) return;
+        sceneView3d.current?.load(preview);
+        geometryScene.current = scene;
+        setLiveScene(scene);
+      }).catch(() => {
+        // Without geometry the 3D view cannot stand in for the render; an edit the engine
+        // refuses keeps the last view.
+        if (current && first) setWebgl(false);
+      });
+    }, first ? 0 : 120);
     return () => {
       current = false;
+      window.clearTimeout(timer);
     };
-  }, [scene]);
+  }, [scene, viewKey]);
 
   const showLive = liveReady && (movingCamera || awaitingImage);
   // 2008 and Fixed always render from the scene's own camera.
   const livePose = settings && scene && (activeMode(settings) === "enhanced" ? settings.pose : scenePose(scene));
   useEffect(() => {
-    if (showLive && livePose) sceneView.current?.draw(livePose, imageWidth / imageHeight);
+    if (showLive && livePose) sceneView3d.current?.draw(livePose, imageWidth / imageHeight);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showLive, liveScene, JSON.stringify(livePose), imageWidth, imageHeight]);
 
@@ -392,7 +403,7 @@ export function App() {
     }
     try {
       const picked = await invoke<Selection>("pick_object", { pose: settings.pose, width: imageWidth, height: imageHeight, x, y,
-        useKd: settings.useKd, hiddenObjects: settings.hiddenObjects, hiddenLights: settings.hiddenLights });
+        useKd: settings.useKd, view: sceneView(settings) });
       select(picked);
     } catch (error) {
       publish({ status: `Error: ${String(error)}` });
@@ -411,7 +422,7 @@ export function App() {
     setFocusHint("Finding focus…");
     try {
       const distance = await invoke<number | null>("pick_focus", { pose: settings.pose, width: imageWidth, height: imageHeight, x, y,
-        useKd: settings.useKd, hiddenObjects: settings.hiddenObjects, hiddenLights: settings.hiddenLights });
+        useKd: settings.useKd, view: sceneView(settings) });
       if (request !== focusRequest.current) return;
       if (distance === null) {
         setFocusHint("No surface here. Click an object, or press Esc to cancel.");
@@ -682,6 +693,7 @@ export function App() {
                 setSelectedMaterial(id);
                 showTab("materials");
               }}
+              onEditObject={() => showTab("object")}
               collapsed={outlinerCollapsed} onCollapsedChange={setOutlinerCollapsed}
               outline={outline} onOutlineChange={(value) => {
                 setOutline(value);
@@ -755,6 +767,7 @@ export function App() {
             selectedMaterial={selectedMaterial}
             onSelectMaterial={setSelectedMaterial}
             openTab={openTab}
+            selection={selection}
             onExpandMaterial={() => {
               setShowPhotonMap(false);
               setShowMaterial(true);

@@ -501,3 +501,7 @@ button { font: inherit; color: inherit; cursor: default; }
 
 /* The selection's outline over the image, drawn at the screen's own resolution. */
 .stage canvas.selection-overlay { pointer-events: none; }
+
+/* Three numbers in a row, such as a position. */
+.prop-vector { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; }
+.prop-vector .prop-scrub-value { font-size: 11px; }

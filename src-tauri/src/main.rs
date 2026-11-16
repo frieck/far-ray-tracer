@@ -54,11 +54,11 @@ struct OpenScene {
     kd: OnceLock<KdTree>,
     /// The BVH the GPU renderer walks, built on its first render.
     bvh: OnceLock<far_core::bvh::Bvh>,
-    /// The scene with the objects and lights the outliner hides left out, by their indices,
-    /// and its trees: kept while the same ones stay hidden.
-    hidden: Mutex<Option<((Vec<usize>, Vec<usize>), Arc<Prepared>)>>,
-    /// The scene with only the selected object, for its outline behind others, by its index.
-    alone: Mutex<Option<(usize, Arc<Prepared>)>>,
+    /// The scene as the interface last changed it, edited and with what it hides left out, by
+    /// the key of those changes; see `OpenScene::view`.
+    view: Mutex<Option<(String, Arc<Prepared>)>>,
+    /// The scene with only the selected object, for its outline behind others.
+    alone: Mutex<Option<(String, Arc<Prepared>)>>,
 }
 
 /// A scene to render and the trees built for it on first use.
@@ -69,50 +69,79 @@ struct Prepared {
     bvh: OnceLock<far_core::bvh::Bvh>,
 }
 
+/// What the interface changes in the scene itself: objects and lights it hides, by their
+/// indices in the file, and edits to their entries.
+#[derive(Deserialize, Default, Clone, Debug)]
+#[serde(default)]
+struct SceneView {
+    hidden_objects: Vec<usize>,
+    hidden_lights: Vec<usize>,
+    entries: far_core::scene_save::EntryEdits,
+}
+
 impl OpenScene {
-    /// The scene without the objects and lights the outliner hides, by their indices in
-    /// `Scene::objects` and `Scene::scene_lights`; None when nothing is hidden.
-    fn without(&self, objects: &[usize], lights: &[usize]) -> Option<Arc<Prepared>> {
-        let mut objects: Vec<usize> = objects.iter().copied().filter(|&o| o < self.scene.objects.len()).collect();
-        let mut lights: Vec<usize> = lights.iter().copied().filter(|&l| l < self.scene.scene_lights.len()).collect();
-        if objects.is_empty() && lights.is_empty() {
-            return None;
+    /// The scene as `view` changes it, edited and with what it hides left out, and its trees;
+    /// None when it changes nothing. The last one is kept, so a new image of the same view, a
+    /// click or an outline reuse it.
+    fn view(&self, view: &SceneView) -> Result<Option<Arc<Prepared>>, String> {
+        let clean = |items: &[usize], count: usize| {
+            let mut items: Vec<usize> = items.iter().copied().filter(|&i| i < count).collect();
+            items.sort_unstable();
+            items.dedup();
+            items
+        };
+        let objects = clean(&view.hidden_objects, self.scene.objects.len());
+        let lights = clean(&view.hidden_lights, self.scene.scene_lights.len());
+        let edited = !view.entries.is_empty();
+        if !edited && objects.is_empty() && lights.is_empty() {
+            return Ok(None);
         }
-        objects.sort_unstable();
-        objects.dedup();
-        lights.sort_unstable();
-        lights.dedup();
-        let key = (objects, lights);
-        let mut cache = self.hidden.lock().unwrap();
+        let key = serde_json::to_string(&(&view.entries, &objects, &lights)).map_err(|e| e.to_string())?;
+        let mut cache = self.view.lock().unwrap();
         if let Some((kept, prepared)) = cache.as_ref() {
             if *kept == key {
-                return Some(prepared.clone());
+                return Ok(Some(prepared.clone()));
             }
         }
-        let prepared = Arc::new(Prepared {
-            scene: self.scene.without(&key.0, &key.1),
-            kd_classic: OnceLock::new(), kd: OnceLock::new(), bvh: OnceLock::new(),
-        });
+        let scene = if edited {
+            let scene = self.scene.edited(&self.path, &view.entries)?;
+            if objects.is_empty() && lights.is_empty() { scene } else { scene.without(&objects, &lights) }
+        } else {
+            self.scene.without(&objects, &lights)
+        };
+        let prepared = Arc::new(Prepared { scene, kd_classic: OnceLock::new(), kd: OnceLock::new(), bvh: OnceLock::new() });
         *cache = Some((key, prepared.clone()));
-        Some(prepared)
+        Ok(Some(prepared))
     }
 
-    /// The scene with only object `object`, no lights: what of it lies behind others.
-    fn alone(&self, object: usize) -> Arc<Prepared> {
+    /// The scene, edited as `entries` say, with only object `object` and no lights: what of it
+    /// lies behind others.
+    fn alone(&self, entries: &far_core::scene_save::EntryEdits, object: usize) -> Result<Arc<Prepared>, String> {
+        let key = serde_json::to_string(&(entries, object)).map_err(|e| e.to_string())?;
         let mut cache = self.alone.lock().unwrap();
         if let Some((kept, prepared)) = cache.as_ref() {
-            if *kept == object {
-                return prepared.clone();
+            if *kept == key {
+                return Ok(prepared.clone());
             }
         }
         let others: Vec<usize> = (0..self.scene.objects.len()).filter(|&o| o != object).collect();
         let lights: Vec<usize> = (0..self.scene.scene_lights.len()).collect();
-        let prepared = Arc::new(Prepared {
-            scene: self.scene.without(&others, &lights),
-            kd_classic: OnceLock::new(), kd: OnceLock::new(), bvh: OnceLock::new(),
-        });
-        *cache = Some((object, prepared.clone()));
-        prepared
+        let scene = if entries.is_empty() {
+            self.scene.without(&others, &lights)
+        } else {
+            self.scene.edited(&self.path, entries)?.without(&others, &lights)
+        };
+        let prepared = Arc::new(Prepared { scene, kd_classic: OnceLock::new(), kd: OnceLock::new(), bvh: OnceLock::new() });
+        *cache = Some((key, prepared.clone()));
+        Ok(prepared)
+    }
+
+    /// The scene to work on for `view`, and its trees.
+    fn parts<'a>(&'a self, prepared: &'a Option<Arc<Prepared>>) -> (&'a Scene, &'a OnceLock<KdTree>, &'a OnceLock<KdTree>, &'a OnceLock<far_core::bvh::Bvh>) {
+        match prepared {
+            Some(p) => (&p.scene, &p.kd_classic, &p.kd, &p.bvh),
+            None => (&self.scene, &self.kd_classic, &self.kd, &self.bvh),
+        }
     }
 }
 
@@ -133,6 +162,8 @@ struct ObjectInfo {
     kind: &'static str,
     /// Its materials' ids, as in `SceneInfo::materials`.
     materials: Vec<usize>,
+    /// Its entry in the file, its material left out: the values the Object tab edits.
+    source: serde_json::Value,
 }
 
 /// A light of the scene file.
@@ -140,6 +171,8 @@ struct ObjectInfo {
 struct LightInfo {
     name: String,
     kind: &'static str,
+    /// Its entry in the file.
+    source: serde_json::Value,
 }
 
 /// What a click on the image found: an object or a light, by its index.
@@ -348,6 +381,9 @@ struct RenderRequest {
     hidden_objects: Vec<usize>,
     #[serde(default)]
     hidden_lights: Vec<usize>,
+    /// Moved or retuned objects and lights.
+    #[serde(default)]
+    entries: far_core::scene_save::EntryEdits,
     caustics: bool,
     photons: u32,
     caustic_radius: f32,
@@ -409,6 +445,15 @@ struct RenderResult {
     cpu_reason: Option<String>,
 }
 
+/// Entry `index` of the scene file's `list`, without its material, or null.
+fn entry(scene: &Scene, list: &str, index: usize) -> serde_json::Value {
+    let mut value = scene.source.as_deref().and_then(|s| s.get(list)).and_then(|l| l.get(index)).cloned().unwrap_or_default();
+    if let Some(object) = value.as_object_mut() {
+        object.remove("material");
+    }
+    value
+}
+
 fn open_scene(path: &Path, state: &AppState) -> Result<SceneInfo, String> {
     let scene = Scene::open(path)?;
     let mut seen = std::collections::HashSet::new();
@@ -440,8 +485,12 @@ fn open_scene(path: &Path, state: &AppState) -> Result<SceneInfo, String> {
         path: path.to_string_lossy().into_owned(),
         primitives: scene.prims.len(),
         lights: scene.lights.len() + scene.rect_lights.len() + scene.bulbs.len(),
-        objects: scene.objects.iter().map(|o| ObjectInfo { name: o.name.clone(), kind: o.kind, materials: o.materials.clone().collect() }).collect(),
-        light_list: scene.scene_lights.iter().map(|l| LightInfo { name: l.name.clone(), kind: l.kind }).collect(),
+        objects: scene.objects.iter().enumerate().map(|(i, o)| ObjectInfo {
+            name: o.name.clone(), kind: o.kind, materials: o.materials.clone().collect(), source: entry(&scene, "objects", i),
+        }).collect(),
+        light_list: scene.scene_lights.iter().enumerate().map(|(i, l)| LightInfo {
+            name: l.name.clone(), kind: l.kind, source: entry(&scene, "lights", i),
+        }).collect(),
         warnings: scene.warnings.clone(),
         bounces: {
             let auto = far_core::Bounces::for_scene(&scene);
@@ -452,7 +501,7 @@ fn open_scene(path: &Path, state: &AppState) -> Result<SceneInfo, String> {
     let save_to = writable_in_place(path, app_resources(state)).then(|| path.to_path_buf());
     *state.scene.lock().unwrap() = Some(Arc::new(OpenScene {
         scene, path: path.to_path_buf(), save_to: Mutex::new(save_to), kd_classic: OnceLock::new(), kd: OnceLock::new(), bvh: OnceLock::new(),
-        hidden: Mutex::new(None), alone: Mutex::new(None),
+        view: Mutex::new(None), alone: Mutex::new(None),
     }));
     Ok(info)
 }
@@ -892,31 +941,26 @@ fn load_scene(path: String, state: State<'_, AppState>) -> Result<SceneInfo, Str
 
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
-fn pick_focus(pose: far_core::Pose, width: u32, height: u32, x: f32, y: f32, use_kd: bool, hidden_objects: Option<Vec<usize>>,
-    hidden_lights: Option<Vec<usize>>, state: State<'_, AppState>) -> Result<Option<f32>, String> {
+fn pick_focus(pose: far_core::Pose, width: u32, height: u32, x: f32, y: f32, use_kd: bool, view: Option<SceneView>,
+    state: State<'_, AppState>) -> Result<Option<f32>, String> {
     pose.validate()?;
     let open = state.scene.lock().unwrap().clone().ok_or("No scene is open")?;
-    // What is hidden cannot be focused on.
-    let hidden = open.without(&hidden_objects.unwrap_or_default(), &hidden_lights.unwrap_or_default());
-    let (scene, kd) = match &hidden {
-        Some(h) => (&h.scene, &h.kd),
-        None => (&open.scene, &open.kd),
-    };
+    // What is hidden cannot be focused on, and what moved is focused where it is.
+    let prepared = open.view(&view.unwrap_or_default())?;
+    let (scene, _, kd, _) = open.parts(&prepared);
     Ok(far_core::camera::pick_focus(scene, if use_kd { kd.get() } else { None }, &pose, width, height, x, y))
 }
 
 /// The object or light under a point of the image, with the hidden ones left out.
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
-fn pick_object(pose: far_core::Pose, width: u32, height: u32, x: f32, y: f32, use_kd: bool, hidden_objects: Vec<usize>,
-    hidden_lights: Vec<usize>, state: State<'_, AppState>) -> Result<Option<PickedInfo>, String> {
+fn pick_object(pose: far_core::Pose, width: u32, height: u32, x: f32, y: f32, use_kd: bool, view: SceneView,
+    state: State<'_, AppState>) -> Result<Option<PickedInfo>, String> {
     pose.validate()?;
     let open = state.scene.lock().unwrap().clone().ok_or("No scene is open")?;
-    let hidden = open.without(&hidden_objects, &hidden_lights);
-    let (scene, kd) = match &hidden {
-        Some(h) => (&h.scene, &h.kd),
-        None => (&open.scene, &open.kd),
-    };
+    let prepared = open.view(&view)?;
+    let (scene, _, kd, _) = open.parts(&prepared);
+    let hidden_lights = &view.hidden_lights;
     let picked = far_core::camera::pick(scene, if use_kd { kd.get() } else { None }, &pose, width, height, x, y);
     Ok(picked.and_then(|(found, _)| found).map(|found| match found {
         far_core::scene::Picked::Object(id) => PickedInfo::Object(id),
@@ -933,16 +977,13 @@ fn pick_object(pose: far_core::Pose, width: u32, height: u32, x: f32, y: f32, us
 /// object is its index plus one, and a light is its index, as the file gives it, with the top
 /// bit set: `ID_LIGHT`. Objects past the first 32766 are not told apart.
 #[tauri::command(async)]
-fn object_ids(pose: far_core::Pose, width: u32, height: u32, hidden_objects: Vec<usize>, hidden_lights: Vec<usize>,
-    state: State<'_, AppState>) -> Result<Response, String> {
+fn object_ids(pose: far_core::Pose, width: u32, height: u32, view: SceneView, state: State<'_, AppState>) -> Result<Response, String> {
     pose.validate()?;
     id_map_size(width, height)?;
     let open = state.scene.lock().unwrap().clone().ok_or("No scene is open")?;
-    let hidden = open.without(&hidden_objects, &hidden_lights);
-    let (scene, kd) = match &hidden {
-        Some(h) => (&h.scene, &h.kd),
-        None => (&open.scene, &open.kd),
-    };
+    let prepared = open.view(&view)?;
+    let (scene, _, kd, _) = open.parts(&prepared);
+    let hidden_lights = &view.hidden_lights;
     let kd = kd.get_or_init(|| KdTree::for_mode(scene, Mode::Enhanced));
     let shown: Vec<u32> = (0..open.scene.scene_lights.len() as u32).filter(|l| !hidden_lights.contains(&(*l as usize))).collect();
     let ids = far_core::camera::object_ids(scene, Some(kd), &pose, width, height);
@@ -968,23 +1009,26 @@ fn short_id(id: u32, shown: &[u32]) -> u16 {
 /// Where object `object` would show if nothing else were in the scene, one byte per pixel,
 /// 1 or 0: with the ID map, what of it lies behind other things.
 #[tauri::command(async)]
-fn object_xray(pose: far_core::Pose, width: u32, height: u32, object: usize, state: State<'_, AppState>) -> Result<Response, String> {
+fn object_xray(pose: far_core::Pose, width: u32, height: u32, object: usize, view: Option<SceneView>, state: State<'_, AppState>)
+    -> Result<Response, String> {
     pose.validate()?;
     id_map_size(width, height)?;
     let open = state.scene.lock().unwrap().clone().ok_or("No scene is open")?;
     if object >= open.scene.objects.len() {
         return Err("Unknown object".into());
     }
-    let alone = open.alone(object);
+    let alone = open.alone(&view.unwrap_or_default().entries, object)?;
     let kd = alone.kd.get_or_init(|| KdTree::for_mode(&alone.scene, Mode::Enhanced));
     let ids = far_core::camera::object_ids(&alone.scene, Some(kd), &pose, width, height);
     Ok(Response::new(ids.into_iter().map(|id| (id == object as u32 + 1) as u8).collect::<Vec<u8>>()))
 }
 
 #[tauri::command(async)]
-fn scene_geometry(state: State<'_, AppState>) -> Result<far_core::preview::PreviewScene, String> {
+fn scene_geometry(view: Option<SceneView>, state: State<'_, AppState>) -> Result<far_core::preview::PreviewScene, String> {
     let open = state.scene.lock().unwrap().clone().ok_or("No scene is open")?;
-    Ok(far_core::preview::describe(&open.scene))
+    // The quick 3D view shows the scene as the interface changed it.
+    let prepared = open.view(&view.unwrap_or_default())?;
+    Ok(far_core::preview::describe(open.parts(&prepared).0))
 }
 
 #[tauri::command]
@@ -1035,6 +1079,9 @@ struct SaveSceneRequest {
     #[serde(default)]
     material_overrides: Vec<MaterialOverride>,
     render: serde_json::Value,
+    /// Moved or retuned objects and lights.
+    #[serde(default)]
+    entries: far_core::scene_save::EntryEdits,
 }
 
 #[derive(Serialize)]
@@ -1108,6 +1155,7 @@ fn save_scene(choose: bool, request: SaveSceneRequest, app: AppHandle, state: St
         environment: request.environment,
         materials: request.material_overrides.iter().map(|m| (m.id, m.edit())).collect(),
         render: Some(request.render),
+        entries: request.entries,
     };
     let warnings = far_core::scene_save::save(&open.scene, &open.path, &target, &edits)?;
     *open.save_to.lock().unwrap() = Some(target.clone());
@@ -1205,12 +1253,12 @@ fn render_scene(
         other => return Err(format!("Unknown mode: {other}")),
     };
 
-    // What the outliner hides is left out of the scene, which then has trees of its own.
-    let hidden = open.without(&request.hidden_objects, &request.hidden_lights);
-    let (base, kd_classic, kd_tree, bvh_cache) = match &hidden {
-        Some(h) => (&h.scene, &h.kd_classic, &h.kd, &h.bvh),
-        None => (&open.scene, &open.kd_classic, &open.kd, &open.bvh),
+    // What the interface edits and hides changes the scene, which then has trees of its own.
+    let view = SceneView {
+        hidden_objects: request.hidden_objects.clone(), hidden_lights: request.hidden_lights.clone(), entries: request.entries.clone(),
     };
+    let hidden = open.view(&view)?;
+    let (base, kd_classic, kd_tree, bvh_cache) = open.parts(&hidden);
     let mut kd_ms = None;
     let kd = request.use_kd.then(|| {
         let cache = if mode == Mode::Classic { kd_classic } else { kd_tree };
@@ -1334,7 +1382,7 @@ fn render_scene(
         request.max_bounces, request.indirect_clamp, request.caustics, request.photons, request.caustic_radius,
         request.caustic_strength, request.width, request.height, request.use_kd, request.depth, request.region,
         request.noise_threshold) + &format!("|{:?}|{:?}|{}|{:?}|{:?}", request.glossy_depth, request.transmission_depth, gpu.is_some(),
-        hidden.as_ref().map(Arc::as_ptr), (&request.hidden_objects, &request.hidden_lights)));
+        hidden.as_ref().map(Arc::as_ptr), (&request.hidden_objects, &request.hidden_lights, &request.entries)));
     // A new kept render replaces what was kept, which frees its memory early.
     let previous = reuse_key.as_ref().and_then(|key| match state.accumulation.lock().unwrap().take() {
         Some((kept, accumulation)) if &kept == key => Some(accumulation),
@@ -1581,15 +1629,30 @@ mod tests {
         assert!(objects > 3 && lights > 0, "{objects} objects, {lights} lights");
         let open = OpenScene {
             scene, path, save_to: Mutex::new(None), kd_classic: OnceLock::new(), kd: OnceLock::new(), bvh: OnceLock::new(),
-            hidden: Mutex::new(None), alone: Mutex::new(None),
+            view: Mutex::new(None), alone: Mutex::new(None),
         };
-        assert!(open.without(&[], &[]).is_none());
-        assert!(open.without(&[objects + 5], &[]).is_none(), "indices past the end are ignored");
+        let hide = |objects: &[usize], lights: &[usize]| SceneView {
+            hidden_objects: objects.to_vec(), hidden_lights: lights.to_vec(), ..Default::default()
+        };
+        assert!(open.view(&hide(&[], &[])).unwrap().is_none());
+        assert!(open.view(&hide(&[objects + 5], &[])).unwrap().is_none(), "indices past the end are ignored");
         // The same hidden set, in any order, is the same scene.
-        let first = open.without(&[2, 0], &[0]).unwrap();
-        let again = open.without(&[0, 2, 2], &[0]).unwrap();
+        let first = open.view(&hide(&[2, 0], &[0])).unwrap().unwrap();
+        let again = open.view(&hide(&[0, 2, 2], &[0])).unwrap().unwrap();
         assert!(Arc::ptr_eq(&first, &again));
         assert_eq!(first.scene.scene_lights.len(), lights - 1);
+        // Edits read the scene again, cached by what they change; one the file cannot take is
+        // an error.
+        let moved = |intensity: f32| SceneView {
+            entries: far_core::scene_save::EntryEdits {
+                lights: vec![(0, serde_json::json!({"intensity": intensity}).as_object().unwrap().clone())], ..Default::default()
+            },
+            ..Default::default()
+        };
+        let edited = open.view(&moved(2.5)).unwrap().unwrap();
+        assert!(Arc::ptr_eq(&edited, &open.view(&moved(2.5)).unwrap().unwrap()));
+        assert_eq!(edited.scene.prims.len(), open.scene.prims.len());
+        assert!(open.view(&moved(-1.0)).is_err());
         assert!(first.scene.prims.len() < open.scene.prims.len());
         assert!((0..first.scene.prims.len()).all(|p| !matches!(first.scene.object_of(p), Some(0) | Some(2))));
         // The image's middle shows one of the box's objects, named as the outliner lists them.

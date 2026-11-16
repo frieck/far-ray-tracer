@@ -448,6 +448,19 @@ impl Scene {
         Self::from_far(&data, path)
     }
 
+    /// The scene read again from its file with edits to its objects and lights: each edit's
+    /// fields replace those of `objects[i]` or `lights[i]` in the file, as Save Scene writes
+    /// them. Everything is read anew, so any field of any kind can change; read errors, such as
+    /// a negative radius, come back as errors. `path` is the file the scene was read from.
+    pub fn edited(&self, path: &Path, edits: &crate::scene_save::EntryEdits) -> Result<Scene, String> {
+        let mut source = self.source.as_deref().cloned()
+            .ok_or("This scene was not read from a .far file, so its objects cannot be edited")?;
+        if let Some(root) = source.as_object_mut() {
+            edits.apply(root);
+        }
+        Scene::from_source(source, path)
+    }
+
     /// The object primitive `prim` belongs to, as an index in `objects`.
     pub fn object_of(&self, prim: usize) -> Option<usize> {
         self.prim_objects.get(prim).map(|&o| o as usize).filter(|&o| o < self.objects.len())
@@ -1032,6 +1045,36 @@ mod outliner_tests {
         let xray = object_ids(&alone, Some(&kd), &pose, w, h);
         assert!(ids.iter().zip(&xray).all(|(&shown, &all)| shown != 2 || all == 2));
         assert!(xray.iter().filter(|&&i| i == 2).count() > ids.iter().filter(|&&i| i == 2).count());
+    }
+
+    #[test]
+    fn edits_move_objects_and_retune_lights_as_the_file_would() {
+        use crate::scene_save::EntryEdits;
+        let text = format!(r#"{{"lights":[{LIGHTS}],"objects":[{OBJECTS}]}}"#);
+        let mut scene = read(&text);
+        scene.source = Some(std::sync::Arc::new(serde_json::from_str(&text).unwrap()));
+        let fields = |value: serde_json::Value| value.as_object().unwrap().clone();
+        let edits = EntryEdits {
+            objects: vec![(1, fields(serde_json::json!({"center": [1, 2, 3], "radius": 0.5})))],
+            lights: vec![(1, fields(serde_json::json!({"intensity": 6, "spot_angle": 20})))],
+        };
+        let edited = scene.edited(Path::new("test.far"), &edits).unwrap();
+        // The same file with those fields written in reads the same.
+        let mut file: serde_json::Value = serde_json::from_str(&text).unwrap();
+        file["objects"][1]["center"] = serde_json::json!([1, 2, 3]);
+        file["objects"][1]["radius"] = serde_json::json!(0.5);
+        file["lights"][1]["intensity"] = serde_json::json!(6);
+        file["lights"][1]["spot_angle"] = serde_json::json!(20);
+        let expected = read(&file.to_string());
+        let ball = |s: &Scene| s.prims.iter().enumerate().find(|(p, _)| s.object_of(*p) == Some(1))
+            .map(|(_, p)| match p { Primitive::Sphere(e) => (e.center.array(), e.radius), _ => unreachable!() }).unwrap();
+        assert_eq!(ball(&edited), ([1.0, 2.0, 3.0], 0.5));
+        assert_eq!(ball(&edited), ball(&expected));
+        assert_eq!(edited.materials[edited.bulbs[0].material].color.array(), expected.materials[expected.bulbs[0].material].color.array());
+        assert_eq!(edited.objects, scene.objects, "names and materials stay");
+        // A bad value is an error, not a broken scene.
+        let bad = EntryEdits { objects: vec![(1, fields(serde_json::json!({"radius": -1})))], ..Default::default() };
+        assert!(scene.edited(Path::new("test.far"), &bad).is_err());
     }
 
     #[test]

@@ -634,6 +634,29 @@ Objects groups, or find things by name with the magnifier.
   glowing object stops glowing. **Show all** brings everything back. What is hidden is saved
   with the scene, in its render settings, and the scene file itself does not change.
 
+**Editing objects and lights.** The **Object** tab, or the move button at the bottom of the
+outliner, shows the selection's place and size, and a light's light, as fields of its entry
+in the scene file:
+
+| Kind | Fields |
+| --- | --- |
+| Sphere, box, cylinder, tube, cone, torus | Center, the shape's sizes, rotation |
+| Ground | A point it passes through, the way it faces |
+| Plane | Where the middle of its corners is |
+| 3DS mesh | Position, size |
+| Model | Position, rotation, scale (or size, when the file gives one) |
+| Volume | Center, size or radius, rotation, density, color, anisotropy |
+| Point light | Position, radius, color |
+| Area light | Position, color, intensity, width, height |
+| Sphere light, spotlight, IES light | Position, radius, color, intensity; a spotlight's and an IES light's direction, a spotlight's cone and soft edge |
+
+Each field drags or takes a typed value; vectors have one per axis. **Reset** goes back to the
+file's values, and **Save Scene** writes the edits into the file. An edit replaces those
+fields of the entry and the engine reads the scene again, as it would the saved file: about
+70 ms for the Still life, plus its tree, so renders, the quick 3D view, the outline and clicks
+follow at once. A value the file cannot take, such as a negative radius, is reported and the
+last view stays.
+
 Hiding builds the scene again without those objects, and a new KD-Tree or BVH for it; the same
 set hidden again reuses them. A model counts as one object, its parts as its materials.
 

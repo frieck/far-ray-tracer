@@ -114,12 +114,29 @@ export interface SceneObjectInfo {
   kind: string;
   /** Its materials' ids, as in `SceneInfo.materials`. */
   materials: number[];
+  /** Its entry in the file, without its material: what the Object tab edits. */
+  source: Record<string, unknown>;
 }
 
 export interface SceneLightInfo {
   name: string;
   /** point, rectangle, sphere, spot or ies. */
   kind: string;
+  /** Its entry in the file. */
+  source: Record<string, unknown>;
+}
+
+/** Fields that replace those of the file's objects and lights, by index, as the engine reads them. */
+export interface EntryEdits {
+  objects: [number, Record<string, unknown>][];
+  lights: [number, Record<string, unknown>][];
+}
+
+/** What the interface changes in the scene itself, for the commands that look at it. */
+export interface SceneViewArgs {
+  hidden_objects: number[];
+  hidden_lights: number[];
+  entries: EntryEdits;
 }
 
 /** What the outliner has selected: an object or a light, by its index. */
@@ -200,6 +217,7 @@ export interface RenderRequest {
   /** What the outliner hides, by index in the scene's objects and lights. */
   hidden_objects: number[];
   hidden_lights: number[];
+  entries: EntryEdits;
   caustics: boolean;
   photons: number;
   caustic_radius: number;
@@ -275,6 +293,9 @@ export interface Settings {
   /** Objects and lights the outliner hides, by index; saved with the scene. */
   hiddenObjects: number[];
   hiddenLights: number[];
+  /** Edited fields of the file's objects and lights, by index; Save Scene writes them in. */
+  objectEdits: Record<number, Record<string, unknown>>;
+  lightEdits: Record<number, Record<string, unknown>>;
   denoise: boolean;
   bloom: boolean;
   caustics: boolean;

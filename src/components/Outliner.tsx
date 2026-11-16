@@ -1,6 +1,6 @@
 import {
   Box, Camera, ChevronRight, Circle, Cloud, CloudFog, Cone, Cylinder, Eye, EyeOff, Flashlight, Globe, Grid2x2, Lamp, Lightbulb,
-  Package, RectangleHorizontal, ScanEye, Search, Sparkles, Square, Sun, Torus, Triangle, X, type LucideIcon,
+  Move3d, Package, RectangleHorizontal, ScanEye, Search, Sparkles, Square, Sun, Torus, Triangle, X, type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { SceneInfo, Selection } from "../types";
@@ -53,6 +53,8 @@ interface OutlinerProps {
   onOpenEnvironment: () => void;
   /** Opens a material in the Materials tab. */
   onEditMaterial: (id: number) => void;
+  /** Opens the selection in the Object tab. */
+  onEditObject: () => void;
   /** Folds the whole panel to its header. */
   collapsed: boolean;
   onCollapsedChange: (collapsed: boolean) => void;
@@ -176,6 +178,10 @@ export function Outliner(props: OutlinerProps) {
                 <span className="outliner-kind">
                   {selected ? OBJECT_KINDS[selected.kind]?.label ?? selected.kind : LIGHT_KINDS[selectedLight!.kind]?.label ?? selectedLight!.kind}
                 </span>
+                <button type="button" className="outliner-eye" aria-label="Move, turn or resize it" title="Move, turn or resize it"
+                  onClick={props.onEditObject}>
+                  <Move3d size={13} aria-hidden="true" />
+                </button>
                 <button type="button" className="outliner-eye" aria-pressed={!isHidden}
                   aria-label={isHidden ? "Show it" : "Hide it"} title={isHidden ? "Show" : "Hide"}
                   onClick={() => selection.kind === "object"
@@ -204,7 +210,6 @@ export function Outliner(props: OutlinerProps) {
                   })}
                 </div>
               )}
-              {selectedLight && <p className="outliner-note">Lights are edited in the scene file for now.</p>}
             </div>
           ) : (
             <p className="outliner-note">Click an object in the image or the list to select it.</p>

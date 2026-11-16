@@ -1,5 +1,5 @@
 import {
-  Camera, Cpu, Crosshair, Download, FolderOpen, Gauge, History, Palette, Play, Repeat, RotateCcw, Save, Search, SlidersHorizontal, Square,
+  Camera, Cpu, Crosshair, Download, FolderOpen, Gauge, History, Move3d, Palette, Play, Repeat, RotateCcw, Save, Search, SlidersHorizontal, Square,
   Sun, X, type LucideIcon,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -48,7 +48,8 @@ import { CausticStats } from "./CausticStats";
 import { GlassPanel } from "./GlassPanel";
 import { NumberField } from "./NumberField";
 import { Segmented } from "./Segmented";
-import { ButtonRow, CheckRow, Choice, ChoiceRow, Hint, Row, ScrubRow, SearchContext, Section } from "./props";
+import { ButtonRow, CheckRow, Choice, ChoiceRow, ColorRow, Hint, Row, ScrubRow, SearchContext, Section, VectorRow } from "./props";
+import { fieldsFor, middle, movedCorners, resizedEdge, valueOf, type Field, type Vec3 } from "../objectFields";
 
 interface ControlPanelProps {
   loadingEnvironment: boolean;
@@ -84,15 +85,18 @@ interface ControlPanelProps {
   onExpandMaterial: () => void;
   /** A tab to show, as the outliner asks; `serial` grows with each request. */
   openTab: { tab: string; serial: number } | null;
+  /** What the outliner has selected, which the Object tab edits. */
+  selection: import("../types").Selection;
 }
 
 /** Most rebound limit the field shows as a number; one step past it means no limit. */
 const MAX_REBOUND_LIMIT = 50;
 
-type Tab = "render" | "light" | "camera" | "image" | "materials" | "system" | "evolution";
+type Tab = "render" | "object" | "light" | "camera" | "image" | "materials" | "system" | "evolution";
 
 const TABS: { id: Tab; label: string; icon: LucideIcon; enhancedOnly: boolean }[] = [
   { id: "render", label: "Render", icon: Gauge, enhancedOnly: false },
+  { id: "object", label: "Object", icon: Move3d, enhancedOnly: true },
   { id: "light", label: "Light", icon: Sun, enhancedOnly: true },
   { id: "camera", label: "Camera", icon: Camera, enhancedOnly: true },
   { id: "image", label: "Image", icon: SlidersHorizontal, enhancedOnly: true },
@@ -211,7 +215,7 @@ export function ControlPanel(props: ControlPanelProps) {
           </div>
           <SearchContext.Provider value={query}>
             {searching ? (
-              TABS.filter((t) => t.id !== "materials" && !(t.enhancedOnly && !enhanced)).map((t) => (
+              TABS.filter((t) => t.id !== "materials" && t.id !== "object" && !(t.enhancedOnly && !enhanced)).map((t) => (
                 <div key={t.id} className="search-group">
                   <h2 className="search-group-title">{t.label}</h2>
                   {tabContent(t.id, context)}
@@ -241,6 +245,7 @@ interface TabContext {
 function tabContent(tab: Tab, context: TabContext): ReactNode {
   switch (tab) {
     case "render": return <RenderTab {...context} />;
+    case "object": return <ObjectTab {...context} />;
     case "light": return <LightTab {...context} />;
     case "camera": return <CameraTab {...context} />;
     case "image": return <ImageTab {...context} />;
@@ -684,6 +689,82 @@ function ImageTab({ props, update, enhanced }: TabContext) {
       </Section>
     </>
   );
+}
+
+/** The selected object's or light's place, size and light, as fields of its entry in the file. */
+function ObjectTab({ props, update }: TabContext) {
+  const { settings, scene, selection } = props;
+  if (!scene) return <Hint>Open a scene to edit its objects.</Hint>;
+  if (!selection) return <Hint>Select an object or a light in the outliner or the image to move, turn or resize it.</Hint>;
+  const light = selection.kind === "light";
+  const entry = light ? scene.light_list[selection.id] : scene.objects[selection.id];
+  if (!entry) return null;
+  const key = light ? "lightEdits" : "objectEdits";
+  const all = settings[key];
+  const edits = all[selection.id];
+  const fields = fieldsFor(entry.kind, entry.source, light);
+  const set = (field: string, value: unknown) =>
+    update({ [key]: { ...all, [selection.id]: { ...edits, [field]: value } } } as Partial<Settings>);
+  const reset = () => {
+    const rest = { ...all };
+    delete rest[selection.id];
+    update({ [key]: rest } as Partial<Settings>);
+  };
+  const changed = edits !== undefined && Object.keys(edits).length > 0;
+  return (
+    <Section id={light ? "object-light" : "object-transform"} title={entry.name}
+      extra={
+        <button type="button" className="prop-mini" disabled={!changed} onClick={reset} title="Back to the scene file's values">
+          <RotateCcw size={11} aria-hidden="true" />
+          Reset
+        </button>
+      }>
+      {fields.length === 0 && <Hint>Fog fills the scene; its density and color are in the scene file.</Hint>}
+      {fields.map((field) => <FieldRow key={field.key} field={field} source={entry.source} edits={edits} onChange={set} />)}
+      <Hint>Saved into the scene file with Save Scene.</Hint>
+    </Section>
+  );
+}
+
+function FieldRow({ field, source, edits, onChange }: {
+  field: Field;
+  source: Record<string, unknown>;
+  edits: Record<string, unknown> | undefined;
+  onChange: (key: string, value: unknown) => void;
+}) {
+  const value = valueOf(field, source, edits);
+  const degrees = (v: number) => `${Number(v.toFixed(1))}°`;
+  switch (field.type) {
+    case "vector":
+      return (
+        <VectorRow label={field.label} value={value as Vec3} min={field.min} max={field.max} step={field.step} hard={field.hard}
+          hint={field.hint} format={field.angle ? degrees : undefined} onChange={(v) => onChange(field.key, v)} />
+      );
+    case "number":
+      return (
+        <ScrubRow label={field.label} value={value as number} min={field.min} max={field.max} step={field.step} hard={field.hard}
+          strict={field.strict} log={field.log} hint={field.hint} format={field.angle ? degrees : undefined}
+          onChange={(v) => onChange(field.key, v)} />
+      );
+    case "color":
+      return <ColorRow label={field.label} value={value as Vec3} onChange={(v) => onChange(field.key, v)} />;
+    case "corners": {
+      const points = (edits?.points ?? source.points) as Vec3[] | undefined;
+      if (!points) return null;
+      return (
+        <VectorRow label={field.label} value={middle(points)} min={-20} max={20} step={0.01} hard={[-1e6, 1e6]}
+          hint="Where the middle of its four corners is." onChange={(v) => onChange("points", movedCorners(points, v))} />
+      );
+    }
+    case "edge": {
+      const edge = (edits?.[field.key] ?? source[field.key]) as Vec3 | undefined;
+      if (!edge) return null;
+      return (
+        <ScrubRow label={field.label} value={Math.hypot(...edge)} min={0.01} max={20} step={0.01} hard={[1e-4, 1e6]}
+          onChange={(v) => onChange(field.key, resizedEdge(edge, v))} />
+      );
+    }
+  }
 }
 
 function MaterialsTab({ props, update }: TabContext) {

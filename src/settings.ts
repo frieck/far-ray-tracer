@@ -381,6 +381,8 @@ export function defaultSettings(cores: number): Settings {
     lutStrength: 1,
     hiddenObjects: [],
     hiddenLights: [],
+    objectEdits: {},
+    lightEdits: {},
     denoise: true,
     bloom: false,
     caustics: false,
@@ -512,7 +514,22 @@ export function sceneSaveRequest(settings: Settings) {
     environment: settings.environment,
     material_overrides: settings.materialOverrides,
     render: savedRenderSettings(settings),
+    entries: entryEdits(settings),
   };
+}
+
+/** The edits to the file's objects and lights, as the engine takes them. */
+export function entryEdits(settings: Settings): import("./types").EntryEdits {
+  const list = (edits: Record<number, Record<string, unknown>>) => Object.entries(edits)
+    .filter(([, fields]) => Object.keys(fields).length > 0)
+    .map(([index, fields]) => [Number(index), fields] as [number, Record<string, unknown>])
+    .sort((a, b) => a[0] - b[0]);
+  return { objects: list(settings.objectEdits), lights: list(settings.lightEdits) };
+}
+
+/** What the interface changes in the scene, for picking, outlines and the 3D view. */
+export function sceneView(settings: Settings): import("./types").SceneViewArgs {
+  return { hidden_objects: settings.hiddenObjects, hidden_lights: settings.hiddenLights, entries: entryEdits(settings) };
 }
 
 /** A small, quick image to follow the camera while it moves. */
@@ -574,6 +591,7 @@ export function buildRequest(settings: Settings, mode: Mode, keep: boolean): Ren
     lut_strength: settings.lutStrength,
     hidden_objects: settings.hiddenObjects,
     hidden_lights: settings.hiddenLights,
+    entries: entryEdits(settings),
     caustics: settings.caustics,
     ...causticValues(settings),
     caustics_only: false,

@@ -138,8 +138,10 @@ Visual gain for the effort:
 - [x] **OBJ and glTF import**: models from any 3D program, with their materials. Medium.
 - [x] **Outliner, first part**: the scene's camera, environment, lights and objects in a list,
   with names, selection from the list or the image, its outline on the image, and hiding.
-- [ ] **Outliner, next**: editing lights
-  (color, strength, place); a model's parts as children; renaming. Medium.
+- [x] **Editing objects and lights**: place, rotation and sizes, and a light's color,
+  intensity, size and cone, in the Object tab, saved into the scene file.
+- [ ] **Outliner, next**: a move gizmo on the image; adding, duplicating and deleting objects;
+  a model's parts as children; renaming; undo. Medium.
 - [ ] **Instancing**: many copies of an object for almost no memory. Medium.
 - [ ] **Subdivision surfaces**: smooth meshes from coarse ones. High.
 - [ ] **CSG (boolean operations)**: would carve the material ball's medallion into the
