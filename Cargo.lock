@@ -1835,6 +1835,7 @@ dependencies = [
  "bytemuck",
  "byteorder-lite",
  "color_quant",
+ "exr",
  "gif",
  "moxcms",
  "num-traits",

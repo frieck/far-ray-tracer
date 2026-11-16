@@ -16,7 +16,7 @@ export interface SkyConfig {
 }
 
 export interface EnvironmentConfig {
-  /** An HDR image; empty when `sky` computes the environment. */
+  /** A panorama (HDR, EXR, PNG or JPEG); empty when `sky` computes the environment. */
   path: string;
   sky?: SkyConfig | null;
   intensity: number;

@@ -6,7 +6,7 @@ use std::{path::Path, sync::Arc};
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct EnvironmentConfig {
-    /// An HDR image; empty when `sky` computes the environment instead.
+    /// A panorama (HDR, EXR, PNG or JPEG); empty when `sky` computes the environment instead.
     pub path: String,
     /// A physical sky and sun in place of an image.
     pub sky: Option<crate::sky::SkyConfig>,
@@ -25,7 +25,7 @@ impl EnvironmentConfig {
     pub fn validate(&self) -> Result<(), String> {
         match &self.sky {
             Some(sky) => sky.validate()?,
-            None if self.path.is_empty() => return Err("Choose an HDR environment file".into()),
+            None if self.path.is_empty() => return Err("Choose an environment image".into()),
             None => {}
         }
         if !self.intensity.is_finite() || !(0.0..=100.0).contains(&self.intensity)
@@ -75,6 +75,11 @@ impl Environment {
     }
 }
 
+/// An sRGB-encoded value from 0 to 1 as linear light.
+fn srgb_to_linear(v: f32) -> f32 {
+    if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+}
+
 pub struct EnvironmentMap {
     width: usize,
     height: usize,
@@ -84,19 +89,44 @@ pub struct EnvironmentMap {
     rows: Vec<f64>,
 }
 impl EnvironmentMap {
+    /// Reads a latitude-longitude panorama: Radiance HDR or OpenEXR as linear light, or an
+    /// 8- or 16-bit PNG, JPEG, TGA or BMP, whose sRGB values become linear light up to 1.
     pub fn load(path: &Path) -> Result<Self, String> {
+        let format = Self::format(path)?;
         let read = || -> Result<image::ImageReader<std::io::BufReader<std::fs::File>>, String> {
             let mut reader = image::ImageReader::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-            reader.set_format(image::ImageFormat::Hdr);
+            reader.set_format(format);
+            reader.no_limits();
             Ok(reader)
         };
-        let (w, h) = read()?.into_dimensions().map_err(|e| format!("Invalid HDR: {e}"))?;
+        let invalid = |e: image::ImageError| format!("Invalid environment {}: {e}", path.display());
+        let (w, h) = read()?.into_dimensions().map_err(invalid)?;
         if w == 0 || h == 0 || w as u64 * h as u64 > 16_777_216 {
-            return Err("HDR environments must contain 1 to 16,777,216 pixels".into());
+            return Err("Environment images must contain 1 to 16,777,216 pixels".into());
         }
-        let image = read()?.decode().map_err(|e| format!("Invalid HDR: {e}"))?.into_rgb32f();
-        let pixels = image.pixels().map(|p| Color::new(p[0], p[1], p[2])).collect();
+        let image = read()?.decode().map_err(invalid)?;
+        let linear = matches!(format, image::ImageFormat::Hdr | image::ImageFormat::OpenExr);
+        let pixels = if linear {
+            image.into_rgb32f().pixels().map(|p| Color::new(p[0].max(0.), p[1].max(0.), p[2].max(0.))).collect()
+        } else {
+            let table: Vec<f32> = (0..=u16::MAX).map(|v| srgb_to_linear(v as f32 / u16::MAX as f32)).collect();
+            image.into_rgb16().pixels().map(|p| Color::new(table[p[0] as usize], table[p[1] as usize], table[p[2] as usize])).collect()
+        };
         Self::new(w as usize, h as usize, pixels)
+    }
+
+    /// The format of an environment file, from its first bytes, or from its name for Radiance
+    /// files, whose header varies.
+    fn format(path: &Path) -> Result<image::ImageFormat, String> {
+        use image::ImageFormat::*;
+        let guessed = image::ImageReader::open(path).map_err(|e| format!("{}: {e}", path.display()))?
+            .with_guessed_format().map_err(|e| format!("{}: {e}", path.display()))?.format();
+        match guessed.or_else(|| image::ImageFormat::from_path(path).ok()) {
+            Some(format @ (Hdr | OpenExr | Png | Jpeg | Tga | Bmp)) => Ok(format),
+            None => Ok(Hdr),
+            Some(other) => Err(format!("{}: {other:?} images cannot be environments; use HDR, EXR, PNG or JPEG",
+                path.display())),
+        }
     }
     pub(crate) fn new(width: usize, height: usize, pixels: Vec<Color>) -> Result<Self, String> {
         if pixels.iter().any(|p| p.array().iter().any(|v| !v.is_finite() || *v < 0.)) {
@@ -343,6 +373,46 @@ mod tests {
         assert!(EnvironmentMap::load(&path.with_extension("missing")).is_err());
         let bad = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/techniques/hdri-studio.far");
         assert!(EnvironmentMap::load(&bad).is_err());
+    }
+    #[test]
+    fn exr_panoramas_load_as_the_same_light_and_png_ones_as_linear_light() {
+        let hdr = EnvironmentMap::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/environments/studio.hdr")).unwrap();
+        let folder = std::env::temp_dir().join(format!("far-environment-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        // The same panorama as EXR, under a name that hides its format.
+        let exr = folder.join("studio.panorama");
+        exr::prelude::write_rgb_file(&exr, hdr.width, hdr.height, |x, y| {
+            let p = hdr.pixels[y * hdr.width + x];
+            (p.x, p.y, p.z)
+        }).unwrap();
+        let png = folder.join("gray.png");
+        image::RgbImage::from_raw(2, 1, vec![255, 128, 0, 0, 0, 0]).unwrap().save(&png).unwrap();
+        let gif = folder.join("gray.gif");
+        image::RgbaImage::new(2, 1).save(&gif).unwrap();
+        let (from_exr, from_png, from_gif) = (EnvironmentMap::load(&exr), EnvironmentMap::load(&png), EnvironmentMap::load(&gif));
+        let _ = std::fs::remove_dir_all(&folder);
+        let from_exr = from_exr.unwrap();
+        assert_eq!((from_exr.width, from_exr.height), (hdr.width, hdr.height));
+        assert!(from_exr.pixels == hdr.pixels, "EXR keeps every value of the HDR");
+        let from_png = from_png.unwrap();
+        assert_eq!(from_png.pixels[0].x, 1.0);
+        assert!((from_png.pixels[0].y - 0.2158).abs() < 1e-3, "sRGB 128 is 21.6% of the light");
+        assert_eq!(from_png.pixels[0].z, 0.0);
+        assert!(from_gif.is_err_and(|e| e.contains("cannot be environments")));
+    }
+    #[test]
+    fn the_bundled_studio_maps_hold_the_hdr_light() {
+        // Rewritten from studio.hdr by `cargo run -p far-core --example studio_environments`.
+        let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/environments");
+        let hdr = EnvironmentMap::load(&folder.join("studio.hdr")).unwrap();
+        assert!(EnvironmentMap::load(&folder.join("studio.exr")).unwrap().pixels == hdr.pixels);
+        for name in ["studio.png", "studio.jpg"] {
+            let ldr = EnvironmentMap::load(&folder.join(name)).unwrap();
+            assert_eq!((ldr.width, ldr.height), (hdr.width, hdr.height));
+            let close = ldr.pixels.iter().zip(&hdr.pixels)
+                .filter(|(l, h)| (0..3).all(|k| (l.array()[k] - h.array()[k].min(1.)).abs() < 0.03)).count();
+            assert!(close * 100 > hdr.pixels.len() * 99, "{name}: the HDR's light, clipped at 1");
+        }
     }
     #[test]
     fn invalid_configuration_is_rejected() {

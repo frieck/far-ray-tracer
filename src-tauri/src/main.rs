@@ -357,9 +357,9 @@ fn example_scenes(app: &AppHandle) -> Vec<SceneEntry> {
 }
 
 /// Turns a file name such as `plane-and-mesh` into `Plane and mesh`, keeping acronyms such
-/// as GGX and HDRI in capitals.
+/// as GGX, HDRI and EXR in capitals.
 fn pretty_name(name: &str) -> String {
-    const ACRONYMS: [&str; 3] = ["ggx", "hdri", "hdr"];
+    const ACRONYMS: [&str; 6] = ["ggx", "hdri", "hdr", "exr", "png", "jpeg"];
     let words: Vec<String> = name.split('-').map(|word| {
         if ACRONYMS.contains(&word) { word.to_uppercase() } else { word.to_string() }
     }).collect();
@@ -507,7 +507,7 @@ fn choose_scene(app: AppHandle, state: State<'_, AppState>) -> Result<Option<Sce
 
 #[tauri::command(async)]
 fn choose_environment(app: AppHandle, state: State<'_, AppState>) -> Result<Option<EnvironmentConfig>, String> {
-    let Some(file) = app.dialog().file().add_filter("HDR environment", &["hdr"]).blocking_pick_file() else {
+    let Some(file) = app.dialog().file().add_filter("Environment image", &["hdr", "exr", "png", "jpg", "jpeg"]).blocking_pick_file() else {
         return Ok(None);
     };
     let path = file.into_path().map_err(|e| e.to_string())?;

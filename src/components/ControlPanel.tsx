@@ -353,7 +353,7 @@ function LightTab({ props, update, enhanced }: TabContext) {
               else props.onImportEnvironment();
             }}>
             <option value="none">None</option>
-            <option value="hdr">{props.loadingEnvironment ? "Loading…" : environment && !sky ? "HDR image" : "HDR image…"}</option>
+            <option value="hdr">{props.loadingEnvironment ? "Loading…" : environment && !sky ? "Image" : "Image…"}</option>
             <option value="sky">Physical sky</option>
           </Choice>
         }
@@ -409,7 +409,7 @@ function LightTab({ props, update, enhanced }: TabContext) {
                   hint="Turbidity: 2 is a very clear sky, 3 a clear day, 6 hazy, 10 smog." onChange={(turbidity) => setSky({ turbidity })} />
               </>
             ) : (
-              <Row label="File" keywords="hdr">
+              <Row label="File" keywords="hdr exr panorama">
                 <span className="prop-value-text" title={environment.path}>{environment.path.split(/[\\/]/).pop()}</span>
               </Row>
             )}
@@ -423,7 +423,7 @@ function LightTab({ props, update, enhanced }: TabContext) {
               checked={environment.visible} disabled={!environment.enabled} onChange={(visible) => setEnvironment({ visible })} />
           </>
         ) : (
-          <Hint>Light the scene from all around: an HDR image of a real place, or a physical sky with the sun.</Hint>
+          <Hint>Light the scene from all around: a panorama of a real place (HDR, EXR, PNG or JPEG), or a physical sky with the sun.</Hint>
         )}
       </Section>
 

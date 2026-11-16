@@ -9,7 +9,7 @@ homepage.workspace = true
 [dependencies]
 exr = "1.74"
 gltf = { version = "1.4", default-features = false, features = ["import", "utils", "names", "KHR_materials_transmission", "KHR_materials_ior", "KHR_materials_emissive_strength"] }
-image = { version = "0.25", default-features = false, features = ["bmp", "jpeg", "png", "gif", "tga", "hdr"] }
+image = { version = "0.25", default-features = false, features = ["bmp", "jpeg", "png", "gif", "tga", "hdr", "exr"] }
 libloading = "0.8"
 rayon = "1"
 serde = { version = "1", features = ["derive"] }

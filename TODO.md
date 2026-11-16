@@ -41,7 +41,7 @@ Visual gain for the effort:
 - [x] **Physical sun and sky**: a sky computed from the time of day, without an HDR image.
   Medium.
 - [x] **Spotlights and IES profiles**: a flashlight beam or a real fixture's light. Low.
-- [ ] **EXR and LDR environments**: only Radiance HDR panoramas are read now. Low.
+- [x] **EXR and LDR environments**: OpenEXR panoramas, and PNG or JPEG ones as sRGB.
 - [ ] **Caustics on an infinite mirror ground**: photons are not aimed at it, and scenes with
   one skip environment photons and keep path-traced environment light. Medium.
 
