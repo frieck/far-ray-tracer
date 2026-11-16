@@ -379,6 +379,8 @@ export function defaultSettings(cores: number): Settings {
     halation: 0,
     lut: null,
     lutStrength: 1,
+    hiddenObjects: [],
+    hiddenLights: [],
     denoise: true,
     bloom: false,
     caustics: false,
@@ -455,7 +457,7 @@ function causticValues(settings: Settings) {
 const SAVED_SETTINGS = [
   "quality", "customPasses", "resolution", "customWidth", "customHeight", "depth", "glossyDepth", "transmissionDepth",
   "exposureMode", "brightness", "iso", "shutter", "toneMapping", "whiteBalance", "tint", "vignette",
-  "chromaticAberration", "grain", "halation", "lut", "lutStrength",
+  "chromaticAberration", "grain", "halation", "lut", "lutStrength", "hiddenObjects", "hiddenLights",
   "denoise", "bloom", "indirect", "bounces", "caustics", "causticPreset", "photonMillions", "causticRadius",
   "causticStrength", "dofPreset", "dofPasses",
 ] as const satisfies readonly (keyof Settings)[];
@@ -478,6 +480,8 @@ export function withSavedRenderSettings(settings: Settings, saved: unknown): Set
       ? value === null || (typeof value === "number" && value >= 1)
       : key === "lut"
       ? value === null || (typeof value === "string" && value !== "")
+      : key === "hiddenObjects" || key === "hiddenLights"
+      ? Array.isArray(value) && value.every((v) => Number.isInteger(v) && v >= 0)
       : key === "exposureMode"
       ? value === "simple" || value === "physical"
       : typeof value === typeof current || (key === "quality" && (typeof value === "number" || value === "custom"));
@@ -568,6 +572,8 @@ export function buildRequest(settings: Settings, mode: Mode, keep: boolean): Ren
     halation: settings.halation,
     lut: mode === "enhanced" ? settings.lut : null,
     lut_strength: settings.lutStrength,
+    hidden_objects: settings.hiddenObjects,
+    hidden_lights: settings.hiddenLights,
     caustics: settings.caustics,
     ...causticValues(settings),
     caustics_only: false,

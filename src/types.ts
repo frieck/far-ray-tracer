@@ -98,12 +98,32 @@ export interface SceneInfo {
   path: string;
   primitives: number;
   lights: number;
+  /** The file's objects and lights, in its order: what the outliner lists and hides by index. */
+  objects: SceneObjectInfo[];
+  light_list: SceneLightInfo[];
   warnings: string[];
   /** Automatic indirect light settings for this scene's lights. */
   bounces: Bounces;
   /** Render settings saved with the scene by the app, if any. */
   render: unknown;
 }
+
+export interface SceneObjectInfo {
+  name: string;
+  /** sphere, box, cylinder, tube, cone, torus, ground, plane, mesh, model, volume or fog. */
+  kind: string;
+  /** Its materials' ids, as in `SceneInfo.materials`. */
+  materials: number[];
+}
+
+export interface SceneLightInfo {
+  name: string;
+  /** point, rectangle, sphere, spot or ies. */
+  kind: string;
+}
+
+/** What the outliner has selected: an object or a light, by its index. */
+export type Selection = { kind: "object" | "light"; id: number } | null;
 
 export interface Bounces {
   strength: number;
@@ -177,6 +197,9 @@ export interface RenderRequest {
    * path, and how strongly, from 0 to 1. */
   lut: string | null;
   lut_strength: number;
+  /** What the outliner hides, by index in the scene's objects and lights. */
+  hidden_objects: number[];
+  hidden_lights: number[];
   caustics: boolean;
   photons: number;
   caustic_radius: number;
@@ -249,6 +272,9 @@ export interface Settings {
   /** A bundled look's name, such as "warm-film", or the path of a .cube file; null for none. */
   lut: string | null;
   lutStrength: number;
+  /** Objects and lights the outliner hides, by index; saved with the scene. */
+  hiddenObjects: number[];
+  hiddenLights: number[];
   denoise: boolean;
   bloom: boolean;
   caustics: boolean;

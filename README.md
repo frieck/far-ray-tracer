@@ -382,6 +382,10 @@ The app and command line use one format: `.far`, readable JSON.
 }
 ```
 
+Objects and lights may have a `name`, which the app's outliner shows; without one they are
+called by their kind or file, such as "Sphere 2" or "teapot". Versions of the app before the
+outliner refuse a scene that names its objects.
+
 A scene may start with `"format": 3`, the version of the format; the app writes it when it
 saves. A scene without it is read as the current version. A version of the app that meets a
 newer format than it knows refuses the scene and says to update, rather than misreading it.
@@ -607,6 +611,40 @@ A region renders exactly the pixels a whole render has there: each tile keeps it
 random seed, and with Denoise on, a ring of tiles around the region gives the filter real
 neighbors at its edge. It works in every stage. The command line takes
 `--region X0,Y0,X1,Y1`, in pixels.
+
+### Outliner
+
+The outliner stays in view above the settings, as in Blender, and lists what the scene
+holds: the camera, the environment, its lights and its objects, in the file's order, named by
+their `name` or by their kind or file. A sparkle marks an object that glows. Drag the divider
+below it to share the height with the settings, fold it to its title, fold its Lights and
+Objects groups, or find things by name with the magnifier.
+
+- **Select** an object or light from the list, or click it in the image (a click that does
+  not move the camera). Its kind and materials show at the bottom of the outliner; a material
+  opens in the Materials tab, which also follows the selection. `Esc` clears it. The camera
+  and environment rows open their settings.
+- **See** the selection on the image: a blue outline and a light fill where it shows, and a
+  fainter outline where something in front hides it, as Blender's X-ray does; a thin white
+  outline marks what the pointer is over. The outline lies over the image, on the render as on
+  the quick 3D view, and is never part of it: an export leaves it out. The eye-scan button in
+  the outliner's header turns it off.
+- **Hide** one with its eye: it renders as if it were not there, so no shadow, reflection or
+  light comes from it, in every stage and on the GPU. Hidden lights stop lighting; a hidden
+  glowing object stops glowing. **Show all** brings everything back. What is hidden is saved
+  with the scene, in its render settings, and the scene file itself does not change.
+
+Hiding builds the scene again without those objects, and a new KD-Tree or BVH for it; the same
+set hidden again reuses them. A model counts as one object, its parts as its materials.
+
+The outline comes from an ID map: the engine traces one ray per pixel from the camera, without
+depth of field, and notes what each one meets first, as a click does; for the fainter part,
+the same with the selected object alone. The map has the overlay's own size in screen pixels
+(Retina ones too, at most 2048 a side), sent as 16 bits a pixel. Each shape is then softened
+with a small blur and its line drawn where the blurred mask crosses one half, so the line is
+smooth and the same width along any curve. The map takes about 6 ms for the Still life at
+800 × 600 and the line some 30 ms, so it follows the camera as it moves; clicking the image
+reads the map, so selecting needs no wait. Objects past the first 32766 are not outlined.
 
 ### Moving the camera (Enhanced)
 

@@ -65,7 +65,8 @@ Visual gain for the effort:
 - [ ] **Motion blur**: needs moving objects in the scene format. Medium.
 - [x] **Raw light and render passes**: the linear light as EXR, with the denoised light,
   albedo, normal and depth, from the app and the command line.
-- [ ] **Light groups and direct and indirect passes**: the light of each lamp (or group), of
+- [ ] **Light groups and direct and indirect passes** (after the outliner, where groups are
+  made): the light of each lamp (or group), of
   the environment and of glowing materials kept apart, so the app can change their strength
   and color after rendering, as Blender's light groups, and save them to the EXR. Every place
   the CPU and GPU integrators add light would carry a color per group, and memory grows by
@@ -135,6 +136,10 @@ Visual gain for the effort:
 ## Geometry and scenes
 
 - [x] **OBJ and glTF import**: models from any 3D program, with their materials. Medium.
+- [x] **Outliner, first part**: the scene's camera, environment, lights and objects in a list,
+  with names, selection from the list or the image, its outline on the image, and hiding.
+- [ ] **Outliner, next**: editing lights
+  (color, strength, place); a model's parts as children; renaming. Medium.
 - [ ] **Instancing**: many copies of an object for almost no memory. Medium.
 - [ ] **Subdivision surfaces**: smooth meshes from coarse ones. High.
 - [ ] **CSG (boolean operations)**: would carve the material ball's medallion into the

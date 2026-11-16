@@ -65,6 +65,19 @@ are not used. The shader is compiled for what
   `tools/generate_luts.py`, and any 1D or 3D `.cube` file loads. It changes without rendering
   again and is saved with the scene; on the command line, `--lut FILE` and `--lut-strength N`.
 
+- An outliner, always in view above the settings as in Blender, with a divider to share the
+  height: the scene's camera, environment, lights and objects, by the `name` the file gives
+  or one made from their kind or file, with an eye to hide each one and a search by name.
+  Hidden objects and lights render as if they were not there, in every stage and on the GPU,
+  and are saved with the scene. Clicking an object in the image selects it, and its materials
+  open in the Materials tab, which now names materials by their object (`Ball`, `teapot
+  part 2`). The selection is outlined on the image, fainter where something hides it, and what
+  the pointer is over is outlined in white: a smooth line at the screen's resolution, from an
+  ID map the engine traces in milliseconds.
+
+- A more compact panel: Render, Render after each change, Open, Save and Export share one
+  row, and the tab's title, which the rail already shows, no longer takes one.
+
 - Camera presets in **Camera > Camera**: Digital, 35 mm color film, Black-and-white film,
   Cinema camera, Phone and Vintage set the sensor, grain, halation, vignetting, chromatic
   aberration, tone mapping and look together, keeping the framing and the exposure. The

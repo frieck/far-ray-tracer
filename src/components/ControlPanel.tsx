@@ -1,5 +1,5 @@
 import {
-  Camera, Cpu, Crosshair, Download, FolderOpen, Gauge, History, Palette, Play, RotateCcw, Save, Search, SlidersHorizontal, Square,
+  Camera, Cpu, Crosshair, Download, FolderOpen, Gauge, History, Palette, Play, Repeat, RotateCcw, Save, Search, SlidersHorizontal, Square,
   Sun, X, type LucideIcon,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -48,7 +48,7 @@ import { CausticStats } from "./CausticStats";
 import { GlassPanel } from "./GlassPanel";
 import { NumberField } from "./NumberField";
 import { Segmented } from "./Segmented";
-import { ButtonRow, CheckBox, CheckRow, Choice, ChoiceRow, Hint, Row, ScrubRow, SearchContext, Section } from "./props";
+import { ButtonRow, CheckRow, Choice, ChoiceRow, Hint, Row, ScrubRow, SearchContext, Section } from "./props";
 
 interface ControlPanelProps {
   loadingEnvironment: boolean;
@@ -82,6 +82,8 @@ interface ControlPanelProps {
   selectedMaterial: number | null;
   onSelectMaterial: (id: number) => void;
   onExpandMaterial: () => void;
+  /** A tab to show, as the outliner asks; `serial` grows with each request. */
+  openTab: { tab: string; serial: number } | null;
 }
 
 /** Most rebound limit the field shows as a number; one step past it means no limit. */
@@ -119,6 +121,13 @@ export function ControlPanel(props: ControlPanelProps) {
   const tab = !enhanced && TABS.find((t) => t.id === chosenTab)?.enhancedOnly ? "render" : chosenTab;
   const searching = query.trim() !== "";
   const context: TabContext = { props, update, enhanced };
+  const { openTab } = props;
+  useEffect(() => {
+    if (openTab && TABS.some((t) => t.id === openTab.tab)) {
+      setChosenTab(openTab.tab as Tab);
+      setQuery("");
+    }
+  }, [openTab]);
 
   useEffect(() => {
     try {
@@ -131,17 +140,7 @@ export function ControlPanel(props: ControlPanelProps) {
   return (
     <GlassPanel className="panel" aria-label="Render options">
       <div className="panel-top">
-        <div className="actions">
-          <button type="button" className="ghost open-scene" onClick={onOpen}>
-            <FolderOpen size={15} aria-hidden="true" />
-            Open scene…
-          </button>
-          <button type="button" className="icon" disabled={!props.scene} data-unsaved={props.unsaved || undefined}
-            aria-label={props.unsaved ? "Save scene, which has unsaved edits" : "Save scene"}
-            title={props.unsaved ? "Save scene (⌘S) · unsaved edits" : "Save scene (⌘S)"} onClick={props.onSaveScene}>
-            <Save size={16} aria-hidden="true" />
-          </button>
-        </div>
+        {/* One row: render, render after each change, then the scene's and the image's files. */}
         <div className="actions">
           <button
             type="button"
@@ -152,14 +151,25 @@ export function ControlPanel(props: ControlPanelProps) {
             {rendering ? <Square size={14} aria-hidden="true" /> : <Play size={14} aria-hidden="true" />}
             {rendering ? "Cancel" : "Render"}
           </button>
+          <button type="button" className="icon" aria-pressed={props.autoRender || !props.webgl} disabled={!props.webgl}
+            aria-label="Render after each change"
+            title={props.webgl ? `Render after each change: ${props.autoRender ? "on" : "off"}` : "Renders after each change: there is no 3D view here"}
+            onClick={() => props.onAutoRenderChange(!props.autoRender)}>
+            <Repeat size={15} aria-hidden="true" />
+          </button>
+          <span className="actions-gap" />
+          <button type="button" className="icon" aria-label="Open scene" title="Open scene (⌘O)" onClick={onOpen}>
+            <FolderOpen size={15} aria-hidden="true" />
+          </button>
+          <button type="button" className="icon" disabled={!props.scene} data-unsaved={props.unsaved || undefined}
+            aria-label={props.unsaved ? "Save scene, which has unsaved edits" : "Save scene"}
+            title={props.unsaved ? "Save scene (⌘S) · unsaved edits" : "Save scene (⌘S)"} onClick={props.onSaveScene}>
+            <Save size={15} aria-hidden="true" />
+          </button>
           <button type="button" className="icon" disabled={!canSave} aria-label="Export image" title="Export image (⌘E)" onClick={onSave}>
-            <Download size={16} aria-hidden="true" />
+            <Download size={15} aria-hidden="true" />
           </button>
         </div>
-        <CheckBox label="Auto-render" checked={props.autoRender || !props.webgl} disabled={!props.webgl}
-          onChange={props.onAutoRenderChange}>
-          <span className="prop-check-text">Render after each change</span>
-        </CheckBox>
         {props.outdated && <p className="prop-hint">{props.outdated}</p>}
       </div>
 
@@ -209,7 +219,8 @@ export function ControlPanel(props: ControlPanelProps) {
               ))
             ) : (
               <>
-                <h1 className="tab-title">{TABS.find((t) => t.id === tab)!.label}</h1>
+                {/* The rail names the tab; the title is for screen readers, and saves a row. */}
+                <h1 className="tab-title visually-hidden">{TABS.find((t) => t.id === tab)!.label}</h1>
                 {tabContent(tab, context)}
               </>
             )}

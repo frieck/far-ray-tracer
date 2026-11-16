@@ -54,6 +54,100 @@ struct OpenScene {
     kd: OnceLock<KdTree>,
     /// The BVH the GPU renderer walks, built on its first render.
     bvh: OnceLock<far_core::bvh::Bvh>,
+    /// The scene with the objects and lights the outliner hides left out, by their indices,
+    /// and its trees: kept while the same ones stay hidden.
+    hidden: Mutex<Option<((Vec<usize>, Vec<usize>), Arc<Prepared>)>>,
+    /// The scene with only the selected object, for its outline behind others, by its index.
+    alone: Mutex<Option<(usize, Arc<Prepared>)>>,
+}
+
+/// A scene to render and the trees built for it on first use.
+struct Prepared {
+    scene: Scene,
+    kd_classic: OnceLock<KdTree>,
+    kd: OnceLock<KdTree>,
+    bvh: OnceLock<far_core::bvh::Bvh>,
+}
+
+impl OpenScene {
+    /// The scene without the objects and lights the outliner hides, by their indices in
+    /// `Scene::objects` and `Scene::scene_lights`; None when nothing is hidden.
+    fn without(&self, objects: &[usize], lights: &[usize]) -> Option<Arc<Prepared>> {
+        let mut objects: Vec<usize> = objects.iter().copied().filter(|&o| o < self.scene.objects.len()).collect();
+        let mut lights: Vec<usize> = lights.iter().copied().filter(|&l| l < self.scene.scene_lights.len()).collect();
+        if objects.is_empty() && lights.is_empty() {
+            return None;
+        }
+        objects.sort_unstable();
+        objects.dedup();
+        lights.sort_unstable();
+        lights.dedup();
+        let key = (objects, lights);
+        let mut cache = self.hidden.lock().unwrap();
+        if let Some((kept, prepared)) = cache.as_ref() {
+            if *kept == key {
+                return Some(prepared.clone());
+            }
+        }
+        let prepared = Arc::new(Prepared {
+            scene: self.scene.without(&key.0, &key.1),
+            kd_classic: OnceLock::new(), kd: OnceLock::new(), bvh: OnceLock::new(),
+        });
+        *cache = Some((key, prepared.clone()));
+        Some(prepared)
+    }
+
+    /// The scene with only object `object`, no lights: what of it lies behind others.
+    fn alone(&self, object: usize) -> Arc<Prepared> {
+        let mut cache = self.alone.lock().unwrap();
+        if let Some((kept, prepared)) = cache.as_ref() {
+            if *kept == object {
+                return prepared.clone();
+            }
+        }
+        let others: Vec<usize> = (0..self.scene.objects.len()).filter(|&o| o != object).collect();
+        let lights: Vec<usize> = (0..self.scene.scene_lights.len()).collect();
+        let prepared = Arc::new(Prepared {
+            scene: self.scene.without(&others, &lights),
+            kd_classic: OnceLock::new(), kd: OnceLock::new(), bvh: OnceLock::new(),
+        });
+        *cache = Some((object, prepared.clone()));
+        prepared
+    }
+}
+
+/// Largest side of an object ID map.
+const MAX_ID_SIDE: u32 = 4096;
+
+fn id_map_size(width: u32, height: u32) -> Result<(), String> {
+    if width == 0 || height == 0 || width > MAX_ID_SIDE || height > MAX_ID_SIDE {
+        return Err(format!("An ID map is 1 to {MAX_ID_SIDE} pixels a side"));
+    }
+    Ok(())
+}
+
+/// An object of the scene file, as the outliner lists it.
+#[derive(Serialize)]
+struct ObjectInfo {
+    name: String,
+    kind: &'static str,
+    /// Its materials' ids, as in `SceneInfo::materials`.
+    materials: Vec<usize>,
+}
+
+/// A light of the scene file.
+#[derive(Serialize)]
+struct LightInfo {
+    name: String,
+    kind: &'static str,
+}
+
+/// What a click on the image found: an object or a light, by its index.
+#[derive(Serialize, PartialEq, Debug)]
+#[serde(tag = "kind", content = "id", rename_all = "snake_case")]
+enum PickedInfo {
+    Object(usize),
+    Light(usize),
 }
 
 fn neutral_white() -> f32 {
@@ -151,6 +245,9 @@ struct SceneInfo {
     path: String,
     primitives: usize,
     lights: usize,
+    /// The file's objects and lights, in its order, for the outliner.
+    objects: Vec<ObjectInfo>,
+    light_list: Vec<LightInfo>,
     warnings: Vec<String>,
     /// The automatic indirect light settings for this scene's lights.
     bounces: BounceInfo,
@@ -246,6 +343,11 @@ struct RenderRequest {
     lut: Option<String>,
     #[serde(default = "full")]
     lut_strength: f32,
+    /// What the outliner hides: indices in the scene's objects and lights.
+    #[serde(default)]
+    hidden_objects: Vec<usize>,
+    #[serde(default)]
+    hidden_lights: Vec<usize>,
     caustics: bool,
     photons: u32,
     caustic_radius: f32,
@@ -320,7 +422,12 @@ fn open_scene(path: &Path, state: &AppState) -> Result<SceneInfo, String> {
             far_core::scene::Primitive::Ground(_) => "ground",
         };
         let m = &scene.materials[id];
-        Some(SceneMaterial { id, label: format!("Material {} ({kind})", seen.len()), color: m.color.array(), ior: m.ior, surface: m.surface.clone(),
+        // Named by its object: "Ball", or "teapot part 2" for a model's.
+        let label = scene.objects.iter().find(|o| o.materials.contains(&id)).map(|o| match o.materials.len() {
+            1 => o.name.clone(),
+            _ => format!("{} part {}", o.name, id - o.materials.start + 1),
+        }).unwrap_or_else(|| format!("Material {} ({kind})", seen.len()));
+        Some(SceneMaterial { id, label, color: m.color.array(), ior: m.ior, surface: m.surface.clone(),
             bump: m.bump.map(|b| BumpInfo { kind: b.kind, strength: b.strength }),
             emission: far_core::surface::EmissionEdit::of(m) })
     }).collect();
@@ -333,6 +440,8 @@ fn open_scene(path: &Path, state: &AppState) -> Result<SceneInfo, String> {
         path: path.to_string_lossy().into_owned(),
         primitives: scene.prims.len(),
         lights: scene.lights.len() + scene.rect_lights.len() + scene.bulbs.len(),
+        objects: scene.objects.iter().map(|o| ObjectInfo { name: o.name.clone(), kind: o.kind, materials: o.materials.clone().collect() }).collect(),
+        light_list: scene.scene_lights.iter().map(|l| LightInfo { name: l.name.clone(), kind: l.kind }).collect(),
         warnings: scene.warnings.clone(),
         bounces: {
             let auto = far_core::Bounces::for_scene(&scene);
@@ -343,6 +452,7 @@ fn open_scene(path: &Path, state: &AppState) -> Result<SceneInfo, String> {
     let save_to = writable_in_place(path, app_resources(state)).then(|| path.to_path_buf());
     *state.scene.lock().unwrap() = Some(Arc::new(OpenScene {
         scene, path: path.to_path_buf(), save_to: Mutex::new(save_to), kd_classic: OnceLock::new(), kd: OnceLock::new(), bvh: OnceLock::new(),
+        hidden: Mutex::new(None), alone: Mutex::new(None),
     }));
     Ok(info)
 }
@@ -781,10 +891,94 @@ fn load_scene(path: String, state: State<'_, AppState>) -> Result<SceneInfo, Str
 }
 
 #[tauri::command(async)]
-fn pick_focus(pose: far_core::Pose, width: u32, height: u32, x: f32, y: f32, use_kd: bool, state: State<'_, AppState>) -> Result<Option<f32>, String> {
+#[allow(clippy::too_many_arguments)]
+fn pick_focus(pose: far_core::Pose, width: u32, height: u32, x: f32, y: f32, use_kd: bool, hidden_objects: Option<Vec<usize>>,
+    hidden_lights: Option<Vec<usize>>, state: State<'_, AppState>) -> Result<Option<f32>, String> {
     pose.validate()?;
     let open = state.scene.lock().unwrap().clone().ok_or("No scene is open")?;
-    Ok(far_core::camera::pick_focus(&open.scene, if use_kd { open.kd.get() } else { None }, &pose, width, height, x, y))
+    // What is hidden cannot be focused on.
+    let hidden = open.without(&hidden_objects.unwrap_or_default(), &hidden_lights.unwrap_or_default());
+    let (scene, kd) = match &hidden {
+        Some(h) => (&h.scene, &h.kd),
+        None => (&open.scene, &open.kd),
+    };
+    Ok(far_core::camera::pick_focus(scene, if use_kd { kd.get() } else { None }, &pose, width, height, x, y))
+}
+
+/// The object or light under a point of the image, with the hidden ones left out.
+#[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
+fn pick_object(pose: far_core::Pose, width: u32, height: u32, x: f32, y: f32, use_kd: bool, hidden_objects: Vec<usize>,
+    hidden_lights: Vec<usize>, state: State<'_, AppState>) -> Result<Option<PickedInfo>, String> {
+    pose.validate()?;
+    let open = state.scene.lock().unwrap().clone().ok_or("No scene is open")?;
+    let hidden = open.without(&hidden_objects, &hidden_lights);
+    let (scene, kd) = match &hidden {
+        Some(h) => (&h.scene, &h.kd),
+        None => (&open.scene, &open.kd),
+    };
+    let picked = far_core::camera::pick(scene, if use_kd { kd.get() } else { None }, &pose, width, height, x, y);
+    Ok(picked.and_then(|(found, _)| found).map(|found| match found {
+        far_core::scene::Picked::Object(id) => PickedInfo::Object(id),
+        // Hidden lights were taken out; the index is the one the file gives.
+        far_core::scene::Picked::Light(id) => {
+            let mut shown = (0..open.scene.scene_lights.len()).filter(|l| !hidden_lights.contains(l));
+            PickedInfo::Light(shown.nth(id).unwrap_or(id))
+        }
+    }))
+}
+
+/// What each pixel of the image shows first, as 16-bit little-endian IDs row by row, with the
+/// hidden objects and lights left out; see `far_core::camera::object_ids`. 0 is nothing, an
+/// object is its index plus one, and a light is its index, as the file gives it, with the top
+/// bit set: `ID_LIGHT`. Objects past the first 32766 are not told apart.
+#[tauri::command(async)]
+fn object_ids(pose: far_core::Pose, width: u32, height: u32, hidden_objects: Vec<usize>, hidden_lights: Vec<usize>,
+    state: State<'_, AppState>) -> Result<Response, String> {
+    pose.validate()?;
+    id_map_size(width, height)?;
+    let open = state.scene.lock().unwrap().clone().ok_or("No scene is open")?;
+    let hidden = open.without(&hidden_objects, &hidden_lights);
+    let (scene, kd) = match &hidden {
+        Some(h) => (&h.scene, &h.kd),
+        None => (&open.scene, &open.kd),
+    };
+    let kd = kd.get_or_init(|| KdTree::for_mode(scene, Mode::Enhanced));
+    let shown: Vec<u32> = (0..open.scene.scene_lights.len() as u32).filter(|l| !hidden_lights.contains(&(*l as usize))).collect();
+    let ids = far_core::camera::object_ids(scene, Some(kd), &pose, width, height);
+    Ok(Response::new(ids.into_iter().flat_map(|id| short_id(id, &shown).to_le_bytes()).collect::<Vec<u8>>()))
+}
+
+/// In the app's 16-bit ID maps, a light's index has this bit set.
+const ID_LIGHT: u16 = 0x8000;
+
+/// An ID of `far_core::camera::object_ids` in 16 bits, a light by the index the file gives it:
+/// `shown` holds those indices for the lights left in the scene.
+fn short_id(id: u32, shown: &[u32]) -> u16 {
+    if id & far_core::camera::LIGHT_ID != 0 {
+        let light = shown.get((id & !far_core::camera::LIGHT_ID) as usize).copied().unwrap_or(u32::MAX);
+        if light < ID_LIGHT as u32 { ID_LIGHT | light as u16 } else { 0 }
+    } else if id < ID_LIGHT as u32 {
+        id as u16
+    } else {
+        0
+    }
+}
+
+/// Where object `object` would show if nothing else were in the scene, one byte per pixel,
+/// 1 or 0: with the ID map, what of it lies behind other things.
+#[tauri::command(async)]
+fn object_xray(pose: far_core::Pose, width: u32, height: u32, object: usize, state: State<'_, AppState>) -> Result<Response, String> {
+    pose.validate()?;
+    id_map_size(width, height)?;
+    let open = state.scene.lock().unwrap().clone().ok_or("No scene is open")?;
+    if object >= open.scene.objects.len() {
+        return Err("Unknown object".into());
+    }
+    let alone = open.alone(object);
+    let kd = alone.kd.get_or_init(|| KdTree::for_mode(&alone.scene, Mode::Enhanced));
+    let ids = far_core::camera::object_ids(&alone.scene, Some(kd), &pose, width, height);
+    Ok(Response::new(ids.into_iter().map(|id| (id == object as u32 + 1) as u8).collect::<Vec<u8>>()))
 }
 
 #[tauri::command(async)]
@@ -1011,13 +1205,19 @@ fn render_scene(
         other => return Err(format!("Unknown mode: {other}")),
     };
 
+    // What the outliner hides is left out of the scene, which then has trees of its own.
+    let hidden = open.without(&request.hidden_objects, &request.hidden_lights);
+    let (base, kd_classic, kd_tree, bvh_cache) = match &hidden {
+        Some(h) => (&h.scene, &h.kd_classic, &h.kd, &h.bvh),
+        None => (&open.scene, &open.kd_classic, &open.kd, &open.bvh),
+    };
     let mut kd_ms = None;
     let kd = request.use_kd.then(|| {
-        let cache = if mode == Mode::Classic { &open.kd_classic } else { &open.kd };
+        let cache = if mode == Mode::Classic { kd_classic } else { kd_tree };
         cache.get_or_init(|| {
             let _ = channel.send(message([MESSAGE_BUILDING_KD, 0, 0, 0, 0, 0], None));
             let start = Instant::now();
-            let tree = KdTree::for_mode(&open.scene, mode);
+            let tree = KdTree::for_mode(base, mode);
             kd_ms = Some(start.elapsed().as_millis() as u64);
             tree
         })
@@ -1026,12 +1226,13 @@ fn render_scene(
     // Geometry is unchanged, so the already-built KD-Tree remains valid.
     let mut edited = None;
     if mode == Mode::Enhanced && (!request.material_overrides.is_empty()
-        || request.environment.is_some() || open.scene.environment.is_some()) {
-        let mut copy = open.scene.clone();
+        || request.environment.is_some() || base.environment.is_some()) {
+        let mut copy = base.clone();
         copy.environment = request.environment.as_ref()
-            .map(|config| render_environment(config, Some(&open.scene), &state)).transpose()?;
+            .map(|config| render_environment(config, Some(base), &state)).transpose()?;
         for edit in &request.material_overrides {
-            if !copy.prims.iter().any(|p| p.material() == edit.id) {
+            // Checked on the whole scene: a hidden object's material can still be edited.
+            if !open.scene.prims.iter().any(|p| p.material() == edit.id) {
                 return Err("Unknown object material".into());
             }
             edit.edit().apply(&mut copy.materials[edit.id])?;
@@ -1042,7 +1243,7 @@ fn render_scene(
         }
         edited = Some(copy);
     }
-    let scene = edited.as_ref().unwrap_or(&open.scene);
+    let scene = edited.as_ref().unwrap_or(base);
     far_core::Camera {
         aperture: request.aperture,
         focus_distance: request.focus_distance,
@@ -1109,7 +1310,7 @@ fn render_scene(
                 None
             }
             Ok(gpu) => {
-                let bvh = open.bvh.get_or_init(|| far_core::bvh::Bvh::build(&open.scene));
+                let bvh = bvh_cache.get_or_init(|| far_core::bvh::Bvh::build(base));
                 gpu_notes = far_gpu::leaves_out(scene, bvh);
                 if request.device == Device::Auto && !gpu_notes.is_empty() {
                     cpu_reason = Some(format!("Rendered on the CPU: the GPU leaves out {}", gpu_notes.join(", ")));
@@ -1132,7 +1333,8 @@ fn render_scene(
         request.focus_distance, request.blades, request.blade_rotation, request.indirect, request.indirect_strength,
         request.max_bounces, request.indirect_clamp, request.caustics, request.photons, request.caustic_radius,
         request.caustic_strength, request.width, request.height, request.use_kd, request.depth, request.region,
-        request.noise_threshold) + &format!("|{:?}|{:?}|{}", request.glossy_depth, request.transmission_depth, gpu.is_some()));
+        request.noise_threshold) + &format!("|{:?}|{:?}|{}|{:?}|{:?}", request.glossy_depth, request.transmission_depth, gpu.is_some(),
+        hidden.as_ref().map(Arc::as_ptr), (&request.hidden_objects, &request.hidden_lights)));
     // A new kept render replaces what was kept, which frees its memory early.
     let previous = reuse_key.as_ref().and_then(|key| match state.accumulation.lock().unwrap().take() {
         Some((kept, accumulation)) if &kept == key => Some(accumulation),
@@ -1319,6 +1521,9 @@ fn main() {
             choose_scene,
             choose_environment,
             choose_lut,
+            pick_object,
+            object_ids,
+            object_xray,
             environment_preview,
             load_scene,
             cancel,
@@ -1366,6 +1571,35 @@ mod tests {
         assert_eq!(request.camera.blades, 6);
         assert!(request.environment.unwrap().sky.unwrap().time.is_some());
         assert_eq!(request.render["toneMapping"], "agx_punchy");
+    }
+
+    #[test]
+    fn the_outliner_hides_objects_and_lights_and_finds_them_in_the_image() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/scenes/cornell-box.far");
+        let scene = Scene::open(&path).unwrap();
+        let (objects, lights) = (scene.objects.len(), scene.scene_lights.len());
+        assert!(objects > 3 && lights > 0, "{objects} objects, {lights} lights");
+        let open = OpenScene {
+            scene, path, save_to: Mutex::new(None), kd_classic: OnceLock::new(), kd: OnceLock::new(), bvh: OnceLock::new(),
+            hidden: Mutex::new(None), alone: Mutex::new(None),
+        };
+        assert!(open.without(&[], &[]).is_none());
+        assert!(open.without(&[objects + 5], &[]).is_none(), "indices past the end are ignored");
+        // The same hidden set, in any order, is the same scene.
+        let first = open.without(&[2, 0], &[0]).unwrap();
+        let again = open.without(&[0, 2, 2], &[0]).unwrap();
+        assert!(Arc::ptr_eq(&first, &again));
+        assert_eq!(first.scene.scene_lights.len(), lights - 1);
+        assert!(first.scene.prims.len() < open.scene.prims.len());
+        assert!((0..first.scene.prims.len()).all(|p| !matches!(first.scene.object_of(p), Some(0) | Some(2))));
+        // The image's middle shows one of the box's objects, named as the outliner lists them.
+        let picked = far_core::camera::pick(&open.scene, None, &open.scene.camera.pose(), 400, 300, 0.5, 0.5);
+        assert!(matches!(picked, Some((Some(far_core::scene::Picked::Object(_)), _))), "{picked:?}");
+        assert_eq!(serde_json::to_value(PickedInfo::Light(2)).unwrap(), serde_json::json!({"kind": "light", "id": 2}));
+        // In 16 bits, a light keeps the index the file gives it with the lights before it hidden.
+        assert_eq!(short_id(far_core::camera::LIGHT_ID | 1, &[0, 2]), ID_LIGHT | 2);
+        assert_eq!(short_id(7, &[]), 7);
+        assert_eq!(short_id(40_000, &[]), 0);
     }
 
     #[test]

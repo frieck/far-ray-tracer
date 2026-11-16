@@ -25,6 +25,11 @@ fn every_scene_opens_without_warnings() {
     for path in all_scenes() {
         let scene = Scene::open(&path).unwrap();
         assert!(scene.warnings.is_empty(), "{}: {:?}", path.display(), scene.warnings);
+        // Every primitive and volume belongs to one of the file's objects, for the outliner.
+        assert!((0..scene.prims.len()).all(|p| scene.object_of(p).is_some()), "{}", path.display());
+        assert_eq!(scene.volume_objects.len(), scene.volumes.len(), "{}", path.display());
+        let lights = scene.lights.len() + scene.rect_lights.len() + scene.bulbs.len();
+        assert_eq!(scene.scene_lights.len(), lights, "{}", path.display());
     }
 }
 
@@ -661,4 +666,19 @@ fn corrected_tree_keeps_a_large_model() {
     kept.sort_unstable();
     kept.dedup();
     assert_eq!(kept.len(), scene.prims.len() - scene.grounds.len(), "primitives left out of the tree");
+}
+
+#[test]
+fn the_id_map_of_a_busy_scene_names_many_objects_quickly() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/still-life.far");
+    let scene = Scene::open(&path).unwrap();
+    let kd = far_core::KdTree::for_mode(&scene, far_core::Mode::Enhanced);
+    let start = std::time::Instant::now();
+    let ids = far_core::camera::object_ids(&scene, Some(&kd), &scene.camera.pose(), 800, 600);
+    let elapsed = start.elapsed();
+    let mut seen: Vec<u32> = ids.clone();
+    seen.sort_unstable();
+    seen.dedup();
+    eprintln!("ID map of the still life, 800 x 600: {elapsed:?}, {} things", seen.len());
+    assert!(seen.len() > 10, "{seen:?}");
 }

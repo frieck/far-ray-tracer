@@ -10,6 +10,12 @@ interface ViewportProps {
   pickingFocus: boolean;
   focusHint: string;
   onPickFocus: (x: number, y: number) => void;
+  /** A click that does not move the camera selects what is under it, when given. */
+  onSelectAt?: (x: number, y: number) => void;
+  /** The pointer moved over the image without dragging, or left it (null). */
+  onHover?: (point: { x: number; y: number } | null) => void;
+  /** Drawn over the image, such as the selection's outline. */
+  overlay?: ReactNode;
   navigable: boolean;
   onCameraDrag: (panning: boolean, dx: number, dy: number, stageHeight: number) => void;
   onCameraRelease: () => void;
@@ -59,6 +65,8 @@ export function Viewport(props: ViewportProps) {
   const drag = useRef<{ x: number; y: number; panning: boolean } | null>(null);
   // While a region is drawn: where the drag started and the rectangle so far.
   const regionStart = useRef<{ x: number; y: number } | null>(null);
+  // Where the last press began, to tell a click from a drag that orbits.
+  const pressedAt = useRef<{ x: number; y: number } | null>(null);
   const [draft, setDraft] = useState<Area | null>(null);
   const regionTool = scene !== null && !showPhotonMap && !showMaterial;
   const shownRegion = regionTool ? draft ?? props.region : null;
@@ -83,6 +91,7 @@ export function Viewport(props: ViewportProps) {
       return;
     }
     if (!props.navigable) return;
+    pressedAt.current = { x: event.clientX, y: event.clientY };
     event.currentTarget.setPointerCapture(event.pointerId);
     drag.current = { x: event.clientX, y: event.clientY, panning: event.shiftKey || event.button !== 0 };
   };
@@ -103,6 +112,7 @@ export function Viewport(props: ViewportProps) {
   };
 
   const moveDivider = (event: PointerEvent<HTMLDivElement>) => {
+    if (!regionStart.current && !drag.current) props.onHover?.(fraction(event));
     if (regionStart.current) {
       setDraft(areaFrom(regionStart.current, fraction(event)));
       return;
@@ -134,12 +144,21 @@ export function Viewport(props: ViewportProps) {
           onContextMenu={(event) => props.navigable && event.preventDefault()}
           onWheel={(event) => props.navigable && props.onCameraWheel(event.deltaY)}
           onClick={(event) => {
-            if (!props.pickingFocus) return;
             const box = event.currentTarget.getBoundingClientRect();
-            props.onPickFocus((event.clientX - box.left) / box.width, (event.clientY - box.top) / box.height);
+            const [x, y] = [(event.clientX - box.left) / box.width, (event.clientY - box.top) / box.height];
+            if (props.pickingFocus) {
+              props.onPickFocus(x, y);
+              return;
+            }
+            const pressed = pressedAt.current;
+            pressedAt.current = null;
+            if (props.onSelectAt && pressed && Math.hypot(event.clientX - pressed.x, event.clientY - pressed.y) < 4) {
+              props.onSelectAt(x, y);
+            }
           }}
           style={{ "--aspect": aspect } as CSSProperties}
           onPointerMove={moveDivider}
+          onPointerLeave={() => props.onHover?.(null)}
         >
           <canvas ref={afterRef} width={800} height={600} />
           <canvas
@@ -151,6 +170,7 @@ export function Viewport(props: ViewportProps) {
           />
           <canvas ref={photonRef} width={800} height={600} hidden={!showPhotonMap} aria-label="Photon map: projected photon deposits" />
           <canvas ref={props.liveRef} hidden={!props.showLive} aria-label="Real-time view of the scene" />
+          {!comparison && !showPhotonMap && !showMaterial && props.overlay}
           {comparison && (
             <div className="divider" style={{ left: `${divider * 100}%` }}>
               <span className="tag left">{MODE_NAMES[comparison]}</span>

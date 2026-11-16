@@ -231,34 +231,87 @@ pub(crate) fn lens_sample(pass: u32, pixel: u32) -> (f32, f32) {
 /// pinhole ray even with an open lens, so picking is stable on a blurred image.
 /// Return axial distance, not ray length (which would misfocus off-center picks).
 pub fn pick_focus(scene: &crate::Scene, kd: Option<&crate::KdTree>, pose: &Pose, width: u32, height: u32, x: f32, y: f32) -> Option<f32> {
+    pick(scene, kd, pose, width, height, x, y).map(|(_, distance)| distance)
+}
+
+/// What is first under normalized image coordinates, an object or a light, if the file names
+/// it, and its axial distance; see `pick_focus`.
+pub fn pick(scene: &crate::Scene, kd: Option<&crate::KdTree>, pose: &Pose, width: u32, height: u32, x: f32, y: f32)
+    -> Option<(Option<crate::scene::Picked>, f32)> {
     if width == 0 || height == 0 || !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) { return None; }
     let view = View::new(pose, width, height);
     let mut direction = view.plane_point(2.0 * x - 1.0, 1.0 - 2.0 * y) - view.origin;
     direction.normalize();
-    let ray = Ray { o: view.origin, d: direction };
     let mut context = crate::engine::Context::with_fixes(scene, kd, 1);
+    first_hit(scene, kd, &mut context, view.origin, direction)
+        .map(|(picked, distance)| (picked, distance * direction.dot(view.forward)))
+}
+
+/// In an object ID map, a light's index has this bit set; an object's is its index plus one,
+/// and 0 is nothing, or something the file does not name.
+pub const LIGHT_ID: u32 = 1 << 31;
+
+/// What each pixel of a picture `width` by `height` shows first, row by row, through the
+/// pinhole as `pick` sees it: the ID map the app outlines the selected object from. 0 is
+/// nothing; an object is its index in `Scene::objects` plus one; a light is `LIGHT_ID` or its
+/// index in `Scene::scene_lights`.
+pub fn object_ids(scene: &crate::Scene, kd: Option<&crate::KdTree>, pose: &Pose, width: u32, height: u32) -> Vec<u32> {
+    use crate::scene::Picked;
+    use rayon::prelude::*;
+    let view = View::new(pose, width.max(1), height.max(1));
+    let w = width as usize;
+    let mut ids = vec![0u32; w * height as usize];
+    ids.par_chunks_mut(w.max(1)).enumerate().for_each(|(y, row)| {
+        let mut context = crate::engine::Context::with_fixes(scene, kd, 1);
+        for (x, id) in row.iter_mut().enumerate() {
+            let (u, v) = ((x as f32 + 0.5) / width as f32, (y as f32 + 0.5) / height as f32);
+            let mut direction = view.plane_point(2.0 * u - 1.0, 1.0 - 2.0 * v) - view.origin;
+            direction.normalize();
+            *id = match first_hit(scene, kd, &mut context, view.origin, direction) {
+                Some((Some(Picked::Object(o)), _)) => o as u32 + 1,
+                Some((Some(Picked::Light(l)), _)) => LIGHT_ID | l as u32,
+                _ => 0,
+            };
+        }
+    });
+    ids
+}
+
+/// The first object or light along a ray from `origin`, if any, and how far along it.
+fn first_hit(scene: &crate::Scene, kd: Option<&crate::KdTree>, context: &mut crate::engine::Context, origin: crate::vector::Vec3,
+    direction: crate::vector::Vec3) -> Option<(Option<crate::scene::Picked>, f32)> {
+    use crate::scene::Picked;
+    let ray = Ray { o: origin, d: direction };
     let mut distance = 10000.0;
-    let mut found = false;
+    let mut found = None;
     if let Some(kd) = kd {
-        found = context.closest(kd, &ray, &mut distance).0 != 0;
+        let (hit, prim) = context.closest(kd, &ray, &mut distance);
+        if hit != 0 {
+            found = Some(scene.object_of(prim).map(Picked::Object));
+        }
     } else {
         for i in 0..scene.prims.len() {
-            found |= context.intersect(i, &ray, &mut distance) != 0;
+            if context.intersect(i, &ray, &mut distance) != 0 {
+                found = Some(scene.object_of(i).map(Picked::Object));
+            }
         }
     }
-    for light in &scene.rect_lights {
-        if let Some(hit) = light.intersect(view.origin, direction, distance) {
+    // A light as the file lists it.
+    let light = |kinds: &[&str], index: usize| scene.scene_lights.iter()
+        .position(|l| kinds.contains(&l.kind) && l.index == index).map(Picked::Light);
+    for (i, rect) in scene.rect_lights.iter().enumerate() {
+        if let Some(hit) = rect.intersect(origin, direction, distance) {
             distance = hit;
-            found = true;
+            found = Some(light(&["rectangle"], i));
         }
     }
-    for light in &scene.bulbs {
-        if let Some(hit) = light.intersect(view.origin, direction, distance) {
+    for (i, bulb) in scene.bulbs.iter().enumerate() {
+        if let Some(hit) = bulb.intersect(origin, direction, distance) {
             distance = hit;
-            found = true;
+            found = Some(light(&["sphere", "spot", "ies"], i));
         }
     }
-    found.then_some(distance * direction.dot(view.forward))
+    found.map(|picked| (picked, distance))
 }
 
 #[cfg(test)]

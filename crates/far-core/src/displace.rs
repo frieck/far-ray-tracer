@@ -301,11 +301,15 @@ impl Scene {
 
         let prims = std::mem::take(&mut self.prims);
         let corner_normals = std::mem::take(&mut self.corner_normals);
+        // The faces a displaced primitive becomes belong to its object.
+        let owners = std::mem::take(&mut self.prim_objects);
         let mut faces = Vec::with_capacity(prims.len());
         for (index, p) in prims.iter().enumerate() {
+            let owner = owners.get(index).copied();
             if !displaced(p, self) {
                 self.prims.push(p.clone());
                 self.corner_normals.push(corner_normals[index]);
+                self.prim_objects.extend(owner);
                 faces.push(None);
                 continue;
             }
@@ -314,6 +318,9 @@ impl Scene {
             let source = self.displaced_sources.len() as u32;
             self.add_displaced(p, source, &patches, &mut faces);
             self.displaced_sources.push(p.clone());
+            if let Some(owner) = owner {
+                self.prim_objects.resize(self.prims.len(), owner);
+            }
         }
         self.displaced = faces;
         self.grounds = self.prims.iter().enumerate()
@@ -488,6 +495,9 @@ mod tests {
         assert!(low.x.is_finite() && high.x.is_finite(), "bounds {:?} {:?}", low.array(), high.array());
         assert_eq!(scene.displaced.len(), scene.prims.len());
         assert_eq!(scene.corner_normals.len(), scene.prims.len());
+        // Every face still belongs to the object it came from.
+        assert_eq!(scene.prim_objects.len(), scene.prims.len());
+        assert!((0..scene.prims.len()).all(|p| scene.object_of(p).is_some()));
     }
 
     #[test]

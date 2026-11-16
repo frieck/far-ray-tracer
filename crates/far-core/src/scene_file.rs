@@ -389,6 +389,67 @@ enum ObjectFile {
     },
 }
 
+impl ObjectFile {
+    fn kind(&self) -> &'static str {
+        match self {
+            ObjectFile::Sphere { .. } => "sphere",
+            ObjectFile::Box { .. } => "box",
+            ObjectFile::Cylinder { .. } => "cylinder",
+            ObjectFile::Tube { .. } => "tube",
+            ObjectFile::Cone { .. } => "cone",
+            ObjectFile::Torus { .. } => "torus",
+            ObjectFile::Ground { .. } => "ground",
+            ObjectFile::Plane { .. } => "plane",
+            ObjectFile::Mesh { .. } => "mesh",
+            ObjectFile::Volume { .. } => "volume",
+            ObjectFile::Model { .. } => "model",
+        }
+    }
+}
+
+impl LightFile {
+    fn kind(&self) -> &'static str {
+        match self {
+            LightFile::Sphere(_) => "point",
+            LightFile::Area(AreaLightFile::Rectangle { .. }) => "rectangle",
+            LightFile::Area(AreaLightFile::Sphere { ies: Some(_), .. }) => "ies",
+            LightFile::Area(AreaLightFile::Sphere { spot_angle: Some(_), .. }) => "spot",
+            LightFile::Area(AreaLightFile::Sphere { .. }) => "sphere",
+        }
+    }
+}
+
+/// The `name` each object and light may have, in the file's order. The format's own types do
+/// not read it, so it is taken out of the copy they read.
+#[derive(Default)]
+struct Names {
+    objects: Vec<Option<String>>,
+    lights: Vec<Option<String>>,
+}
+
+fn take_names(source: &mut serde_json::Value) -> Names {
+    let mut take = |list: &str| -> Vec<Option<String>> {
+        let Some(items) = source.get_mut(list).and_then(|v| v.as_array_mut()) else { return Vec::new() };
+        items.iter_mut().map(|item| {
+            let name = item.as_object_mut()?.remove("name")?;
+            name.as_str().map(str::trim).filter(|n| !n.is_empty()).map(str::to_string)
+        }).collect()
+    };
+    Names { objects: take("objects"), lights: take("lights") }
+}
+
+/// Names for the things a file does not name: "Sphere" when a kind comes once, "Sphere 1",
+/// "Sphere 2" and so on when it comes more often.
+fn default_names(kinds: &[&'static str], title: impl Fn(&str) -> &'static str) -> Vec<String> {
+    let mut seen: HashMap<&str, usize> = HashMap::new();
+    kinds.iter().map(|&kind| {
+        let total = kinds.iter().filter(|&&k| k == kind).count();
+        let n = seen.entry(kind).or_default();
+        *n += 1;
+        if total == 1 { title(kind).to_string() } else { format!("{} {n}", title(kind)) }
+    }).collect()
+}
+
 /// A model file next to the scene, or in the data folder's meshes folder.
 fn model_path(scene: &Path, data: Option<&Path>, file: &str) -> Option<std::path::PathBuf> {
     let file = file.replace('\\', "/");
@@ -416,9 +477,10 @@ impl Scene {
     pub(crate) fn from_far(data: &[u8], path: &Path) -> Result<Self, String> {
         let source: serde_json::Value =
             serde_json::from_slice(data).map_err(|e| format!("{}: {e}", path.display()))?;
-        let file: SceneFile =
-            serde_json::from_value(source.clone()).map_err(|e| format!("{}: {e}", path.display()))?;
-        let mut scene = Self::from_file(file, path, None)?;
+        let mut read = source.clone();
+        let names = take_names(&mut read);
+        let file: SceneFile = serde_json::from_value(read).map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut scene = Self::from_file(file, path, None, names)?;
         scene.source = Some(std::sync::Arc::new(source));
         Ok(scene)
     }
@@ -464,12 +526,12 @@ impl Scene {
             ],
         });
         let file: SceneFile = serde_json::from_value(json.clone()).map_err(|e| e.to_string())?;
-        let mut scene = Self::from_file(file, path, Some(model))?;
+        let mut scene = Self::from_file(file, path, Some(model), Names::default())?;
         scene.source = Some(std::sync::Arc::new(json));
         Ok(scene)
     }
 
-    fn from_file(file: SceneFile, path: &Path, mut preloaded: Option<crate::model::Model>) -> Result<Self, String> {
+    fn from_file(file: SceneFile, path: &Path, mut preloaded: Option<crate::model::Model>, names: Names) -> Result<Self, String> {
         if let Some(format) = file.format.filter(|&f| f > FORMAT) {
             return Err(format!("{}: written by a newer Far Ray Tracer (scene format {format}; this version reads up to {FORMAT}). Update the app to open it.", path.display()));
         }
@@ -490,6 +552,24 @@ impl Scene {
         }
         let mut cache = HashMap::new();
 
+        let kinds: Vec<&'static str> = file.objects.iter().map(ObjectFile::kind).collect();
+        let defaults = default_names(&kinds, |kind| match kind {
+            "sphere" => "Sphere", "box" => "Box", "cylinder" => "Cylinder", "tube" => "Tube", "cone" => "Cone",
+            "torus" => "Torus", "ground" => "Ground", "plane" => "Plane", "volume" => "Volume", _ => "Mesh",
+        });
+        scene.objects = file.objects.iter().enumerate().map(|(i, object)| {
+            let name = names.objects.get(i).cloned().flatten().unwrap_or_else(|| match object {
+                ObjectFile::Mesh { file, .. } | ObjectFile::Model { file, .. } => Path::new(&file.replace('\\', "/"))
+                    .file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| defaults[i].clone()),
+                _ => defaults[i].clone(),
+            });
+            crate::scene::SceneObject { name, kind: kinds[i], materials: 0..0 }
+        }).collect();
+        let light_kinds: Vec<&'static str> = file.lights.iter().map(LightFile::kind).collect();
+        let light_defaults = default_names(&light_kinds, |kind| match kind {
+            "point" => "Point light", "rectangle" => "Area light", "spot" => "Spotlight", "ies" => "IES light", _ => "Sphere light",
+        });
+
         let (mut meshes, mut planes, mut others) = (Vec::new(), Vec::new(), Vec::new());
         for (index, object) in file.objects.into_iter().enumerate() {
             match object {
@@ -501,6 +581,7 @@ impl Scene {
 
         for (index, object) in meshes {
             let before = scene.materials.len();
+            let (prims, volumes) = (scene.prims.len(), scene.volumes.len());
             let source = if matches!(object, ObjectFile::Model { .. }) {
                 crate::scene::MaterialSource::ModelPart(index)
             } else {
@@ -535,10 +616,12 @@ impl Scene {
                 _ => {}
             }
             scene.note_sources(before, source);
+            scene.claim(index, prims, volumes, before);
         }
         for (index, object) in planes {
             let ObjectFile::Plane { points, material } = object else { continue };
             let before = scene.materials.len();
+            let (prims, volumes) = (scene.prims.len(), scene.volumes.len());
             let material = scene.add_material(material.into(), dir.as_deref(), &mut cache);
             scene.note_sources(before, crate::scene::MaterialSource::Object(index));
             let base = scene.vertices.len() as u32;
@@ -548,13 +631,20 @@ impl Scene {
                 scene.corner_normals.push([t.n; 3]);
                 scene.prims.push(Primitive::Triangle(t));
             }
+            scene.claim(index, prims, volumes, before);
         }
         for (index, object) in others {
             let before = scene.materials.len();
+            let (prims, volumes) = (scene.prims.len(), scene.volumes.len());
             scene.add_analytic(object, dir.as_deref(), &mut cache)?;
             scene.note_sources(before, crate::scene::MaterialSource::Object(index));
+            scene.claim(index, prims, volumes, before);
         }
-        for light in file.lights {
+        for (number, light) in file.lights.into_iter().enumerate() {
+            let kind = light_kinds[number];
+            let index = match kind { "point" => scene.lights.len(), "rectangle" => scene.rect_lights.len(), _ => scene.bulbs.len() };
+            let name = names.lights.get(number).cloned().flatten().unwrap_or_else(|| light_defaults[number].clone());
+            scene.scene_lights.push(crate::scene::SceneLight { name, kind, index });
             match light {
                 LightFile::Sphere(light) => {
                     if light.radius < 0.0 { return Err("A light radius must be nonnegative".into()); }
@@ -623,7 +713,10 @@ impl Scene {
             require_positive(&(high - low).array(), "Fog bounds")?;
             let half = (high - low) * 0.5;
             let axes = [Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)];
+            let (prims, volumes, materials) = (scene.prims.len(), scene.volumes.len(), scene.materials.len());
             scene.volumes.push(fog.volume(crate::volume::Shape::Box { center: low + half, axes, half })?);
+            scene.objects.push(crate::scene::SceneObject { name: "Fog".into(), kind: "fog", materials: 0..0 });
+            scene.claim(scene.objects.len() - 1, prims, volumes, materials);
         }
         Ok(scene)
     }

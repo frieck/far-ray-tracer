@@ -284,6 +284,41 @@ pub enum MaterialSource {
     ModelPart(usize),
 }
 
+/// One entry of the scene file's `objects`, as an outliner lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SceneObject {
+    /// The `name` the file gives, or one made from its kind or file, such as "Sphere 2".
+    pub name: String,
+    /// sphere, box, cylinder, tube, cone, torus, ground, plane, mesh, model, volume or fog.
+    pub kind: &'static str,
+    /// Its materials in `Scene::materials`: one, or a model's parts; none for a volume.
+    pub materials: std::ops::Range<usize>,
+}
+
+/// One entry of the scene file's `lights`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SceneLight {
+    pub name: String,
+    /// point (`Scene::lights`), rectangle (`rect_lights`), or sphere, spot or ies (`bulbs`).
+    pub kind: &'static str,
+    /// Its index in that list.
+    pub index: usize,
+}
+
+/// A thing a click on the picture can find.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Picked {
+    /// An index in `Scene::objects`.
+    Object(usize),
+    /// An index in `Scene::scene_lights`.
+    Light(usize),
+}
+
+/// The items of `items` whose `keep` is true.
+fn filter<T: Clone>(items: &[T], keep: &[bool]) -> Vec<T> {
+    items.iter().zip(keep).filter(|(_, k)| **k).map(|(item, _)| item.clone()).collect()
+}
+
 #[derive(Clone)]
 pub struct Scene {
     pub environment: Option<crate::environment::Environment>,
@@ -327,6 +362,13 @@ pub struct Scene {
     pub warnings: Vec<String>,
     /// The triangles that glow, sampled as lights in Enhanced mode: found on first use.
     pub mesh_lights: std::sync::OnceLock<std::sync::Arc<crate::mesh_light::MeshLights>>,
+    /// The scene file's objects and lights, in its order.
+    pub objects: Vec<SceneObject>,
+    pub scene_lights: Vec<SceneLight>,
+    /// For each primitive and each volume, its index in `objects`. Empty for scenes not read
+    /// from a file, such as the material ball.
+    pub prim_objects: Vec<u32>,
+    pub volume_objects: Vec<u32>,
 }
 
 pub(crate) struct MaterialData {
@@ -406,6 +448,66 @@ impl Scene {
         Self::from_far(&data, path)
     }
 
+    /// The object primitive `prim` belongs to, as an index in `objects`.
+    pub fn object_of(&self, prim: usize) -> Option<usize> {
+        self.prim_objects.get(prim).map(|&o| o as usize).filter(|&o| o < self.objects.len())
+    }
+
+    /// Marks what was added since `prims`, `volumes` and `materials` as object `object`'s.
+    pub(crate) fn claim(&mut self, object: usize, prims: usize, volumes: usize, materials: usize) {
+        self.prim_objects.resize(prims, u32::MAX);
+        self.prim_objects.resize(self.prims.len(), object as u32);
+        self.volume_objects.resize(volumes, u32::MAX);
+        self.volume_objects.resize(self.volumes.len(), object as u32);
+        if let Some(entry) = self.objects.get_mut(object) {
+            entry.materials = materials..self.materials.len();
+        }
+    }
+
+    /// The scene without some of its objects and lights, by index in `objects` and
+    /// `scene_lights`, to render as if they were not there. Primitives, volumes and lights are
+    /// numbered anew; `objects` stays, so `object_of` still names what remains.
+    pub fn without(&self, objects: &[usize], lights: &[usize]) -> Scene {
+        let mut scene = self.clone();
+        let hidden = |owner: u32| objects.contains(&(owner as usize));
+        if !objects.is_empty() && self.prim_objects.len() == self.prims.len() {
+            let keep: Vec<bool> = self.prim_objects.iter().map(|&o| !hidden(o)).collect();
+            scene.prims = filter(&self.prims, &keep);
+            scene.corner_normals = filter(&self.corner_normals, &keep);
+            scene.prim_objects = filter(&self.prim_objects, &keep);
+            if self.displaced.len() == self.prims.len() {
+                scene.displaced = filter(&self.displaced, &keep);
+            }
+            scene.grounds = scene.prims.iter().enumerate()
+                .filter_map(|(i, p)| matches!(p, Primitive::Ground(_)).then_some(i)).collect();
+        }
+        if !objects.is_empty() && self.volume_objects.len() == self.volumes.len() {
+            let keep: Vec<bool> = self.volume_objects.iter().map(|&o| !hidden(o)).collect();
+            scene.volumes = filter(&self.volumes, &keep);
+            scene.volume_objects = filter(&self.volume_objects, &keep);
+        }
+        if !lights.is_empty() {
+            let gone = |kinds: &[&str], index: usize| self.scene_lights.iter().enumerate()
+                .any(|(k, l)| lights.contains(&k) && kinds.contains(&l.kind) && l.index == index);
+            let keep_points: Vec<bool> = (0..self.lights.len()).map(|i| !gone(&["point"], i)).collect();
+            let keep_rects: Vec<bool> = (0..self.rect_lights.len()).map(|i| !gone(&["rectangle"], i)).collect();
+            let keep_bulbs: Vec<bool> = (0..self.bulbs.len()).map(|i| !gone(&["sphere", "spot", "ies"], i)).collect();
+            scene.lights = filter(&self.lights, &keep_points);
+            scene.rect_lights = filter(&self.rect_lights, &keep_rects);
+            scene.bulbs = filter(&self.bulbs, &keep_bulbs);
+            scene.bulb_profiles = filter(&self.bulb_profiles, &keep_bulbs);
+            // The lights left keep their names, numbered anew in their lists.
+            let mut counts = [0usize; 3];
+            scene.scene_lights = self.scene_lights.iter().enumerate().filter(|(k, _)| !lights.contains(k)).map(|(_, l)| {
+                let list = match l.kind { "point" => 0, "rectangle" => 1, _ => 2 };
+                counts[list] += 1;
+                SceneLight { index: counts[list] - 1, ..l.clone() }
+            }).collect();
+        }
+        scene.mesh_lights = Default::default();
+        scene
+    }
+
     /// Average position of the objects, a natural point to orbit around.
     pub fn center(&self) -> Option<[f32; 3]> {
         let (mut sum, mut count) = (Vec3::default(), 0);
@@ -443,6 +545,10 @@ impl Scene {
             displaced: Vec::new(),
             displaced_sources: Vec::new(),
             mesh_lights: Default::default(),
+            objects: Vec::new(),
+            scene_lights: Vec::new(),
+            prim_objects: Vec::new(),
+            volume_objects: Vec::new(),
             cutouts: false,
             volumes: Vec::new(),
             materials: Vec::new(),
@@ -829,5 +935,118 @@ impl Scene {
         let mut n = a + uv[0] * (b - a) + uv[1] * (c - a);
         n.normalize();
         n
+    }
+}
+
+#[cfg(test)]
+mod outliner_tests {
+    use super::*;
+    use crate::engine::{Image, Mode, Options, Progress};
+    use std::sync::atomic::Ordering::Relaxed;
+
+    fn read(text: &str) -> Scene {
+        Scene::from_far(text.as_bytes(), Path::new("test.far")).unwrap()
+    }
+
+    const LIGHTS: &str = r#"{"type":"rectangle","name":"Key","position":[0,4,0],"edge_u":[1,0,0],"edge_v":[0,0,1],"intensity":6},
+        {"type":"sphere","position":[2,3,-2],"radius":0.2,"intensity":3,"spot_angle":40}"#;
+    const OBJECTS: &str = r#"{"type":"ground","material":{"color":[0.6,0.6,0.6]}},
+        {"type":"sphere","name":"Ball","center":[0,1,0],"radius":1,"material":{"color":[0.8,0.2,0.2]}},
+        {"type":"box","center":[2,0.5,0],"size":[1,1,1]},
+        {"type":"plane","points":[[-3,0.01,2],[3,0.01,2],[3,2,2],[-3,2,2]]},
+        {"type":"box","center":[-2,0.5,0],"size":[1,1,1]}"#;
+
+    #[test]
+    fn objects_and_lights_keep_their_names_and_parts() {
+        let scene = read(&format!(r#"{{"lights":[{LIGHTS}],"objects":[{OBJECTS}]}}"#));
+        let names: Vec<(&str, &str)> = scene.objects.iter().map(|o| (o.name.as_str(), o.kind)).collect();
+        assert_eq!(names, [("Ground", "ground"), ("Ball", "sphere"), ("Box 1", "box"), ("Plane", "plane"), ("Box 2", "box")]);
+        let lights: Vec<(&str, &str, usize)> = scene.scene_lights.iter().map(|l| (l.name.as_str(), l.kind, l.index)).collect();
+        assert_eq!(lights, [("Key", "rectangle", 0), ("Spotlight", "spot", 0)]);
+        // Each primitive belongs to its object, the plane's two triangles both to the plane,
+        // and each object has its material.
+        let owners: Vec<usize> = (0..scene.prims.len()).map(|p| scene.object_of(p).unwrap()).collect();
+        for (object, entry) in scene.objects.iter().enumerate() {
+            let parts: Vec<usize> = (0..scene.prims.len()).filter(|&p| owners[p] == object).collect();
+            assert_eq!(parts.len(), if entry.kind == "plane" { 2 } else { 1 }, "{}", entry.name);
+            assert_eq!(entry.materials.len(), 1, "{}", entry.name);
+            assert!(parts.iter().all(|&p| entry.materials.contains(&scene.prims[p].material())), "{}", entry.name);
+        }
+    }
+
+    #[test]
+    fn hidden_objects_and_lights_render_as_if_they_were_not_there() {
+        let whole = read(&format!(r#"{{"lights":[{LIGHTS}],"objects":[{OBJECTS}]}}"#));
+        // The same scene without the ball, the first box and the key light.
+        let objects = OBJECTS.replace(r#"{"type":"sphere","name":"Ball","center":[0,1,0],"radius":1,"material":{"color":[0.8,0.2,0.2]}},"#, "")
+            .replacen(r#"{"type":"box","center":[2,0.5,0],"size":[1,1,1]},"#, "", 1);
+        let lights = LIGHTS.replace(r#"{"type":"rectangle","name":"Key","position":[0,4,0],"edge_u":[1,0,0],"edge_v":[0,0,1],"intensity":6},"#, "");
+        let smaller = read(&format!(r#"{{"lights":[{lights}],"objects":[{objects}]}}"#));
+        let hidden = whole.without(&[1, 2], &[0]);
+        assert_eq!(hidden.prims.len(), smaller.prims.len());
+        assert_eq!((hidden.rect_lights.len(), hidden.bulbs.len(), hidden.bulb_profiles.len()), (0, 1, 1));
+        assert_eq!(hidden.scene_lights.iter().map(|l| (l.name.as_str(), l.index)).collect::<Vec<_>>(), [("Spotlight", 0)]);
+        assert_eq!(hidden.object_of(hidden.prims.len() - 1), Some(4), "the second box keeps its name");
+        assert_eq!(hidden.grounds, smaller.grounds);
+        let shown = |scene: &Scene| {
+            let options = Options { mode: Mode::Enhanced, width: 48, height: 36, samples: 4, threads: 2,
+                pose: Some(crate::camera::Pose { position: [0.0, 3.0, -8.0], target: [0.0, 0.5, 0.0], zoom: 1.0 }),
+                ..Options::default() };
+            let kd = crate::KdTree::for_mode(scene, Mode::Enhanced);
+            let image = Image::new(48, 36);
+            crate::render(scene, Some(&kd), &options, &image, &Progress::default());
+            image.pixels.iter().map(|p| p.load(Relaxed)).collect::<Vec<u32>>()
+        };
+        assert_eq!(shown(&hidden), shown(&smaller));
+        assert_ne!(shown(&whole), shown(&smaller));
+    }
+
+    #[test]
+    fn the_id_map_names_what_each_pixel_shows_as_a_click_would() {
+        use crate::camera::{object_ids, pick, LIGHT_ID};
+        let scene = read(&format!(r#"{{"lights":[{LIGHTS}],"objects":[{OBJECTS}]}}"#));
+        let kd = crate::KdTree::for_mode(&scene, Mode::Enhanced);
+        let pose = crate::camera::Pose { position: [0.0, 1.5, -8.0], target: [0.0, 1.0, 0.0], zoom: 1.0 };
+        let (w, h) = (64, 48);
+        let ids = object_ids(&scene, Some(&kd), &pose, w, h);
+        assert_eq!(ids.len(), (w * h) as usize);
+        for (p, &id) in ids.iter().enumerate() {
+            let (x, y) = ((p as u32 % w) as f32 + 0.5, (p as u32 / w) as f32 + 0.5);
+            let expected = match pick(&scene, Some(&kd), &pose, w, h, x / w as f32, y / h as f32).and_then(|(p, _)| p) {
+                Some(Picked::Object(o)) => o as u32 + 1,
+                Some(Picked::Light(l)) => LIGHT_ID | l as u32,
+                None => 0,
+            };
+            assert_eq!(id, expected, "pixel {p}");
+        }
+        assert_eq!(ids[(h / 2 * w + w / 2) as usize], 2, "the ball in the middle");
+        // Seen from behind the plane, which hides most of it, the ball alone in the scene
+        // covers what shows of it and more.
+        let pose = crate::camera::Pose { position: [0.0, 1.5, 8.0], target: [0.0, 1.0, 0.0], zoom: 1.0 };
+        let kd = crate::KdTree::for_mode(&scene, Mode::Enhanced);
+        let ids = object_ids(&scene, Some(&kd), &pose, w, h);
+        let others: Vec<usize> = (0..scene.objects.len()).filter(|&o| o != 1).collect();
+        let lights: Vec<usize> = (0..scene.scene_lights.len()).collect();
+        let alone = scene.without(&others, &lights);
+        let kd = crate::KdTree::for_mode(&alone, Mode::Enhanced);
+        let xray = object_ids(&alone, Some(&kd), &pose, w, h);
+        assert!(ids.iter().zip(&xray).all(|(&shown, &all)| shown != 2 || all == 2));
+        assert!(xray.iter().filter(|&&i| i == 2).count() > ids.iter().filter(|&&i| i == 2).count());
+    }
+
+    #[test]
+    fn a_click_finds_the_object_or_light_under_it() {
+        let scene = read(&format!(r#"{{"lights":[{LIGHTS}],"objects":[{OBJECTS}]}}"#));
+        let kd = crate::KdTree::for_mode(&scene, Mode::Enhanced);
+        let pose = crate::camera::Pose { position: [0.0, 1.0, -8.0], target: [0.0, 1.0, 0.0], zoom: 1.0 };
+        let at = |x: f32, y: f32| crate::camera::pick(&scene, Some(&kd), &pose, 400, 300, x, y).and_then(|(p, _)| p);
+        assert_eq!(at(0.5, 0.5), Some(Picked::Object(1)), "the ball in the middle");
+        assert_eq!(at(0.5, 0.97), Some(Picked::Object(0)), "the ground below");
+        // Looking up at the key light.
+        let up = crate::camera::Pose { position: [0.0, 1.0, 0.0], target: [0.0, 5.0, 0.01], zoom: 1.0 };
+        let hidden = scene.without(&[1], &[]);
+        let kd = crate::KdTree::for_mode(&hidden, Mode::Enhanced);
+        let picked = crate::camera::pick(&hidden, Some(&kd), &up, 400, 300, 0.5, 0.5).and_then(|(p, _)| p);
+        assert_eq!(picked, Some(Picked::Light(0)));
     }
 }

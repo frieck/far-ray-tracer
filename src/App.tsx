@@ -4,6 +4,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AboutDialog } from "./components/AboutDialog";
 import { ControlPanel } from "./components/ControlPanel";
+import { Outliner } from "./components/Outliner";
+import { LIGHT_ID, SelectionOverlay, type IdMap } from "./components/SelectionOverlay";
 import { MaterialStage } from "./components/MaterialStage";
 import { Viewport } from "./components/Viewport";
 import { Renderer, type RenderJob, type RenderView } from "./renderer";
@@ -13,7 +15,7 @@ import {
   activeComparison, activeMode, buildPreview, buildRequest, defaultSettings, DOF_PRESETS, fNumberFor, focalLength, imageSize,
   sceneSaveRequest, withSavedRenderSettings,
 } from "./settings";
-import type { Area, EnvironmentConfig, MenuAction, Pose, RenderRequest, SceneInfo, Settings, Startup } from "./types";
+import type { Area, EnvironmentConfig, MenuAction, Pose, RenderRequest, SceneInfo, Selection, Settings, Startup } from "./types";
 
 /** Waits for a pause in slider drags before starting a new render. */
 const SETTINGS_DELAY_MS = 180;
@@ -27,6 +29,55 @@ const scenePose = ({ camera: { position, target, zoom } }: SceneInfo): Pose => (
  * tint, vignetting, chromatic aberration, grain and halation, the LUT, denoise and bloom): two jobs
  * with the same light differ only in what the engine shows again at once, without rendering.
  */
+const OUTLINER_HEIGHT_KEY = "far.outliner.height";
+const OUTLINE_KEY = "far.outliner.outline";
+/** Largest side of the ID map the outline is drawn from, in screen pixels. */
+const MAX_ID_SIDE = 2048;
+
+/**
+ * What `load` gives for the latest `key`, one request at a time: keys that come while one runs
+ * wait, and only the newest is loaded next, so a moving camera never queues up requests.
+ */
+function useLatest<T>(key: string | null, load: () => Promise<T>): { key: string; value: T } | null {
+  const [result, setResult] = useState<{ key: string; value: T } | null>(null);
+  const wanted = useRef<{ key: string; load: () => Promise<T> } | null>(null);
+  const busy = useRef(false);
+  const done = useRef<string | null>(null);
+  wanted.current = key === null ? null : { key, load };
+  useEffect(() => {
+    if (key === null || busy.current) return;
+    busy.current = true;
+    void (async () => {
+      while (wanted.current && wanted.current.key !== done.current) {
+        const next = wanted.current;
+        try {
+          const value = await next.load();
+          setResult({ key: next.key, value });
+        } catch {
+          // Shown without it; the same key is not asked again.
+        }
+        done.current = next.key;
+      }
+      busy.current = false;
+    })();
+  }, [key]);
+  return result;
+}
+const OUTLINER_COLLAPSED_KEY = "far.outliner.collapsed";
+const MIN_OUTLINER_HEIGHT = 120;
+/** What the outliner leaves the settings below it, at least. */
+const MIN_SETTINGS_HEIGHT = 280;
+
+/** A number kept in local storage, or `fallback`. */
+function remembered(key: string, fallback: number): number {
+  try {
+    const value = Number(localStorage.getItem(key));
+    return localStorage.getItem(key) !== null && Number.isFinite(value) ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 function lightKey(job: RenderJob): string {
   const strip = (request: RenderRequest | null) => request && ({
     ...request, exposure: 0, tone_mapping: null, white_balance: 0, tint: 0, vignette: 0, chromatic_aberration: 0, grain: 0, iso: 0,
@@ -69,6 +120,15 @@ export function App() {
   const renderOnNextJob = useRef(false);
   const [showMaterial, setShowMaterial] = useState(false);
   const [selectedMaterial, setSelectedMaterial] = useState<number | null>(null);
+  // The outliner's selection, and whether its tab shows, when a click in the image selects.
+  const [selection, setSelection] = useState<Selection>(null);
+  // A tab the outliner asks the settings to show, and the outliner's height and folding.
+  const [openTab, setOpenTab] = useState<{ tab: string; serial: number } | null>(null);
+  const showTab = (tab: string) => setOpenTab((old) => ({ tab, serial: (old?.serial ?? 0) + 1 }));
+  const [outlinerHeight, setOutlinerHeight] = useState(() => remembered(OUTLINER_HEIGHT_KEY, 260));
+  const [outlinerCollapsed, setOutlinerCollapsed] = useState(() => remembered(OUTLINER_COLLAPSED_KEY, 0) === 1);
+  const sidebarRef = useRef<HTMLElement>(null);
+  const splitDrag = useRef<{ y: number; height: number } | null>(null);
   const [pickingFocus, setPickingFocus] = useState(false);
   const [focusHint, setFocusHint] = useState("");
   const focusRequest = useRef(0);
@@ -116,10 +176,12 @@ export function App() {
           setShowPhotonMap(false);
           setShowMaterial(false);
           setSelectedMaterial(null);
+          setSelection(null);
           setRegion(null);
           setDrawingRegion(false);
           setSettings((old) => old && ({
-            ...withSavedRenderSettings(old, info.render),
+            // What another scene hid means nothing here.
+            ...withSavedRenderSettings({ ...old, hiddenObjects: [], hiddenLights: [] }, info.render),
             environment: info.environment,
             materialOverrides: [],
             pose: scenePose(info),
@@ -173,6 +235,45 @@ export function App() {
     [settings, movingCamera, liveReady, region]);
   const [imageWidth, imageHeight] = settings ? imageSize(settings) : [4, 3];
   const jobKey = JSON.stringify(job);
+
+  // What each pixel shows, from the engine, for the selection's outline, the pointer's
+  // highlight and picking without waiting: a few milliseconds, so it follows the camera.
+  const [outline, setOutline] = useState(() => remembered(OUTLINE_KEY, 1) === 1);
+  const [hover, setHover] = useState<number | null>(null);
+  // The map is as sharp as the overlay is on screen, in its pixels, with the image's shape.
+  const [overlayWidth, setOverlayWidth] = useState(0);
+  const onOverlaySize = useCallback((width: number) => setOverlayWidth(width), []);
+  const wantedWidth = Math.min(overlayWidth || imageWidth, MAX_ID_SIDE, (MAX_ID_SIDE * imageWidth) / imageHeight);
+  const idWidth = Math.max(1, Math.round(wantedWidth));
+  const idHeight = Math.max(1, Math.round((idWidth * imageHeight) / imageWidth));
+  const outlinable = scene !== null && settings !== null && activeMode(settings) === "enhanced" && !activeComparison(settings);
+  const idArgs = outlinable && settings ? {
+    pose: settings.pose, width: idWidth, height: idHeight, hiddenObjects: settings.hiddenObjects, hiddenLights: settings.hiddenLights,
+  } : null;
+  const idKey = idArgs && scene ? JSON.stringify({ path: scene.path, ...idArgs }) : null;
+  const ids = useLatest(idKey, async () => {
+    const buffer = await invoke<ArrayBuffer>("object_ids", idArgs!);
+    return { path: scene!.path, width: idArgs!.width, height: idArgs!.height, ids: new Uint16Array(buffer) } as IdMap & { path: string };
+  });
+  // The last map of this scene and size, even a step behind a moving camera.
+  const idMap = ids && scene && ids.value.path === scene.path && ids.value.width === idWidth && ids.value.height === idHeight
+    ? ids.value : null;
+  const xrayObject = outline && selection?.kind === "object" ? selection.id : null;
+  const xrayKey = idKey && xrayObject !== null ? `${idKey}|${xrayObject}` : null;
+  const xrays = useLatest(xrayKey, async () => ({
+    path: scene!.path, object: xrayObject!, width: idWidth,
+    mask: new Uint8Array(await invoke<ArrayBuffer>("object_xray", { pose: settings!.pose, width: idWidth, height: idHeight, object: xrayObject })),
+  }));
+  const xray = xrays && idMap && xrays.value.path === idMap.path && xrays.value.object === xrayObject && xrays.value.width === idWidth
+    ? xrays.value.mask : null;
+  const selectedCode = selection ? (selection.kind === "object" ? selection.id + 1 : LIGHT_ID + selection.id) : null;
+  /** The ID under a point of the image, from the map. */
+  const idAt = (x: number, y: number) => {
+    if (!idMap) return null;
+    const px = Math.min(idMap.width - 1, Math.max(0, Math.floor(x * idMap.width)));
+    const py = Math.min(idMap.height - 1, Math.max(0, Math.floor(y * idMap.height)));
+    return idMap.ids[py * idMap.width + px];
+  };
   // Without WebGL there is nothing else to show, so every change renders.
   const renderAlone = autoRender || !webgl;
 
@@ -280,12 +381,37 @@ export function App() {
     setSettings((old) => old && { ...old, pose: alignView(retarget(old.pose, center), axis) });
   };
 
+  /** Selects in the outliner what is under a point of the image, and its first material. */
+  const selectAt = async (x: number, y: number) => {
+    if (!scene || !settings) return;
+    // The map of this very view answers at once.
+    const id = ids && ids.key === idKey ? idAt(x, y) : null;
+    if (id !== null) {
+      select(id === 0 ? null : id >= LIGHT_ID ? { kind: "light", id: id - LIGHT_ID } : { kind: "object", id: id - 1 });
+      return;
+    }
+    try {
+      const picked = await invoke<Selection>("pick_object", { pose: settings.pose, width: imageWidth, height: imageHeight, x, y,
+        useKd: settings.useKd, hiddenObjects: settings.hiddenObjects, hiddenLights: settings.hiddenLights });
+      select(picked);
+    } catch (error) {
+      publish({ status: `Error: ${String(error)}` });
+    }
+  };
+
+  const select = (picked: Selection) => {
+    setSelection(picked);
+    const first = picked?.kind === "object" ? scene?.objects[picked.id]?.materials[0] : undefined;
+    if (first !== undefined && scene?.materials.some((m) => m.id === first)) setSelectedMaterial(first);
+  };
+
   const pickFocus = async (x: number, y: number) => {
     if (!scene || !settings || !pickingFocus) return;
     const request = ++focusRequest.current;
     setFocusHint("Finding focus…");
     try {
-      const distance = await invoke<number | null>("pick_focus", { pose: settings.pose, width: imageWidth, height: imageHeight, x, y, useKd: settings.useKd });
+      const distance = await invoke<number | null>("pick_focus", { pose: settings.pose, width: imageWidth, height: imageHeight, x, y,
+        useKd: settings.useKd, hiddenObjects: settings.hiddenObjects, hiddenLights: settings.hiddenLights });
       if (request !== focusRequest.current) return;
       if (distance === null) {
         setFocusHint("No surface here. Click an object, or press Esc to cancel.");
@@ -439,12 +565,36 @@ export function App() {
           setFocusHint("");
         } else if (drawingRegion) setDrawingRegion(false);
         else if (showMaterial) setShowMaterial(false);
+        else if (selection) setSelection(null);
         else void renderer.stop();
       }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [renderer, pickingFocus, showMaterial, drawingRegion]);
+  }, [renderer, pickingFocus, showMaterial, drawingRegion, selection]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(OUTLINER_COLLAPSED_KEY, outlinerCollapsed ? "1" : "0");
+    } catch {
+      // The layout is a convenience; without storage it opens as it starts.
+    }
+  }, [outlinerCollapsed]);
+
+  /** The outliner's height within what the sidebar leaves the settings. */
+  const fitOutliner = (height: number) => {
+    const room = (sidebarRef.current?.clientHeight ?? 800) - MIN_SETTINGS_HEIGHT;
+    return Math.round(Math.max(MIN_OUTLINER_HEIGHT, Math.min(height, room)));
+  };
+  const resizeOutliner = (height: number) => {
+    const fitted = fitOutliner(height);
+    setOutlinerHeight(fitted);
+    try {
+      localStorage.setItem(OUTLINER_HEIGHT_KEY, String(fitted));
+    } catch {
+      // As above.
+    }
+  };
 
   return (
     <>
@@ -461,6 +611,14 @@ export function App() {
           pickingFocus={pickingFocus}
           focusHint={focusHint}
           onPickFocus={(x, y) => void pickFocus(x, y)}
+          onSelectAt={(x, y) => void selectAt(x, y)}
+          onHover={(point) => {
+            const id = point && outline ? idAt(point.x, point.y) : null;
+            setHover(id ? id : null);
+          }}
+          overlay={outline && outlinable
+            ? <SelectionOverlay map={idMap} selected={selectedCode} hover={hover} xray={xray} onSize={onOverlaySize} />
+            : null}
           navigable={scene !== null && settings !== null && activeMode(settings) === "enhanced"
             && !activeComparison(settings) && !pickingFocus && !(showPhotonMap && view.hasPhotonMap) && !materialStage
             && !drawingRegion}
@@ -508,6 +666,54 @@ export function App() {
             setShowPhotonMap(value);
           }}
         />
+        <aside className="sidebar" ref={sidebarRef}>
+        {settings && scene && (
+          <>
+            <Outliner scene={scene} hiddenObjects={settings.hiddenObjects} hiddenLights={settings.hiddenLights}
+              onHiddenChange={(hiddenObjects, hiddenLights) => {
+                // As any edit: what hides changes the light, and the photons with it.
+                publish({ caustics: null, hasPhotonMap: false });
+                setShowPhotonMap(false);
+                setSettings((old) => old && { ...old, hiddenObjects, hiddenLights });
+              }}
+              selection={selection} onSelect={select}
+              onOpenCamera={() => showTab("camera")} onOpenEnvironment={() => showTab("light")}
+              onEditMaterial={(id) => {
+                setSelectedMaterial(id);
+                showTab("materials");
+              }}
+              collapsed={outlinerCollapsed} onCollapsedChange={setOutlinerCollapsed}
+              outline={outline} onOutlineChange={(value) => {
+                setOutline(value);
+                try {
+                  localStorage.setItem(OUTLINE_KEY, value ? "1" : "0");
+                } catch {
+                  // A convenience: without storage it is on again next time.
+                }
+              }}
+              style={outlinerCollapsed ? undefined : { height: fitOutliner(outlinerHeight) }} />
+            {!outlinerCollapsed && (
+              <div className="sidebar-split" role="separator" aria-orientation="horizontal" aria-label="Outliner height"
+                aria-valuenow={outlinerHeight} tabIndex={0} title="Drag to resize the outliner"
+                onPointerDown={(event) => {
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  splitDrag.current = { y: event.clientY, height: fitOutliner(outlinerHeight) };
+                }}
+                onPointerMove={(event) => {
+                  if (splitDrag.current) setOutlinerHeight(fitOutliner(splitDrag.current.height + event.clientY - splitDrag.current.y));
+                }}
+                onPointerUp={() => {
+                  if (splitDrag.current) resizeOutliner(outlinerHeight);
+                  splitDrag.current = null;
+                }}
+                onPointerCancel={() => { splitDrag.current = null; }}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowUp") resizeOutliner(outlinerHeight - 24);
+                  if (event.key === "ArrowDown") resizeOutliner(outlinerHeight + 24);
+                }} />
+            )}
+          </>
+        )}
         {settings && (
           <ControlPanel
             settings={settings}
@@ -548,12 +754,14 @@ export function App() {
             unsaved={unsaved}
             selectedMaterial={selectedMaterial}
             onSelectMaterial={setSelectedMaterial}
+            openTab={openTab}
             onExpandMaterial={() => {
               setShowPhotonMap(false);
               setShowMaterial(true);
             }}
           />
         )}
+        </aside>
       </div>
       <AboutDialog />
     </>
