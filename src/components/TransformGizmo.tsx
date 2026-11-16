@@ -40,6 +40,8 @@ interface TransformGizmoProps {
   onCommit: (change: Change) => void;
   /** It was called off: nothing changes. */
   onCancel: () => void;
+  /** Grows to start a keyboard move, as after Shift+D. */
+  grab?: number;
 }
 
 const add = (a: Vec3, b: Vec3, s = 1): Vec3 => [a[0] + b[0] * s, a[1] + b[1] * s, a[2] + b[2] * s];
@@ -296,6 +298,20 @@ export function TransformGizmo(props: TransformGizmoProps) {
     // The listeners read everything that changes through refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // A keyboard move asked for from outside, as after duplicating: when the count grows while
+  // the gizmo shows, not for the count it finds when it appears.
+  const grabSeen = useRef(props.grab);
+  useEffect(() => {
+    if (props.grab === grabSeen.current) return;
+    grabSeen.current = props.grab;
+    if (!props.grab || dragging.current) return;
+    const { pose, aspect, point } = latest.current;
+    const center = project(pose, aspect, point);
+    const at = mouse.current ?? (center && [center[0] + 0.05, center[1]] as [number, number]);
+    if (at) begin("move", null, at, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.grab]);
 
   // A change still going when the gizmo goes away, as when the selection changes, is called off.
   useEffect(() => () => {

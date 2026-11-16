@@ -1,9 +1,10 @@
 import {
   Box, Camera, ChevronRight, Circle, Cloud, CloudFog, Cone, Cylinder, Eye, EyeOff, Flashlight, Globe, Grid2x2, Lamp, Lightbulb,
-  Move3d, Package, RectangleHorizontal, ScanEye, Search, Sparkles, Square, Sun, Torus, Triangle, X, type LucideIcon,
+  Copy, Move3d, Package, Plus, RectangleHorizontal, ScanEye, Search, Sparkles, Square, Sun, Torus, Trash2, Triangle, X, type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import type { SceneInfo, Selection } from "../types";
+import { NEW_LIGHTS, NEW_OBJECTS, type NewKind } from "../sceneEntries";
+import type { SceneInfo, SceneLightInfo, SceneObjectInfo, Selection } from "../types";
 import { GlassPanel } from "./GlassPanel";
 
 const OBJECT_KINDS: Record<string, { icon: LucideIcon; label: string }> = {
@@ -43,6 +44,14 @@ function savedFolded(): string[] {
 
 interface OutlinerProps {
   scene: SceneInfo;
+  /** The file's objects and lights then the added ones, by index, and those deleted. */
+  objects: SceneObjectInfo[];
+  lights: SceneLightInfo[];
+  removedObjects: number[];
+  removedLights: number[];
+  onAdd: (kind: NewKind) => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
   hiddenObjects: number[];
   hiddenLights: number[];
   onHiddenChange: (objects: number[], lights: number[]) => void;
@@ -94,11 +103,14 @@ export function Outliner(props: OutlinerProps) {
   const query = filter.trim().toLowerCase();
   const shows = (name: string) => query === "" || name.toLowerCase().includes(query);
   const hiddenCount = hiddenObjects.length + hiddenLights.length;
-  const selected = selection?.kind === "object" ? scene.objects[selection.id] : null;
-  const selectedLight = selection?.kind === "light" ? scene.light_list[selection.id] : null;
+  const selected = selection?.kind === "object" ? props.objects[selection.id] : null;
+  const selectedLight = selection?.kind === "light" ? props.lights[selection.id] : null;
   const isHidden = selection ? (selection.kind === "object" ? hiddenObjects : hiddenLights).includes(selection.id) : false;
-  const lights = scene.light_list.map((light, id) => ({ light, id })).filter(({ light }) => shows(light.name));
-  const objects = scene.objects.map((object, id) => ({ object, id })).filter(({ object }) => shows(object.name));
+  const lights = props.lights.map((light, id) => ({ light, id }))
+    .filter(({ light, id }) => !props.removedLights.includes(id) && shows(light.name));
+  const objects = props.objects.map((object, id) => ({ object, id }))
+    .filter(({ object, id }) => !props.removedObjects.includes(id) && shows(object.name));
+  const [adding, setAdding] = useState(false);
   const open = (group: string) => query !== "" || !folded.includes(group);
   const fold = (group: string) => setFolded(folded.includes(group) ? folded.filter((g) => g !== group) : [...folded, group]);
 
@@ -115,6 +127,32 @@ export function Outliner(props: OutlinerProps) {
             Show all
           </button>
         )}
+        <div className="outliner-add">
+          <button type="button" className="outliner-tool" aria-expanded={adding} aria-label="Add an object or a light"
+            title="Add an object or a light where the camera looks" onClick={() => setAdding(!adding)}>
+            <Plus size={14} aria-hidden="true" />
+          </button>
+          {adding && (
+            <>
+              <div className="outliner-add-backdrop" onClick={() => setAdding(false)} />
+              <div className="outliner-add-menu glass" role="menu">
+                {[["Objects", NEW_OBJECTS], ["Lights", NEW_LIGHTS]].map(([title, items]) => (
+                  <div key={title as string} role="group" aria-label={title as string}>
+                    <p className="outliner-add-title">{title as string}</p>
+                    {(items as typeof NEW_OBJECTS).map(({ kind, label }) => (
+                      <button key={kind} type="button" role="menuitem" onClick={() => {
+                        setAdding(false);
+                        props.onAdd(kind);
+                      }}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
         <button type="button" className="outliner-tool" aria-pressed={props.outline} aria-label="Outline the selection on the image"
           title={`Outline the selection on the image: ${props.outline ? "on" : "off"}`} onClick={() => props.onOutlineChange(!props.outline)}>
           <ScanEye size={13} aria-hidden="true" />
@@ -151,7 +189,7 @@ export function Outliner(props: OutlinerProps) {
               <Item icon={Globe} name={scene.environment.sky ? "Physical sky" : "Environment"} onSelect={props.onOpenEnvironment} />
             )}
             <Group name="Lights" count={lights.length} open={open("lights")} onFold={() => fold("lights")} />
-            {open("lights") && scene.light_list.length === 0 && (
+            {open("lights") && lights.length === 0 && query === "" && (
               <li className="outliner-empty">Only glowing objects and the environment light this scene.</li>
             )}
             {open("lights") && lights.map(({ light, id }) => (
@@ -181,6 +219,12 @@ export function Outliner(props: OutlinerProps) {
                 <button type="button" className="outliner-eye" aria-label="Move, turn or resize it" title="Move, turn or resize it"
                   onClick={props.onEditObject}>
                   <Move3d size={13} aria-hidden="true" />
+                </button>
+                <button type="button" className="outliner-eye" aria-label="Duplicate it" title="Duplicate it (⇧D)" onClick={props.onDuplicate}>
+                  <Copy size={13} aria-hidden="true" />
+                </button>
+                <button type="button" className="outliner-eye" aria-label="Delete it" title="Delete it (Delete)" onClick={props.onDelete}>
+                  <Trash2 size={13} aria-hidden="true" />
                 </button>
                 <button type="button" className="outliner-eye" aria-pressed={!isHidden}
                   aria-label={isHidden ? "Show it" : "Hide it"} title={isHidden ? "Show" : "Hide"}

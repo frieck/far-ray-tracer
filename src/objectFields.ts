@@ -47,7 +47,7 @@ export const OBJECT_FIELDS: Record<string, Field[]> = {
   torus: [at("center"), length("major_radius", "Ring radius"), length("minor_radius", "Tube radius"), turned],
   ground: [at("position", "Height point"), { type: "vector", key: "normal", label: "Facing", default: [0, 1, 0], min: -1, max: 1, step: 0.01, hard: [-1e3, 1e3] }],
   plane: [{ type: "corners", key: "points", label: "Position" }],
-  mesh: [at("position"), length("size", "Size")],
+  mesh: [at("position"), turned, length("size", "Size")],
   model: [at("position"), turned, { type: "number", key: "scale", label: "Scale", default: 1, min: 0.01, max: 10, step: 0.01, hard: [1e-4, 1e6], log: true }],
   volume: [
     at("center"), turned,

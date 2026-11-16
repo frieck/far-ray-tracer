@@ -100,6 +100,13 @@ are not used. The shader is compiled for what
   of a black body of the same brightness as white, from 1000 to 40000 K. The Object tab's
   **Color by** switches between a color and a temperature. An edit can now remove a field.
 
+- Objects and lights can be added from the outliner's **+** (primitives, area, sphere and spot
+  lights, where the camera looks), duplicated (⇧D moves the copy with the mouse) and deleted;
+  Save Scene writes them into the file and opens it again.
+
+- A plane shows its rotation, width and depth in the Object tab, from its corners, and 3DS
+  meshes take a `rotation`, so both turn with the gizmo and from their fields.
+
 - A more compact panel: Render, Render after each change, Open, Save and Export share one
   row, and the tab's title, which the rail already shows, no longer takes one.
 

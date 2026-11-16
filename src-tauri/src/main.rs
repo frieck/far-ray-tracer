@@ -81,20 +81,38 @@ struct SceneView {
     entries: far_core::scene_save::EntryEdits,
 }
 
+impl SceneView {
+    /// What is left out: what the outliner hides and what was deleted, sorted.
+    fn hidden(&self) -> (Vec<usize>, Vec<usize>) {
+        let merged = |a: &[usize], b: &[usize]| {
+            let mut items: Vec<usize> = a.iter().chain(b).copied().collect();
+            items.sort_unstable();
+            items.dedup();
+            items
+        };
+        (merged(&self.hidden_objects, &self.entries.removed_objects), merged(&self.hidden_lights, &self.entries.removed_lights))
+    }
+
+    /// The lights left in the scene, by the index the file and the added ones give them.
+    fn shown_lights(&self, scene: &Scene) -> Vec<u32> {
+        let count = scene.scene_lights.len() + self.entries.added_lights.len();
+        let hidden = self.hidden().1;
+        (0..count as u32).filter(|l| !hidden.contains(&(*l as usize))).collect()
+    }
+}
+
 impl OpenScene {
     /// The scene as `view` changes it, edited and with what it hides left out, and its trees;
     /// None when it changes nothing. The last one is kept, so a new image of the same view, a
     /// click or an outline reuse it.
     fn view(&self, view: &SceneView) -> Result<Option<Arc<Prepared>>, String> {
-        let clean = |items: &[usize], count: usize| {
-            let mut items: Vec<usize> = items.iter().copied().filter(|&i| i < count).collect();
-            items.sort_unstable();
-            items.dedup();
-            items
-        };
-        let objects = clean(&view.hidden_objects, self.scene.objects.len());
-        let lights = clean(&view.hidden_lights, self.scene.scene_lights.len());
+        let (mut objects, mut lights) = view.hidden();
         let edited = !view.entries.is_empty();
+        if !edited {
+            // Without added entries, only the open scene's indices mean anything.
+            objects.retain(|&o| o < self.scene.objects.len());
+            lights.retain(|&l| l < self.scene.scene_lights.len());
+        }
         if !edited && objects.is_empty() && lights.is_empty() {
             return Ok(None);
         }
@@ -105,11 +123,14 @@ impl OpenScene {
                 return Ok(Some(prepared.clone()));
             }
         }
-        let scene = if edited {
-            let scene = self.scene.edited(&self.path, &view.entries)?;
-            if objects.is_empty() && lights.is_empty() { scene } else { scene.without(&objects, &lights) }
-        } else {
-            self.scene.without(&objects, &lights)
+        let base = if edited { Some(self.scene.edited(&self.path, &view.entries)?) } else { None };
+        let counted = base.as_ref().unwrap_or(&self.scene);
+        // Indices past the scene's, the added entries counted, mean nothing.
+        let objects: Vec<usize> = objects.into_iter().filter(|&o| o < counted.objects.len()).collect();
+        let lights: Vec<usize> = lights.into_iter().filter(|&l| l < counted.scene_lights.len()).collect();
+        let scene = match base {
+            Some(scene) if objects.is_empty() && lights.is_empty() => scene,
+            _ => counted.without(&objects, &lights),
         };
         let prepared = Arc::new(Prepared { scene, kd_classic: OnceLock::new(), kd: OnceLock::new(), bvh: OnceLock::new() });
         *cache = Some((key, prepared.clone()));
@@ -126,14 +147,16 @@ impl OpenScene {
                 return Ok(prepared.clone());
             }
         }
-        let others: Vec<usize> = (0..self.scene.objects.len()).filter(|&o| o != object).collect();
-        let lights: Vec<usize> = (0..self.scene.scene_lights.len()).collect();
-        let scene = if entries.is_empty() {
-            self.scene.without(&others, &lights)
-        } else {
-            self.scene.edited(&self.path, entries)?.without(&others, &lights)
-        };
-        let prepared = Arc::new(Prepared { scene, kd_classic: OnceLock::new(), kd: OnceLock::new(), bvh: OnceLock::new() });
+        let edited = if entries.is_empty() { None } else { Some(self.scene.edited(&self.path, entries)?) };
+        let base = edited.as_ref().unwrap_or(&self.scene);
+        if object >= base.objects.len() {
+            return Err("Unknown object".into());
+        }
+        let others: Vec<usize> = (0..base.objects.len()).filter(|&o| o != object).collect();
+        let lights: Vec<usize> = (0..base.scene_lights.len()).collect();
+        let prepared = Arc::new(Prepared {
+            scene: base.without(&others, &lights), kd_classic: OnceLock::new(), kd: OnceLock::new(), bvh: OnceLock::new(),
+        });
         *cache = Some((key, prepared.clone()));
         Ok(prepared)
     }
@@ -164,7 +187,7 @@ struct ObjectInfo {
     kind: &'static str,
     /// Its materials' ids, as in `SceneInfo::materials`.
     materials: Vec<usize>,
-    /// Its entry in the file, its material left out: the values the Object tab edits.
+    /// Its entry in the file: the values the Object tab edits, and what a duplicate copies.
     source: serde_json::Value,
 }
 
@@ -447,13 +470,10 @@ struct RenderResult {
     cpu_reason: Option<String>,
 }
 
-/// Entry `index` of the scene file's `list`, without its material, or null.
+/// Entry `index` of the scene file's `list`, or null: what the Object tab edits, and what a
+/// duplicate copies, its material included.
 fn entry(scene: &Scene, list: &str, index: usize) -> serde_json::Value {
-    let mut value = scene.source.as_deref().and_then(|s| s.get(list)).and_then(|l| l.get(index)).cloned().unwrap_or_default();
-    if let Some(object) = value.as_object_mut() {
-        object.remove("material");
-    }
-    value
+    scene.source.as_deref().and_then(|s| s.get(list)).and_then(|l| l.get(index)).cloned().unwrap_or_default()
 }
 
 fn open_scene(path: &Path, state: &AppState) -> Result<SceneInfo, String> {
@@ -967,15 +987,12 @@ fn pick_object(pose: far_core::Pose, width: u32, height: u32, x: f32, y: f32, us
     let open = state.scene.lock().unwrap().clone().ok_or("No scene is open")?;
     let prepared = open.view(&view)?;
     let (scene, _, kd, _) = open.parts(&prepared);
-    let hidden_lights = &view.hidden_lights;
+    let shown = view.shown_lights(&open.scene);
     let picked = far_core::camera::pick(scene, if use_kd { kd.get() } else { None }, &pose, width, height, x, y);
     Ok(picked.and_then(|(found, _)| found).map(|found| match found {
         far_core::scene::Picked::Object(id) => PickedInfo::Object(id),
         // Hidden lights were taken out; the index is the one the file gives.
-        far_core::scene::Picked::Light(id) => {
-            let mut shown = (0..open.scene.scene_lights.len()).filter(|l| !hidden_lights.contains(l));
-            PickedInfo::Light(shown.nth(id).unwrap_or(id))
-        }
+        far_core::scene::Picked::Light(id) => PickedInfo::Light(shown.get(id).map_or(id, |&l| l as usize)),
     }))
 }
 
@@ -990,9 +1007,8 @@ fn object_ids(pose: far_core::Pose, width: u32, height: u32, view: SceneView, st
     let open = state.scene.lock().unwrap().clone().ok_or("No scene is open")?;
     let prepared = open.view(&view)?;
     let (scene, _, kd, _) = open.parts(&prepared);
-    let hidden_lights = &view.hidden_lights;
     let kd = kd.get_or_init(|| KdTree::for_mode(scene, Mode::Enhanced));
-    let shown: Vec<u32> = (0..open.scene.scene_lights.len() as u32).filter(|l| !hidden_lights.contains(&(*l as usize))).collect();
+    let shown = view.shown_lights(&open.scene);
     let ids = far_core::camera::object_ids(scene, Some(kd), &pose, width, height);
     Ok(Response::new(ids.into_iter().flat_map(|id| short_id(id, &shown).to_le_bytes()).collect::<Vec<u8>>()))
 }
@@ -1021,9 +1037,6 @@ fn object_xray(pose: far_core::Pose, width: u32, height: u32, object: usize, vie
     pose.validate()?;
     id_map_size(width, height)?;
     let open = state.scene.lock().unwrap().clone().ok_or("No scene is open")?;
-    if object >= open.scene.objects.len() {
-        return Err("Unknown object".into());
-    }
     let alone = open.alone(&view.unwrap_or_default().entries, object)?;
     let kd = alone.kd.get_or_init(|| KdTree::for_mode(&alone.scene, Mode::Enhanced));
     let ids = far_core::camera::object_ids(&alone.scene, Some(kd), &pose, width, height);
@@ -1095,6 +1108,9 @@ struct SaveSceneRequest {
 struct SavedScene {
     path: String,
     warnings: Vec<String>,
+    /// Objects or lights were added or deleted, so their indices changed: the app opens the
+    /// saved file again.
+    reopen: bool,
 }
 
 /// The interface tells whether the scene has unsaved edits, so quitting can ask first.
@@ -1164,9 +1180,10 @@ fn save_scene(choose: bool, request: SaveSceneRequest, app: AppHandle, state: St
         render: Some(request.render),
         entries: request.entries,
     };
+    let reopen = edits.entries.changes_entries();
     let warnings = far_core::scene_save::save(&open.scene, &open.path, &target, &edits)?;
     *open.save_to.lock().unwrap() = Some(target.clone());
-    Ok(Some(SavedScene { path: target.to_string_lossy().into_owned(), warnings }))
+    Ok(Some(SavedScene { path: target.to_string_lossy().into_owned(), warnings, reopen }))
 }
 
 fn message(fields: [u32; 6], pixels: Option<&Image>) -> Response {
@@ -1660,6 +1677,23 @@ mod tests {
         assert!(Arc::ptr_eq(&edited, &open.view(&moved(2.5)).unwrap().unwrap()));
         assert_eq!(edited.scene.prims.len(), open.scene.prims.len());
         assert!(open.view(&moved(-1.0)).is_err());
+        // An added sphere comes after the file's objects; a deleted object is left out, as a
+        // hidden one, and the added and deleted lights keep their indices.
+        let grown = SceneView {
+            entries: far_core::scene_save::EntryEdits {
+                added_objects: vec![serde_json::json!({"type": "sphere", "name": "Ball", "center": [0, 1, 0], "radius": 0.3})],
+                added_lights: vec![serde_json::json!({"type": "sphere", "name": "Lamp", "position": [0, 4, 0], "radius": 0.1})],
+                removed_objects: vec![0],
+                removed_lights: vec![0],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let prepared = open.view(&grown).unwrap().unwrap();
+        assert_eq!(prepared.scene.objects.len(), objects + 1);
+        assert!((0..prepared.scene.prims.len()).any(|p| prepared.scene.object_of(p) == Some(objects)));
+        assert!((0..prepared.scene.prims.len()).all(|p| prepared.scene.object_of(p) != Some(0)));
+        assert_eq!(grown.shown_lights(&open.scene), (1..=lights as u32).collect::<Vec<_>>());
         assert!(first.scene.prims.len() < open.scene.prims.len());
         assert!((0..first.scene.prims.len()).all(|p| !matches!(first.scene.object_of(p), Some(0) | Some(2))));
         // The image's middle shows one of the box's objects, named as the outliner lists them.

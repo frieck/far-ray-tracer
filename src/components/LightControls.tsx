@@ -58,6 +58,8 @@ export function LightColorRows({ light, edits, onChange }: { light: SceneLightIn
 
 interface LightsPanelProps {
   lights: SceneLightInfo[];
+  /** Deleted lights, left out of the list. */
+  removed: number[];
   edits: Record<number, Patch>;
   hidden: number[];
   selection: Selection;
@@ -70,7 +72,7 @@ interface LightsPanelProps {
  * Every light of the scene in one list, as V-Ray's Light Lister: each one on or off, its color
  * and its intensity, and solo to see its light alone.
  */
-export function LightsPanel({ lights, edits, hidden, selection, onEdit, onHiddenChange, onSelect }: LightsPanelProps) {
+export function LightsPanel({ lights, removed, edits, hidden, selection, onEdit, onHiddenChange, onSelect }: LightsPanelProps) {
   const all = lights.map((_, id) => id);
   const soloed = (id: number) => hidden.length === lights.length - 1 && !hidden.includes(id);
   return (
@@ -78,6 +80,7 @@ export function LightsPanel({ lights, edits, hidden, selection, onEdit, onHidden
       {lights.length === 0 && <Hint>This scene has no lights: glowing objects and the environment light it.</Hint>}
       <ul className="light-list" aria-label="Lights">
         {lights.map((light, id) => {
+          if (removed.includes(id)) return null;
           const on = !hidden.includes(id);
           const { kelvin, rgb } = colorOf(light, edits[id]);
           const intensity = entryValue("intensity", light.source, edits[id]);

@@ -21,18 +21,48 @@ pub struct EntryEdits {
     pub objects: Vec<(usize, Map<String, Value>)>,
     #[serde(default)]
     pub lights: Vec<(usize, Map<String, Value>)>,
+    /// Whole entries added after the file's own, in order: an added object's index is the
+    /// file's count of objects plus its place here, so no index already in use changes.
+    #[serde(default)]
+    pub added_objects: Vec<Value>,
+    #[serde(default)]
+    pub added_lights: Vec<Value>,
+    /// Entries deleted, by index, the added ones included. While editing they are hidden, as
+    /// the outliner hides them, so no index changes; saving takes them out of the file.
+    #[serde(default)]
+    pub removed_objects: Vec<usize>,
+    #[serde(default)]
+    pub removed_lights: Vec<usize>,
 }
 
 /// Fields an edit cannot change.
 const FIXED_FIELDS: [&str; 5] = ["type", "file", "material", "ies", "name"];
 
 impl EntryEdits {
+    /// Whether the scene reads the same with these edits: deletions alone change nothing until
+    /// saved, as they are hidden.
     pub fn is_empty(&self) -> bool {
         self.objects.iter().all(|(_, f)| f.is_empty()) && self.lights.iter().all(|(_, f)| f.is_empty())
+            && self.added_objects.is_empty() && self.added_lights.is_empty()
     }
 
-    /// Writes the edits into a scene file's root object.
+    /// Whether saving changes which objects and lights the file has, so their indices.
+    pub fn changes_entries(&self) -> bool {
+        !(self.added_objects.is_empty() && self.added_lights.is_empty() && self.removed_objects.is_empty() && self.removed_lights.is_empty())
+    }
+
+    /// Writes the edits into a scene file's root object: the added entries after the file's,
+    /// then each edit's fields. Deleted entries stay, so indices hold; see `remove_deleted`.
     pub fn apply(&self, root: &mut Map<String, Value>) {
+        for (list, added) in [("objects", &self.added_objects), ("lights", &self.added_lights)] {
+            if added.is_empty() {
+                continue;
+            }
+            let entries = root.entry(list).or_insert_with(|| Value::Array(Vec::new()));
+            if let Some(entries) = entries.as_array_mut() {
+                entries.extend(added.iter().filter(|e| e.is_object()).cloned());
+            }
+        }
         for (list, edits) in [("objects", &self.objects), ("lights", &self.lights)] {
             let Some(entries) = root.get_mut(list).and_then(Value::as_array_mut) else { continue };
             for (index, fields) in edits {
@@ -48,6 +78,19 @@ impl EntryEdits {
                     }
                 }
             }
+        }
+    }
+
+    /// Takes the deleted entries out of a scene file's root object, after `apply`.
+    pub fn remove_deleted(&self, root: &mut Map<String, Value>) {
+        for (list, removed) in [("objects", &self.removed_objects), ("lights", &self.removed_lights)] {
+            let Some(entries) = root.get_mut(list).and_then(Value::as_array_mut) else { continue };
+            let mut index = 0;
+            entries.retain(|_| {
+                let keep = !removed.contains(&index);
+                index += 1;
+                keep
+            });
         }
     }
 }
@@ -125,6 +168,8 @@ pub fn save(scene: &Scene, original: &Path, target: &Path, edits: &SceneEdits) -
             MaterialSource::None => warnings.push(format!("Edits to material {id} are not saved")),
         }
     }
+    // Last, once material edits have found their objects by index.
+    edits.entries.remove_deleted(root);
     match &edits.render {
         Some(render) => { root.insert("render".into(), render.clone()); }
         None => { root.remove("render"); }
@@ -279,6 +324,10 @@ mod tests {
             entries: EntryEdits {
                 objects: vec![(1, json!({"center": [3, 1, 5], "type": "box"}).as_object().unwrap().clone())],
                 lights: vec![(0, json!({"intensity": 4}).as_object().unwrap().clone()), (7, Map::new())],
+                // A box added, and the first sphere deleted after its material was edited.
+                added_objects: vec![json!({"type": "box", "name": "Crate", "center": [0, 0, 8], "size": [1, 1, 1]})],
+                removed_objects: vec![0],
+                ..Default::default()
             },
         };
         // Saved elsewhere: the IES path and the data folder are rewritten.
@@ -293,12 +342,13 @@ mod tests {
         assert!((saved["camera"]["scene_unit"].as_f64().unwrap() - 0.1).abs() < 1e-6);
         assert_eq!(saved["format"], crate::scene_file::FORMAT);
         assert!(saved["environment"]["sky"].is_object());
-        assert_eq!(saved["objects"][0]["material"]["bump"]["strength"], 0.5);
-        assert_eq!(saved["objects"][1]["material"]["surface"]["preset"], "metal");
-        assert_eq!(saved["objects"][1]["material"]["emission"], json!({"color": [1.0, 0.5, 0.0], "strength": 3.0}));
-        assert!(saved["objects"][0]["material"].get("emission").is_none());
-        assert_eq!(saved["objects"][1]["center"], json!([3, 1, 5]));
-        assert_eq!(saved["objects"][1]["type"], "sphere");
+        // The first sphere is gone, so the second is first and the crate after it.
+        assert_eq!(saved["objects"].as_array().unwrap().len(), 2);
+        assert_eq!(saved["objects"][0]["material"]["surface"]["preset"], "metal");
+        assert_eq!(saved["objects"][0]["material"]["emission"], json!({"color": [1.0, 0.5, 0.0], "strength": 3.0}));
+        assert_eq!(saved["objects"][0]["center"], json!([3, 1, 5]));
+        assert_eq!(saved["objects"][0]["type"], "sphere");
+        assert_eq!(saved["objects"][1]["name"], "Crate");
         assert_eq!(saved["lights"][0]["intensity"], 4);
         let name = dir.file_name().unwrap().to_string_lossy().into_owned();
         assert_eq!(saved["lights"][0]["ies"], format!("../{name}/scenes/lamp.ies"));

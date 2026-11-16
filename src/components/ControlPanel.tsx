@@ -50,8 +50,10 @@ import { GlassPanel } from "./GlassPanel";
 import { NumberField } from "./NumberField";
 import { Segmented } from "./Segmented";
 import { ButtonRow, CheckRow, Choice, ChoiceRow, ColorRow, Hint, Row, ScrubRow, SearchContext, Section, VectorRow } from "./props";
-import { fieldsFor, middle, movedCorners, resizedEdge, valueOf, type Field, type Vec3 } from "../objectFields";
+import { fieldsFor, resizedEdge, valueOf, type Field, type Vec3 } from "../objectFields";
+import { planePoints, planeState, type PlaneState } from "../transforms";
 import { LightColorRows, LightsPanel } from "./LightControls";
+import { sceneEntries } from "../sceneEntries";
 
 interface ControlPanelProps {
   loadingEnvironment: boolean;
@@ -350,7 +352,8 @@ function LightTab({ props, update, enhanced }: TabContext) {
   return (
     <>
       {scene && (
-        <LightsPanel lights={scene.light_list} edits={settings.lightEdits} hidden={settings.hiddenLights}
+        <LightsPanel lights={sceneEntries(scene, settings).lights} removed={settings.removedLights} edits={settings.lightEdits}
+          hidden={settings.hiddenLights}
           selection={props.selection} onSelect={props.onSelect}
           onEdit={(id, patch) => update(withEntryEdit(settings, true, id, patch))}
           onHiddenChange={(hiddenLights) => update({ hiddenLights })} />
@@ -706,16 +709,17 @@ function ObjectTab({ props, update }: TabContext) {
   if (!scene) return <Hint>Open a scene to edit its objects.</Hint>;
   if (!selection) return <Hint>Select an object or a light in the outliner or the image to move, turn or resize it.</Hint>;
   const light = selection.kind === "light";
-  const entry = light ? scene.light_list[selection.id] : scene.objects[selection.id];
+  const all = sceneEntries(scene, settings);
+  const entry = light ? all.lights[selection.id] : all.objects[selection.id];
   if (!entry) return null;
   const key = light ? "lightEdits" : "objectEdits";
-  const all = settings[key];
-  const edits = all[selection.id];
+  const allEdits = settings[key];
+  const edits = allEdits[selection.id];
   const fields = fieldsFor(entry.kind, entry.source, light);
   const set = (field: string, value: unknown) =>
-    update({ [key]: { ...all, [selection.id]: { ...edits, [field]: value } } } as Partial<Settings>);
+    update({ [key]: { ...allEdits, [selection.id]: { ...edits, [field]: value } } } as Partial<Settings>);
   const reset = () => {
-    const rest = { ...all };
+    const rest = { ...allEdits };
     delete rest[selection.id];
     update({ [key]: rest } as Partial<Settings>);
   };
@@ -761,11 +765,25 @@ function FieldRow({ field, source, edits, onChange }: {
     case "color":
       return <ColorRow label={field.label} value={value as Vec3} onChange={(v) => onChange(field.key, v)} />;
     case "corners": {
+      // A plane is its four corners: shown as where it is, how it is turned from the file's
+      // corners and how long its edges are, and written back as corners.
+      const original = source.points as Vec3[] | undefined;
       const points = (edits?.points ?? source.points) as Vec3[] | undefined;
-      if (!points) return null;
+      if (!original || !points || original.length !== 4 || points.length !== 4) return null;
+      const state = planeState(original, points);
+      const set = (change: Partial<PlaneState>) => onChange("points", planePoints(original, { ...state, ...change }));
       return (
-        <VectorRow label={field.label} value={middle(points)} min={-20} max={20} step={0.01} hard={[-1e6, 1e6]}
-          hint="Where the middle of its four corners is." onChange={(v) => onChange("points", movedCorners(points, v))} />
+        <>
+          <VectorRow label="Position" value={state.position} min={-20} max={20} step={0.01} hard={[-1e6, 1e6]}
+            hint="Where the middle of its four corners is." onChange={(position) => set({ position })} />
+          <VectorRow label="Rotation" value={state.rotation} min={-180} max={180} step={1} hard={[-3600, 3600]}
+            format={degrees} hint="Degrees about X, then Y, then Z, from how the scene file lays it."
+            onChange={(rotation) => set({ rotation })} />
+          <ScrubRow label="Width" value={state.width} min={0.01} max={20} step={0.01} hard={[1e-4, 1e6]}
+            hint="Its first edge, from the first corner to the second." onChange={(width) => set({ width })} />
+          <ScrubRow label="Depth" value={state.depth} min={0.01} max={20} step={0.01} hard={[1e-4, 1e6]}
+            hint="Its last edge, from the first corner to the fourth." onChange={(depth) => set({ depth })} />
+        </>
       );
     }
     case "edge": {

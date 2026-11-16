@@ -683,3 +683,31 @@ fn the_id_map_of_a_busy_scene_names_many_objects_quickly() {
     eprintln!("ID map of the still life, 800 x 600: {elapsed:?}, {} things", seen.len());
     assert!(seen.len() > 10, "{seen:?}");
 }
+
+#[test]
+fn a_3ds_mesh_turns_about_where_it_is_placed() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes/2008/knot-show.far");
+    let scene = Scene::open(&path).unwrap();
+    let mesh = scene.objects.iter().position(|o| o.kind == "mesh").expect("the knot example has a 3DS mesh");
+    let position = scene.source.as_ref().unwrap()["objects"][mesh]["position"].clone();
+    let at: Vec<f32> = serde_json::from_value(position).unwrap();
+    let edits = far_core::scene_save::EntryEdits {
+        objects: vec![(mesh, serde_json::json!({"rotation": [0, 90, 0]}).as_object().unwrap().clone())],
+        ..Default::default()
+    };
+    let turned = scene.edited(&path, &edits).unwrap();
+    let corners = |s: &Scene| -> Vec<[f32; 3]> {
+        (0..s.prims.len()).filter(|&p| s.object_of(p) == Some(mesh)).take(20).flat_map(|p| match &s.prims[p] {
+            far_core::scene::Primitive::Triangle(t) => t.vertices.map(|v| s.vertices[v as usize].pos.array()).to_vec(),
+            _ => Vec::new(),
+        }).collect()
+    };
+    let (before, after) = (corners(&scene), corners(&turned));
+    assert!(!before.is_empty());
+    // A quarter turn about Y: x' = z, z' = -x, about the mesh's position.
+    for (a, b) in before.iter().zip(&after) {
+        let (dx, dz) = (a[0] - at[0], a[2] - at[2]);
+        let expected = [at[0] + dz, a[1], at[2] - dx];
+        assert!((0..3).all(|k| (b[k] - expected[k]).abs() < 1e-3), "{a:?} -> {b:?}, not {expected:?}");
+    }
+}

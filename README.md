@@ -391,7 +391,7 @@ saves. A scene without it is read as the current version. A version of the app t
 newer format than it knows refuses the scene and says to update, rather than misreading it.
 
 - Solids are centered on `center` with Y as their axis. `rotation` is in degrees around X,
-  then Y, then Z.
+  then Y, then Z. A `mesh` takes a `rotation` too, about its `position`.
 - `material` is optional and accepts `color`, `diffuse`, `specular`, `reflection`,
   `refraction`, `ior`, `glossy`, `texture`, `scale_u` and `scale_v`.
 - Box, cylinder, tube, cone and torus are intersected exactly, so curves stay smooth at any
@@ -666,8 +666,8 @@ in the scene file:
 | --- | --- |
 | Sphere, box, cylinder, tube, cone, torus | Center, the shape's sizes, rotation |
 | Ground | A point it passes through, the way it faces |
-| Plane | Where the middle of its corners is |
-| 3DS mesh | Position, size |
+| Plane | Where the middle of its corners is, its rotation from how the file lays it, its width and depth |
+| 3DS mesh | Position, rotation, size |
 | Model | Position, rotation, scale (or size, when the file gives one) |
 | Volume | Center, size or radius, rotation, density, color, anisotropy |
 | Point light | Position, radius, color |
@@ -692,12 +692,22 @@ that axis, shown as a line across the image for moves and turns, and the same ke
 frees it. Shift moves in tenths of a unit, turns in 5 degree steps and scales in tenths. Keys
 typed into a field are left alone, and an arrow that points at the camera is hidden.
 
-Turning writes a solid's or a model's rotation, as degrees about X, then Y, then Z; a plane's
-corners about their middle; the ground's facing; an area light's edges; and a spotlight's or
-IES light's direction, which aims it. A sphere, a 3DS mesh and a round light have nothing to
-turn; fog, which fills the scene, has no gizmo. Scaling writes their sizes: a radius, a box's
+Turning writes a solid's, a model's or a 3DS mesh's rotation, as degrees about X, then Y,
+then Z; a plane's corners about their middle; the ground's facing; an area light's edges; and
+a spotlight's or IES light's direction, which aims it. A sphere and a round light have nothing
+to turn; fog, which fills the scene, has no gizmo. Scaling writes their sizes: a radius, a box's
 size, a model's scale or size. While the gizmo is dragged, the quick 3D view shows the change
 at once and renders wait; letting go writes it as an edit, and the scene is rendered again.
+
+**Adding, duplicating and deleting.** The **+** at the top of the outliner adds a sphere, box,
+cylinder, cone, torus or plane where the camera looks, or an area light, sphere light or
+spotlight above it, sized to how far the camera is and selected at once. **Duplicate** at the
+bottom of the outliner copies the selection as edited, beside it; **⇧D** copies it in place and
+moves the copy with the mouse until a click, as Blender does. **Delete** there, or the Delete
+key, deletes it. New entries go after the file's own, so no index the edits use changes, and
+deleted ones are hidden until Save Scene drops them from the file; then the app opens the saved
+file again. An added object's material can be edited once the scene is saved and open again.
+Undo covers all of it.
 
 **Undo.** **Edit > Undo** (⌘Z) and **Redo** (⇧⌘Z) step through edits: to objects and lights,
 what is hidden, materials, the environment and the render and camera settings. A change

@@ -9,6 +9,7 @@ import { LIGHT_ID, SelectionOverlay, type IdMap } from "./components/SelectionOv
 import { TransformGizmo, type GizmoMode } from "./components/TransformGizmo";
 import type { Vec3 } from "./objectFields";
 import { changeMatrix, transformOf, type Change } from "./transforms";
+import { duplicate, newEntry, sceneEntries, withAdded, withRemoved, type NewKind } from "./sceneEntries";
 import * as history from "./history";
 import { MaterialStage } from "./components/MaterialStage";
 import { Viewport } from "./components/Viewport";
@@ -187,7 +188,8 @@ export function App() {
           setDrawingRegion(false);
           setSettings((old) => old && ({
             // What another scene hid means nothing here.
-            ...withSavedRenderSettings({ ...old, hiddenObjects: [], hiddenLights: [], objectEdits: {}, lightEdits: {} }, info.render),
+            ...withSavedRenderSettings({ ...old, hiddenObjects: [], hiddenLights: [], objectEdits: {}, lightEdits: {},
+              addedObjects: [], addedLights: [], removedObjects: [], removedLights: [] }, info.render),
             environment: info.environment,
             materialOverrides: [],
             pose: scenePose(info),
@@ -241,6 +243,12 @@ export function App() {
     [settings, movingCamera, liveReady, region]);
   const [imageWidth, imageHeight] = settings ? imageSize(settings) : [4, 3];
   const jobKey = JSON.stringify(job);
+  // The file's objects and lights, then those added here.
+  const entries = scene && settings ? sceneEntries(scene, settings) : null;
+  const onDeleteKey = useRef(() => {});
+  const onDuplicateKey = useRef(() => {});
+  const openRef = useRef(open);
+  openRef.current = open;
 
   // What each pixel shows, from the engine, for the selection's outline, the pointer's
   // highlight and picking without waiting: a few milliseconds, so it follows the camera.
@@ -359,9 +367,40 @@ export function App() {
   // dragged only the 3D view changes the selection, at once; letting go writes the edit, and
   // the engine reads the scene again.
   const [preview, setPreview] = useState<Change | null>(null);
+  const [grab, setGrab] = useState(0);
+  // Adding, duplicating and deleting: changes to the settings, so undo covers them.
+  const change = (patch: Partial<Settings>) => {
+    publish({ caustics: null, hasPhotonMap: false });
+    setSettings((old) => old && { ...old, ...patch });
+  };
+  const addEntry = (kind: NewKind) => {
+    if (!settings || !entries) return;
+    const { light, entry } = newEntry(kind, settings.pose, entries);
+    const { patch, id } = withAdded(settings, entries, light, entry);
+    change(patch);
+    setSelection({ kind: light ? "light" : "object", id });
+  };
+  const duplicateSelection = (follow: boolean) => {
+    if (!settings || !entries || !selection) return;
+    const light = selection.kind === "light";
+    const entry = duplicate(entries, settings, light, selection.id, !follow);
+    if (!entry) return;
+    const { patch, id } = withAdded(settings, entries, light, entry);
+    change(patch);
+    setSelection({ kind: selection.kind, id });
+    // As Blender's Shift+D, the copy then moves with the mouse.
+    if (follow) setGrab((n) => n + 1);
+  };
+  onDuplicateKey.current = () => duplicateSelection(true);
+  onDeleteKey.current = () => deleteSelection();
+  const deleteSelection = () => {
+    if (!settings || !selection) return;
+    change(withRemoved(settings, selection.kind === "light", selection.id));
+    setSelection(null);
+  };
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>("move");
-  const selectedEntry = selection && scene
-    ? (selection.kind === "light" ? scene.light_list[selection.id] : scene.objects[selection.id]) : null;
+  const selectedEntry = selection && entries
+    ? (selection.kind === "light" ? entries.lights[selection.id] : entries.objects[selection.id]) : null;
   const editsKey = selection?.kind === "light" ? "lightEdits" : "objectEdits";
   const transform = selection && selectedEntry && settings
     ? transformOf(selectedEntry.kind, selectedEntry.source, settings[editsKey][selection.id], selection.kind === "light") : null;
@@ -454,7 +493,7 @@ export function App() {
 
   const select = (picked: Selection) => {
     setSelection(picked);
-    const first = picked?.kind === "object" ? scene?.objects[picked.id]?.materials[0] : undefined;
+    const first = picked?.kind === "object" ? entries?.objects[picked.id]?.materials[0] : undefined;
     if (first !== undefined && scene?.materials.some((m) => m.id === first)) setSelectedMaterial(first);
   };
 
@@ -517,15 +556,20 @@ export function App() {
   const canSave = view.hasResult && !view.rendering;
 
   /** Saves the scene with the edits made here: over its file, or as a new one. True if saved. */
-  const saveScene = useCallback(async (choose: boolean) => {
+  const saveScene = useCallback(async (choose: boolean, reopen = true) => {
     if (!scene || !settings) return false;
     const request = sceneSaveRequest(settings);
     try {
-      const saved = await invoke<{ path: string; warnings: string[] } | null>("save_scene", { choose, request });
+      const saved = await invoke<{ path: string; warnings: string[]; reopen: boolean } | null>("save_scene", { choose, request });
       if (!saved) return false;
       savedState.current = JSON.stringify(request);
       setSavedVersion((v) => v + 1);
       publish({ status: [`Saved scene to ${saved.path}`, ...saved.warnings].join(". ") });
+      // Objects or lights added or deleted moved the indices: read the saved file again.
+      if (saved.reopen && reopen) {
+        unsavedRef.current = false;
+        void openRef.current("load_scene", { path: saved.path });
+      }
       return true;
     } catch (error) {
       publish({ status: `Error: could not save the scene: ${String(error)}` });
@@ -551,7 +595,7 @@ export function App() {
     if (!unsavedRef.current || !scene) return true;
     const answer = await invoke<"save" | "discard" | "cancel">("ask_unsaved", { name: scene.name });
     if (answer === "cancel") return false;
-    if (answer === "save") return saveScene(false);
+    if (answer === "save") return saveScene(false, false);
     return true;
   }, [scene, saveScene]);
   keepGoingRef.current = keepGoing;
@@ -659,6 +703,17 @@ export function App() {
         else if (showMaterial) setShowMaterial(false);
         else if (selection) setSelection(null);
         else void renderer.stop();
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      if (target && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
+      if (!selection || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key === "Delete" || event.key === "Backspace") {
+        event.preventDefault();
+        onDeleteKey.current();
+      } else if (event.shiftKey && event.key.toUpperCase() === "D") {
+        event.preventDefault();
+        onDuplicateKey.current();
       }
     };
     document.addEventListener("keydown", onKey);
@@ -717,7 +772,7 @@ export function App() {
                 <TransformGizmo pose={settings.pose} aspect={imageWidth / imageHeight} point={gizmoPoint}
                   mode={gizmoMode === "rotate" && !transform.canRotate || gizmoMode === "scale" && !transform.canScale ? "move" : gizmoMode}
                   onMode={setGizmoMode} canRotate={transform.canRotate} canScale={transform.canScale} scaleAxes={transform.scaleAxes}
-                  onPreview={previewGizmo} onCommit={commitGizmo} onCancel={() => {
+                  grab={grab} onPreview={previewGizmo} onCommit={commitGizmo} onCancel={() => {
                     // Back as it was, in the 3D view too.
                     sceneView3d.current?.place(null);
                     if (settings) sceneView3d.current?.draw(settings.pose, imageWidth / imageHeight);
@@ -776,6 +831,9 @@ export function App() {
         {settings && scene && (
           <>
             <Outliner scene={scene} hiddenObjects={settings.hiddenObjects} hiddenLights={settings.hiddenLights}
+              objects={entries!.objects} lights={entries!.lights}
+              removedObjects={settings.removedObjects} removedLights={settings.removedLights}
+              onAdd={addEntry} onDuplicate={() => duplicateSelection(false)} onDelete={deleteSelection}
               onHiddenChange={(hiddenObjects, hiddenLights) => {
                 // As any edit: what hides changes the light, and the photons with it.
                 publish({ caustics: null, hasPhotonMap: false });

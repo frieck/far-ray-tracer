@@ -117,7 +117,7 @@ export function transformOf(kind: string, source: Record<string, unknown>, edits
   let canRotate = false;
   let turn: (m: Matrix) => Patch = () => ({});
   const rotation = value("rotation");
-  const hasRotation = !light && ["box", "cylinder", "tube", "cone", "torus", "model", "volume"].includes(kind);
+  const hasRotation = !light && ["box", "cylinder", "tube", "cone", "torus", "model", "volume", "mesh"].includes(kind);
   if (hasRotation) {
     canRotate = true;
     const start = eulerMatrix((Array.isArray(rotation) ? rotation : [0, 0, 0]) as Vec3);
@@ -215,4 +215,55 @@ export function changeMatrix(change: Change, pivot: Vec3): number[][] {
   // p' = L (p - pivot) + pivot + offset.
   const moved = add(add(pivot, times(linear, pivot), -1), offset);
   return [[...linear[0], moved[0]], [...linear[1], moved[1]], [...linear[2], moved[2]], [0, 0, 0, 1]];
+}
+
+/** A plane as the Object tab shows it: where its middle is, how it is turned from the file's
+ * corners, in the engine's angles, and how long its first and last edges are. */
+export interface PlaneState {
+  position: Vec3;
+  rotation: Vec3;
+  width: number;
+  depth: number;
+}
+
+const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const cross = (a: Vec3, b: Vec3): Vec3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const unit = (a: Vec3): Vec3 => {
+  const length = Math.hypot(...a) || 1;
+  return a.map((v) => v / length) as Vec3;
+};
+
+/** The plane's own axes, as rows: along its first edge, across it in its plane, and its normal. */
+function frame(points: Vec3[]): Matrix {
+  const u = unit(sub(points[1], points[0]));
+  const n = unit(cross(u, sub(points[3], points[0])));
+  return [u, cross(n, u), n];
+}
+
+/** A plane's state, its corners `current` measured against the file's, `original`. */
+export function planeState(original: Vec3[], current: Vec3[]): PlaneState {
+  const [from, to] = [frame(original), frame(current)];
+  // The turn that takes the file's axes to the current ones: R = Toᵀ · From.
+  const turn = [0, 1, 2].map((r) => [0, 1, 2].map((c) => to[0][r] * from[0][c] + to[1][r] * from[1][c] + to[2][r] * from[2][c])) as Matrix;
+  return {
+    position: middle(current).map(round) as Vec3,
+    rotation: eulerAngles(turn),
+    width: round(Math.hypot(...sub(current[1], current[0]))),
+    depth: round(Math.hypot(...sub(current[3], current[0]))),
+  };
+}
+
+/** The corners of a plane in `state`, built from the file's: turned, stretched and moved. */
+export function planePoints(original: Vec3[], state: PlaneState): Vec3[] {
+  const axes = frame(original);
+  const center = middle(original);
+  const [width, depth] = [Math.hypot(...sub(original[1], original[0])) || 1, Math.hypot(...sub(original[3], original[0])) || 1];
+  const turn = eulerMatrix(state.rotation);
+  return original.map((p) => {
+    // Its place along the plane's own axes, stretched, then put back in the world, turned.
+    const local = times(axes, sub(p, center));
+    const stretched: Vec3 = [local[0] * (state.width / width), local[1] * (state.depth / depth), local[2]];
+    const world: Vec3 = [0, 1, 2].map((k) => axes[0][k] * stretched[0] + axes[1][k] * stretched[1] + axes[2][k] * stretched[2]) as Vec3;
+    return roundAll(add(state.position, times(turn, world)));
+  });
 }

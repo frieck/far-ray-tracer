@@ -672,6 +672,7 @@ impl Scene {
         material: usize,
         pos: Vec3,
         target_size: f32,
+        rotation: [f32; 3],
     ) {
         let name = base_name(file);
         let bytes = dir
@@ -715,7 +716,9 @@ impl Scene {
         for v in &mesh.vertices {
             let (x, z, y) = (v[0], v[1], v[2]);
             let p = Vec3::new((x * scale) - offset.x, (y * scale) - offset.y, (z * scale) - offset.z);
-            self.vertices.push(Vertex { u: p.x / target_size, v: p.y / target_size, ..Vertex::new(p) });
+            // Turned about where it was placed, as solids turn; its texture stays on it.
+            let turned = if rotation == [0.0; 3] { p } else { pos + crate::solid::rotate(p - pos, rotation) };
+            self.vertices.push(Vertex { u: p.x / target_size, v: p.y / target_size, ..Vertex::new(turned) });
         }
 
         let n_verts = mesh.vertices.len();
@@ -1057,6 +1060,7 @@ mod outliner_tests {
         let edits = EntryEdits {
             objects: vec![(1, fields(serde_json::json!({"center": [1, 2, 3], "radius": 0.5})))],
             lights: vec![(1, fields(serde_json::json!({"intensity": 6, "spot_angle": 20})))],
+            ..Default::default()
         };
         let edited = scene.edited(Path::new("test.far"), &edits).unwrap();
         // The same file with those fields written in reads the same.
@@ -1084,6 +1088,25 @@ mod outliner_tests {
         let hot = EntryEdits { lights: vec![(0, fields(serde_json::json!({"temperature": 90000})))], ..Default::default() };
         assert!(scene.edited(Path::new("test.far"), &hot).err().is_some_and(|e| e.contains("temperature")));
         // A bad value is an error, not a broken scene.
+        // Added entries come after the file's, with their names, and take edits as the rest.
+        let count = scene.objects.len();
+        let added = EntryEdits {
+            added_objects: vec![serde_json::json!({"type": "sphere", "name": "New ball", "center": [0, 3, 0], "radius": 0.4})],
+            added_lights: vec![serde_json::json!({"type": "sphere", "name": "Lamp", "position": [0, 5, 0], "radius": 0.1, "intensity": 8})],
+            objects: vec![(count, fields(serde_json::json!({"radius": 0.25})))],
+            removed_objects: vec![1],
+            ..Default::default()
+        };
+        assert!(!added.is_empty() && added.changes_entries());
+        let grown = scene.edited(Path::new("test.far"), &added).unwrap();
+        assert_eq!(grown.objects.len(), count + 1);
+        assert_eq!((grown.objects[count].name.as_str(), grown.objects[count].kind), ("New ball", "sphere"));
+        assert_eq!(grown.scene_lights.last().map(|l| (l.name.as_str(), l.kind)), Some(("Lamp", "sphere")));
+        let new_ball = (0..grown.prims.len()).find(|&p| grown.object_of(p) == Some(count)).unwrap();
+        assert!(matches!(&grown.prims[new_ball], Primitive::Sphere(s) if s.radius == 0.25));
+        // A deletion alone reads as the file; it is hidden while editing.
+        let deleted = EntryEdits { removed_objects: vec![1], ..Default::default() };
+        assert!(deleted.is_empty() && deleted.changes_entries());
         let bad = EntryEdits { objects: vec![(1, fields(serde_json::json!({"radius": -1})))], ..Default::default() };
         assert!(scene.edited(Path::new("test.far"), &bad).is_err());
     }

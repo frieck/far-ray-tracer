@@ -383,6 +383,10 @@ export function defaultSettings(cores: number): Settings {
     hiddenLights: [],
     objectEdits: {},
     lightEdits: {},
+    addedObjects: [],
+    addedLights: [],
+    removedObjects: [],
+    removedLights: [],
     denoise: true,
     bloom: false,
     caustics: false,
@@ -531,7 +535,14 @@ export function entryEdits(settings: Settings): import("./types").EntryEdits {
     .filter(([, fields]) => Object.keys(fields).length > 0)
     .map(([index, fields]) => [Number(index), fields] as [number, Record<string, unknown>])
     .sort((a, b) => a[0] - b[0]);
-  return { objects: list(settings.objectEdits), lights: list(settings.lightEdits) };
+  return {
+    objects: list(settings.objectEdits),
+    lights: list(settings.lightEdits),
+    added_objects: settings.addedObjects,
+    added_lights: settings.addedLights,
+    removed_objects: settings.removedObjects,
+    removed_lights: settings.removedLights,
+  };
 }
 
 /** What the interface changes in the scene, for picking, outlines and the 3D view. */

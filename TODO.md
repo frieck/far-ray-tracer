@@ -147,8 +147,9 @@ Visual gain for the effort:
 - [ ] **More for lights**: aiming a light at the selected object, changing a light's kind,
   loading an IES file, lights invisible to the camera. Medium.
 - [x] **Rotate and scale gizmos**, with R and S, which also aim spotlights and turn area lights.
-- [ ] **Outliner, next**: adding, duplicating and deleting objects;
-  a model's parts as children; renaming. Medium.
+- [x] **Adding, duplicating and deleting** objects and lights.
+- [ ] **Outliner, next**: a model's parts as children; renaming; editing an added object's
+  material before saving. Medium.
 - [ ] **Instancing**: many copies of an object for almost no memory. Medium.
 - [ ] **Subdivision surfaces**: smooth meshes from coarse ones. High.
 - [ ] **CSG (boolean operations)**: would carve the material ball's medallion into the

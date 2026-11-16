@@ -358,6 +358,9 @@ enum ObjectFile {
         file: String,
         position: Point,
         size: f32,
+        /// Degrees about X, then Y, then Z, about `position`, as solids turn.
+        #[serde(default)]
+        rotation: Point,
         #[serde(default)]
         material: MaterialFile,
     },
@@ -612,9 +615,12 @@ impl Scene {
             };
             scene.note_sources(before, crate::scene::MaterialSource::None);
             match object {
-                ObjectFile::Mesh { file, position, size, material } => {
+                ObjectFile::Mesh { file, position, size, rotation, material } => {
+                    if rotation.iter().any(|v| !v.is_finite()) {
+                        return Err(format!("Mesh {file}: rotation must be finite"));
+                    }
                     let material = scene.add_material(material.into(), dir.as_deref(), &mut cache);
-                    scene.add_mesh(&file, dir.as_deref(), material, vector(position), size);
+                    scene.add_mesh(&file, dir.as_deref(), material, vector(position), size, rotation);
                 }
                 ObjectFile::Model { file, position, rotation, scale, size, material } => {
                     let valid = scale.is_finite() && scale > 0.0 && size.is_none_or(|s| s.is_finite() && s > 0.0)

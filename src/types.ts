@@ -114,7 +114,7 @@ export interface SceneObjectInfo {
   kind: string;
   /** Its materials' ids, as in `SceneInfo.materials`. */
   materials: number[];
-  /** Its entry in the file, without its material: what the Object tab edits. */
+  /** Its entry in the file: what the Object tab edits, and what a duplicate copies. */
   source: Record<string, unknown>;
 }
 
@@ -130,6 +130,11 @@ export interface SceneLightInfo {
 export interface EntryEdits {
   objects: [number, Record<string, unknown>][];
   lights: [number, Record<string, unknown>][];
+  /** Whole entries added after the file's, and entries deleted, by index. */
+  added_objects: Record<string, unknown>[];
+  added_lights: Record<string, unknown>[];
+  removed_objects: number[];
+  removed_lights: number[];
 }
 
 /** What the interface changes in the scene itself, for the commands that look at it. */
@@ -296,6 +301,14 @@ export interface Settings {
   /** Edited fields of the file's objects and lights, by index; Save Scene writes them in. */
   objectEdits: Record<number, Record<string, unknown>>;
   lightEdits: Record<number, Record<string, unknown>>;
+  /**
+   * Objects and lights added after the file's, so the first added object's index is the
+   * file's count of objects; and those deleted, by index, hidden until Save Scene drops them.
+   */
+  addedObjects: Record<string, unknown>[];
+  addedLights: Record<string, unknown>[];
+  removedObjects: number[];
+  removedLights: number[];
   denoise: boolean;
   bloom: boolean;
   caustics: boolean;
