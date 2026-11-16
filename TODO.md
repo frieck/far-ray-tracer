@@ -144,9 +144,10 @@ Visual gain for the effort:
 - [x] **Undo and redo** of scene and settings edits.
 - [x] **Lights panel and color temperature**: every light with on/off, solo, color or kelvin,
   and intensity.
-- [ ] **More for lights**: turning and aiming area lights and spots (at the selection),
-  changing a light's kind, loading an IES file, lights invisible to the camera. Medium.
-- [ ] **Outliner, next**: rotate and scale gizmos; adding, duplicating and deleting objects;
+- [ ] **More for lights**: aiming a light at the selected object, changing a light's kind,
+  loading an IES file, lights invisible to the camera. Medium.
+- [x] **Rotate and scale gizmos**, with R and S, which also aim spotlights and turn area lights.
+- [ ] **Outliner, next**: adding, duplicating and deleting objects;
   a model's parts as children; renaming. Medium.
 - [ ] **Instancing**: many copies of an object for almost no memory. Medium.
 - [ ] **Subdivision surfaces**: smooth meshes from coarse ones. High.

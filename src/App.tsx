@@ -6,8 +6,9 @@ import { AboutDialog } from "./components/AboutDialog";
 import { ControlPanel } from "./components/ControlPanel";
 import { Outliner } from "./components/Outliner";
 import { LIGHT_ID, SelectionOverlay, type IdMap } from "./components/SelectionOverlay";
-import { MoveGizmo } from "./components/MoveGizmo";
-import { anchorOf, type Vec3 } from "./objectFields";
+import { TransformGizmo, type GizmoMode } from "./components/TransformGizmo";
+import type { Vec3 } from "./objectFields";
+import { changeMatrix, transformOf, type Change } from "./transforms";
 import * as history from "./history";
 import { MaterialStage } from "./components/MaterialStage";
 import { Viewport } from "./components/Viewport";
@@ -354,28 +355,31 @@ export function App() {
   // 2008 and Fixed always render from the scene's own camera.
   const livePose = settings && scene && (activeMode(settings) === "enhanced" ? settings.pose : scenePose(scene));
 
-  // The move gizmo, at the selected object or light. While it is dragged only the 3D view moves
-  // the selection, at once; letting go writes the edit, and the engine reads the scene again.
-  const [dragOffset, setDragOffset] = useState<Vec3 | null>(null);
+  // The gizmo, at the selected object or light: moving, turning or scaling it. While it is
+  // dragged only the 3D view changes the selection, at once; letting go writes the edit, and
+  // the engine reads the scene again.
+  const [preview, setPreview] = useState<Change | null>(null);
+  const [gizmoMode, setGizmoMode] = useState<GizmoMode>("move");
   const selectedEntry = selection && scene
     ? (selection.kind === "light" ? scene.light_list[selection.id] : scene.objects[selection.id]) : null;
   const editsKey = selection?.kind === "light" ? "lightEdits" : "objectEdits";
-  const anchor = selection && selectedEntry && settings
-    ? anchorOf(selectedEntry.kind, selectedEntry.source, settings[editsKey][selection.id], selection.kind === "light") : null;
+  const transform = selection && selectedEntry && settings
+    ? transformOf(selectedEntry.kind, selectedEntry.source, settings[editsKey][selection.id], selection.kind === "light") : null;
   const pieceKey = selection ? `${selection.kind === "light" ? "l" : "o"}${selection.id}` : null;
-  const dragGizmo = (offset: Vec3 | null) => {
-    setDragOffset(offset);
-    setMovingCamera(offset !== null);
-    if (offset && settings) {
-      sceneView3d.current?.shift(pieceKey, offset);
+  const previewGizmo = (change: Change | null) => {
+    setPreview(change);
+    setMovingCamera(change !== null);
+    if (change && settings && transform) {
+      sceneView3d.current?.place(pieceKey, changeMatrix(change, transform.point));
       sceneView3d.current?.draw(settings.pose, imageWidth / imageHeight);
     }
   };
-  const moveSelection = (point: Vec3) => {
-    if (!selection || !anchor) return;
-    const patch = anchor.moveTo(point);
+  const commitGizmo = (change: Change) => {
+    if (!selection || !transform) return;
+    const patch = transform.apply(change);
+    if (Object.keys(patch).length === 0) return;
     // Until the 3D view reads the edited scene, it keeps the piece where it was dropped. As any
-    // edit, a move changes the light, and the photons with it.
+    // edit, a change moves the light, and the photons with it.
     publish({ caustics: null, hasPhotonMap: false });
     setSettings((old) => {
       if (!old) return old;
@@ -383,8 +387,9 @@ export function App() {
       return { ...old, [editsKey]: { ...all, [selection.id]: { ...all[selection.id], ...patch } } };
     });
   };
-  const gizmoPoint: Vec3 | null = anchor
-    ? (dragOffset ? anchor.point.map((v, k) => v + dragOffset[k]) as Vec3 : anchor.point) : null;
+  // The gizmo follows a move as it goes; it turns and scales in place.
+  const gizmoPoint: Vec3 | null = transform
+    ? (preview?.type === "move" ? transform.point.map((v, k) => v + preview.offset[k]) as Vec3 : transform.point) : null;
   useEffect(() => {
     if (showLive && livePose) sceneView3d.current?.draw(livePose, imageWidth / imageHeight);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -705,14 +710,16 @@ export function App() {
           }}
           overlay={outlinable ? (
             <>
-              {outline && !dragOffset && (
+              {outline && !preview && (
                 <SelectionOverlay map={idMap} selected={selectedCode} hover={hover} xray={xray} onSize={onOverlaySize} />
               )}
-              {gizmoPoint && settings && !pickingFocus && !drawingRegion && (
-                <MoveGizmo pose={settings.pose} aspect={imageWidth / imageHeight} point={gizmoPoint}
-                  onDrag={dragGizmo} onMove={moveSelection} onCancel={() => {
-                    // Back where it was, in the 3D view too.
-                    sceneView3d.current?.shift(null);
+              {gizmoPoint && transform && settings && !pickingFocus && !drawingRegion && (
+                <TransformGizmo pose={settings.pose} aspect={imageWidth / imageHeight} point={gizmoPoint}
+                  mode={gizmoMode === "rotate" && !transform.canRotate || gizmoMode === "scale" && !transform.canScale ? "move" : gizmoMode}
+                  onMode={setGizmoMode} canRotate={transform.canRotate} canScale={transform.canScale} scaleAxes={transform.scaleAxes}
+                  onPreview={previewGizmo} onCommit={commitGizmo} onCancel={() => {
+                    // Back as it was, in the 3D view too.
+                    sceneView3d.current?.place(null);
                     if (settings) sceneView3d.current?.draw(settings.pose, imageWidth / imageHeight);
                   }} />
               )}

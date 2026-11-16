@@ -531,3 +531,7 @@ button { font: inherit; color: inherit; cursor: default; }
 .light-kelvin { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .light-kelvin > :last-child { flex: 1; min-width: 0; }
 .light-swatch-dot { flex: none; width: 12px; height: 12px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25); }
+/* Move, rotate or scale: what the gizmo does, top left of the image. */
+.gizmo-modes { position: absolute; top: 12px; left: 12px; display: flex; gap: 4px; padding: 4px; border-radius: 12px; cursor: default; }
+.gizmo-modes .icon { width: 30px; height: 30px; }
+.gizmo-modes .icon[aria-pressed="true"] { background: var(--glass-strong); color: var(--accent); }

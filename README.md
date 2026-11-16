@@ -674,17 +674,30 @@ in the scene file:
 | Area light | Position, color, intensity, width, height |
 | Sphere light, spotlight, IES light | Position, radius, color, intensity; a spotlight's and an IES light's direction, a spotlight's cone and soft edge |
 
-**Moving on the image.** A selected object or light shows a move gizmo, as in Blender: drag
-the red, green or blue arrow to move it along X, Y or Z, or the white ring to move it across
-the view; hold Shift to move in steps of a tenth of a unit. While moving, **X**, **Y** or **Z**
-locks the move to that axis, shown as a line across the image, and the same key again frees
-it. With nothing moving, **X**, **Y** or **Z** starts a move along that axis, and **G** a free
-one, as Blender's grab: it follows the mouse without a button held, a click or Enter places it
-and Esc or a right click calls it off. Keys typed into a field are left alone. An arrow that
-points at the camera is hidden, as there is nothing to drag along. While it is dragged, the quick 3D view moves the
-object at once and renders wait; letting go writes the new place as an edit, and the scene is
-rendered again. A plane moves all four corners together; fog, which fills the scene, has no
-gizmo.
+**Moving, turning and scaling on the image.** A selected object or light shows a gizmo, as in
+Blender, in three modes picked at the image's top left:
+
+- **Move** (G): drag the red, green or blue arrow to move it along X, Y or Z, or the white
+  ring to move it across the view.
+- **Rotate** (R): drag a ring to turn it about X, Y or Z, or the outer white ring to turn it
+  about the view.
+- **Scale** (S): drag a square handle to scale it along one of its own axes, where its kind
+  has one (a box's sides, a cylinder's height or radius, a panel's width or height), or the
+  dashed ring to scale it as a whole.
+
+G, R and S also start moving, turning or scaling from the keyboard, and X, Y or Z starts the
+current mode along that axis: it follows the mouse without a button held, a click or Enter
+places it, and Esc or a right click calls it off. While one goes on, X, Y or Z locks it to
+that axis, shown as a line across the image for moves and turns, and the same key again
+frees it. Shift moves in tenths of a unit, turns in 5 degree steps and scales in tenths. Keys
+typed into a field are left alone, and an arrow that points at the camera is hidden.
+
+Turning writes a solid's or a model's rotation, as degrees about X, then Y, then Z; a plane's
+corners about their middle; the ground's facing; an area light's edges; and a spotlight's or
+IES light's direction, which aims it. A sphere, a 3DS mesh and a round light have nothing to
+turn; fog, which fills the scene, has no gizmo. Scaling writes their sizes: a radius, a box's
+size, a model's scale or size. While the gizmo is dragged, the quick 3D view shows the change
+at once and renders wait; letting go writes it as an edit, and the scene is rendered again.
 
 **Undo.** **Edit > Undo** (⌘Z) and **Redo** (⇧⌘Z) step through edits: to objects and lights,
 what is hidden, materials, the environment and the render and camera settings. A change

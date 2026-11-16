@@ -134,17 +134,21 @@ export class SceneView {
   private shifted: PieceKey | null = null;
 
   /**
-   * Moves one object or light by `offset`, in the engine's coordinates, from where it was
-   * loaded, as a drag moves it before the engine reads the scene again; null puts all back.
+   * Moves, turns or scales one object or light from where it was loaded by `rows`, a 4 × 4
+   * matrix in the engine's coordinates, row by row, as the gizmo does before the engine reads
+   * the scene again; null puts everything back.
    */
-  shift(key: PieceKey | null, offset: [number, number, number] = [0, 0, 0]) {
+  place(key: PieceKey | null, rows: number[][] | null = null) {
     for (const k of [this.shifted, key]) {
       for (const { item, base } of (k !== null && this.pieces.get(k)) || []) item.matrix.copy(base);
     }
     this.shifted = key;
-    if (key === null) return;
-    const move = new THREE.Matrix4().makeTranslation(toThree(offset));
-    for (const { item, base } of this.pieces.get(key) ?? []) item.matrix.copy(move).multiply(base);
+    if (key === null || !rows) return;
+    // The engine's Z points the other way: flip it on both sides.
+    const flip = new THREE.Matrix4().makeScale(1, 1, -1);
+    const change = new THREE.Matrix4().set(...(rows.flat() as Parameters<THREE.Matrix4["set"]>));
+    const three = flip.clone().multiply(change).multiply(flip);
+    for (const { item, base } of this.pieces.get(key) ?? []) item.matrix.copy(three).multiply(base);
   }
 
   draw(pose: Pose, aspect: number) {
