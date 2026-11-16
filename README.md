@@ -732,17 +732,20 @@ light, colored by its map; `alpha_map` cuts the surface away where the map is da
 gray, and rays and shadows pass through the holes.
 
 **Mesh lights.** In Enhanced mode, triangles that glow (planes, meshes and models with
-`emission`) are lights: each shading point aims a shadow ray at one of them, drawn by the light
-it gives off (its mean radiance, map included, times its area), so even a small bright one,
+`emission`) and glowing spheres are lights: each shading point aims a shadow ray at one of them,
+drawn by the light it gives off (its mean radiance, map included, times its area), so even a
+small bright one,
 such as a candle flame, lights the scene with clean shadows. Before, a glowing surface lit
 others only when a bounced ray happened to meet it, which left small ones as scattered dots
 of light. A GGX reflection that meets one weighs it against that sampling (multiple
 importance sampling), as for panels. On a floor lit by a small glowing panel, the error at the
-same samples is about a tenth. The units are those of panels: a strength of 1 is as bright as
-a panel of intensity 1, from both sides. Glowing spheres and solids, and displaced triangles,
-still light the scene only through bounces, and glowing surfaces send no photons for caustics.
-Open **File → Open Example → Techniques → Glowing surfaces** for a scene lit only by three
-glowing strips.
+same samples is about a tenth. A point on a triangle is drawn evenly over it; on a sphere, a
+direction is drawn within the cone the sphere fills as seen from the point, so no sample goes
+to its far side. The units are those of panels: a strength of 1 is as bright as a panel of
+intensity 1, from both sides of a triangle and all around a sphere. Glowing solids (boxes,
+cylinders, tubes, cones and tori) and displaced triangles still light the scene only through
+bounces, and glowing surfaces send no photons for caustics. Open **File → Open Example →
+Techniques → Glowing surfaces** for a scene lit only by three glowing strips and a glowing orb.
 
 How it works: the clear coat is a second GGX lobe whose reflection takes light from the base,
 picked at random in proportion to its Fresnel reflectance; sheen is added to the diffuse lobe;

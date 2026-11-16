@@ -280,17 +280,25 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
             u: l.edge_u.array(), area: l.area, v: l.edge_v.array(), pad1: 0, normal: l.normal.array(), pad2: 0,
         });
     }
-    // Glowing triangles after the lamps, as trace.wgsl's from_mesh_light reads them: a corner in
-    // pos, the edges in u and v, the plane's normal and the area; the chance it is drawn in
-    // radius and the chances up to it in pad1, as float bits; its triangle in pad2. The triangle
-    // points back with one more than its index among them, in its pad[1].
+    // Glowing triangles and spheres after the lamps, as trace.wgsl's from_mesh_light reads them:
+    // kind 3, a triangle, with a corner in pos, the edges in u and v, the plane's normal and the
+    // area; kind 4, a sphere, with its center in pos and its radius in u.x; for both, the chance
+    // it is drawn in radius and the chances up to it in pad1, as float bits, and where it went
+    // in pad2. Each points back with one more than its index among them: a triangle in its
+    // pad[1], a sphere in its pad1.
     let mesh = scene.mesh_lights();
     for (k, l) in mesh.lights.iter().enumerate() {
-        let tri = slot[l.prim];
-        tris[tri as usize].pad[1] = k as u32 + 1;
+        let at = slot[l.prim];
+        let sphere = l.radius > 0.0;
+        if sphere {
+            shapes[(at & !SHAPE) as usize].pad1 = k as u32 + 1;
+        } else {
+            tris[at as usize].pad[1] = k as u32 + 1;
+        }
         lights.push(Light {
-            pos: l.p0.array(), kind: 3, color: l.radiance.array(), radius: l.chance,
-            u: l.e1.array(), area: l.area, v: l.e2.array(), pad1: l.cumulative.to_bits(), normal: l.normal.array(), pad2: tri,
+            pos: l.p0.array(), kind: if sphere { 4 } else { 3 }, color: l.radiance.array(), radius: l.chance,
+            u: if sphere { [l.radius, 0.0, 0.0] } else { l.e1.array() }, area: l.area, v: l.e2.array(),
+            pad1: l.cumulative.to_bits(), normal: l.normal.array(), pad2: at,
         });
     }
 
@@ -816,42 +824,47 @@ mod tests {
     }
 
     #[test]
-    fn glowing_triangles_light_the_scene_on_the_gpu_as_on_the_cpu() {
-        // A floor, a glossy metal ball and a small glowing panel made of two triangles.
-        let text = br#"{"lights": [], "objects": [
-            {"type": "plane", "points": [[-20, -2, -6], [20, -2, -6], [20, -2, 30], [-20, -2, 30]],
+    fn glowing_triangles_and_spheres_light_the_scene_on_the_gpu_as_on_the_cpu() {
+        // A floor, a glossy metal ball and a small glowing panel made of two triangles, or a
+        // small glowing sphere.
+        let room = r#"{"type": "plane", "points": [[-20, -2, -6], [20, -2, -6], [20, -2, 30], [-20, -2, 30]],
              "material": {"color": [0.8, 0.8, 0.8], "specular": 0}},
             {"type": "sphere", "center": [1.6, -1, 8], "radius": 1,
-             "material": {"color": [0.9, 0.9, 0.9], "surface": {"preset": "metal", "roughness": 0.3}}},
-            {"type": "plane", "points": [[-0.6, 1, 7.4], [0.6, 1, 7.4], [0.6, 1, 8.6], [-0.6, 1, 8.6]],
-             "material": {"color": [0, 0, 0], "emission": {"color": [1, 0.8, 0.6], "strength": 2}}}]}"#;
-        let path = std::env::temp_dir().join(format!("far-gpu-mesh-light-{}.far", std::process::id()));
-        std::fs::write(&path, text).unwrap();
-        let (sampled, found) = (Scene::open(&path).unwrap(), Scene::open(&path).unwrap());
-        let _ = std::fs::remove_file(&path);
-        assert_eq!(sampled.mesh_lights().lights.len(), 2);
-        // As before mesh lights: only rebounds that meet the panel find its light.
-        found.mesh_lights.set(std::sync::Arc::new(far_core::mesh_light::MeshLights::default())).unwrap();
-        let light = |scene: &Scene, samples: u32| {
-            let op = Options { mode: Mode::Enhanced, width: 96, height: 72, samples, ..Options::default() };
-            render(scene, &Bvh::build(scene), &op, &|| false).map(|r| r.sums.mean())
-        };
-        let gpu = match light(&sampled, 128) {
-            Ok(mean) => mean,
-            Err(e) if e.contains("no graphics card") => return eprintln!("skipped: {e}"),
-            Err(e) => panic!("{e}"),
-        };
-        let op = Options { mode: Mode::Enhanced, width: 96, height: 72, samples: 128, ..Options::default() };
-        let cpu = far_core::enhanced::render_continuing(&sampled, Some(&KdTree::build_corrected(&sampled)), &op,
-            &Image::new(96, 72), &Progress::default(), None).unwrap().layers(&op).light;
-        let total = |l: &[[f32; 3]]| l.iter().map(|c| (c[0] + c[1] + c[2]) as f64).sum::<f64>();
-        assert!((total(&gpu) / total(&cpu) - 1.0).abs() < 0.03, "GPU {} against CPU {}", total(&gpu), total(&cpu));
-        // Far less noise than finding the panel by chance, at the same samples.
-        let reference = light(&sampled, 1024).unwrap();
-        let error = |l: &[[f32; 3]]| l.iter().zip(&reference)
-            .map(|(c, r)| (0..3).map(|k| ((c[k] - r[k]) as f64).powi(2)).sum::<f64>()).sum::<f64>();
-        let (sampled_error, found_error) = (error(&gpu), error(&light(&found, 128).unwrap()));
-        assert!(sampled_error * 4.0 < found_error, "{sampled_error} against {found_error}");
+             "material": {"color": [0.9, 0.9, 0.9], "surface": {"preset": "metal", "roughness": 0.3}}}"#;
+        let glow = r#""material": {"color": [0, 0, 0], "emission": {"color": [1, 0.8, 0.6], "strength": 2}}"#;
+        let panel = format!(r#"{{"lights": [], "objects": [{room},
+            {{"type": "plane", "points": [[-0.6, 1, 7.4], [0.6, 1, 7.4], [0.6, 1, 8.6], [-0.6, 1, 8.6]], {glow}}}]}}"#);
+        let ball = format!(r#"{{"lights": [], "objects": [{room},
+            {{"type": "sphere", "center": [-0.8, 0.6, 8], "radius": 0.45, {glow}}}]}}"#);
+        for (text, count) in [(panel, 2), (ball, 1)] {
+            let path = std::env::temp_dir().join(format!("far-gpu-mesh-light-{}-{count}.far", std::process::id()));
+            std::fs::write(&path, &text).unwrap();
+            let (sampled, found) = (Scene::open(&path).unwrap(), Scene::open(&path).unwrap());
+            let _ = std::fs::remove_file(&path);
+            assert_eq!(sampled.mesh_lights().lights.len(), count);
+            // As before mesh lights: only rebounds that meet the light find it.
+            found.mesh_lights.set(std::sync::Arc::new(far_core::mesh_light::MeshLights::default())).unwrap();
+            let light = |scene: &Scene, samples: u32| {
+                let op = Options { mode: Mode::Enhanced, width: 96, height: 72, samples, ..Options::default() };
+                render(scene, &Bvh::build(scene), &op, &|| false).map(|r| r.sums.mean())
+            };
+            let gpu = match light(&sampled, 128) {
+                Ok(mean) => mean,
+                Err(e) if e.contains("no graphics card") => return eprintln!("skipped: {e}"),
+                Err(e) => panic!("{e}"),
+            };
+            let op = Options { mode: Mode::Enhanced, width: 96, height: 72, samples: 128, ..Options::default() };
+            let cpu = far_core::enhanced::render_continuing(&sampled, Some(&KdTree::build_corrected(&sampled)), &op,
+                &Image::new(96, 72), &Progress::default(), None).unwrap().layers(&op).light;
+            let total = |l: &[[f32; 3]]| l.iter().map(|c| (c[0] + c[1] + c[2]) as f64).sum::<f64>();
+            assert!((total(&gpu) / total(&cpu) - 1.0).abs() < 0.03, "{count}: GPU {} against CPU {}", total(&gpu), total(&cpu));
+            // Far less noise than finding the light by chance, at the same samples.
+            let reference = light(&sampled, 1024).unwrap();
+            let error = |l: &[[f32; 3]]| l.iter().zip(&reference)
+                .map(|(c, r)| (0..3).map(|k| ((c[k] - r[k]) as f64).powi(2)).sum::<f64>()).sum::<f64>();
+            let (sampled_error, found_error) = (error(&gpu), error(&light(&found, 128).unwrap()));
+            assert!(sampled_error * 4.0 < found_error, "{count}: {sampled_error} against {found_error}");
+        }
     }
 
     #[test]

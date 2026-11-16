@@ -755,15 +755,29 @@ fn direct(pos: vec3<f32>, m: Material, albedo: vec3<f32>, spec: f32, n: vec3<f32
     return sum;
 }
 
-// Mesh lights, as far-core's mesh_light.rs: glowing triangles after the lamps in `lights`, as
-// lib.rs packs them (a corner in pos, the edges in u and v, the plane's normal and area; the
-// chance it is drawn in radius, the chances up to it in pad1 as float bits, its triangle in pad2).
+// Mesh lights, as far-core's mesh_light.rs: glowing triangles and spheres after the lamps in
+// `lights`, as lib.rs packs them. Kind 3, a triangle: a corner in pos, the edges in u and v, the
+// plane's normal and area. Kind 4, a sphere: its center in pos, its radius in u.x. For both, the
+// chance it is drawn in radius, the chances up to it in pad1 as float bits, where it went in pad2.
 
-// The density, over directions from a point `distance` away, of drawing mesh light `k` and a
-// point on it seen at `cosine` to its plane.
-fn mesh_light_pdf(k: u32, distance: f32, cosine: f32) -> f32 {
+// For a sphere of `radius` whose center is `distance` away: one minus the cosine of the half
+// angle of the cone it fills; 0 from inside it.
+fn sphere_cone(distance: f32, radius: f32) -> f32 {
+    if (!(distance > radius)) { return 0.0; }
+    let sin2 = (radius / distance) * (radius / distance);
+    return max(sin2 / (1.0 + sqrt(max(1.0 - sin2, 0.0))), 1e-12);
+}
+
+// The density from_mesh_light gives the direction `d` from `o` to mesh light `k`, which it meets
+// at `distance`; 0 where it never draws it.
+fn mesh_light_pdf(k: u32, o: vec3<f32>, d: vec3<f32>, distance: f32) -> f32 {
     let light = lights[params.light_count + k];
-    let c = abs(cosine);
+    if (light.kind == 4u) {
+        let cone = sphere_cone(length(light.pos - o), light.u.x);
+        if (cone <= 0.0) { return 0.0; }
+        return light.radius / (2.0 * PI * cone);
+    }
+    let c = abs(dot(light.normal, d));
     if (c <= 0.0) { return 0.0; }
     return light.radius * distance * distance / (light.area * c);
 }
@@ -781,17 +795,37 @@ fn from_mesh_light(pos: vec3<f32>, m: Material, albedo: vec3<f32>, spec: f32, n:
         if (bitcast<f32>(lights[params.light_count + middle].pad1) <= pick) { low = middle + 1u; } else { high = middle; }
     }
     let light = lights[params.light_count + low];
-    let root = sqrt(s.x);
-    let target_point = light.pos + light.u * ((1.0 - s.y) * root) + light.v * (s.y * root);
+    var target_point: vec3<f32>;
+    var material_index: u32;
+    if (light.kind == 4u) {
+        // A direction drawn evenly within the cone the sphere fills, met on its near side.
+        let to_center = light.pos - pos;
+        let center_distance = length(to_center);
+        let cone = sphere_cone(center_distance, light.u.x);
+        if (cone <= 0.0) { return vec3<f32>(0.0); }
+        let cos_t = 1.0 - s.x * cone;
+        let sin_t = sqrt(max(1.0 - cos_t * cos_t, 0.0));
+        let angle = 2.0 * PI * s.y;
+        let frame = basis(to_center / center_distance);
+        let dir = frame * vec3<f32>(sin_t * cos(angle), sin_t * sin(angle), cos_t);
+        let along = center_distance * cos_t
+            - sqrt(max(light.u.x * light.u.x - center_distance * center_distance * sin_t * sin_t, 0.0));
+        target_point = pos + dir * max(along, 0.0);
+        material_index = shapes[light.pad2 & 0x7fffffffu].material;
+    } else {
+        let root = sqrt(s.x);
+        target_point = light.pos + light.u * ((1.0 - s.y) * root) + light.v * (s.y * root);
+        material_index = tris[light.pad2].material;
+    }
     let delta = target_point - pos;
     let distance = length(delta);
     if (distance <= OFFSET) { return vec3<f32>(0.0); }
     let l = delta / distance;
-    let light_pdf = mesh_light_pdf(low, distance, dot(light.normal, l));
+    let light_pdf = mesh_light_pdf(low, pos, l, distance);
     if (light_pdf <= 0.0) { return vec3<f32>(0.0); }
     let f = respond(m, albedo, spec, n, ng, wo, l, light_pdf, reflect_chance);
     if (all(f <= vec3<f32>(0.0))) { return vec3<f32>(0.0); }
-    let glowing = materials[tris[light.pad2].material];
+    let glowing = materials[material_index];
     var emitted = glowing.emission;
     if (HAS_MAPS && glowing.emission_map != NO_TEXTURE) {
         emitted *= texture_color(glowing.emission_map, uv_on(light.pad2, target_point, glowing));
@@ -2020,12 +2054,21 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
         // A mesh light's glow after a diffuse rebound was sampled as light already; after a GGX
         // reflection it is weighed against that sampling, as on the CPU.
         var glow = m.emission;
-        if (params.mesh_lights > 0u && (hit.prim & 0x80000000u) == 0u && tris[hit.prim].mesh_light != 0u) {
-            let k = tris[hit.prim].mesh_light - 1u;
-            if (!sees_lights) {
-                glow = vec3<f32>(0.0);
-            } else if (HAS_GGX && mis_pdf > 0.0) {
-                glow *= power_weight(mis_pdf, mesh_light_pdf(k, hit.t, dot(d, lights[params.light_count + k].normal)));
+        var mesh_light = 0u;
+        if (params.mesh_lights > 0u) {
+            if ((hit.prim & 0x80000000u) == 0u) { mesh_light = tris[hit.prim].mesh_light; }
+            else { mesh_light = shapes[hit.prim & 0x7fffffffu].pad1; }
+        }
+        if (mesh_light != 0u) {
+            // Where light sampling cannot draw it, from inside a glowing sphere, rebounds keep
+            // finding it.
+            let light_pdf = mesh_light_pdf(mesh_light - 1u, o, d, hit.t);
+            if (light_pdf > 0.0) {
+                if (!sees_lights) {
+                    glow = vec3<f32>(0.0);
+                } else if (HAS_GGX && mis_pdf > 0.0) {
+                    glow *= power_weight(mis_pdf, light_pdf);
+                }
             }
         }
         if (params.caustics_only == 0u) { light += capped(through * glow, rebound); }

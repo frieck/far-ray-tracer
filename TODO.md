@@ -42,9 +42,10 @@ Visual gain for the effort:
   Medium.
 - [x] **Spotlights and IES profiles**: a flashlight beam or a real fixture's light. Low.
 - [x] **EXR and LDR environments**: OpenEXR panoramas, and PNG or JPEG ones as sRGB.
-- [x] **Mesh lights**: glowing triangles sampled as lights, with MIS, on the CPU and the GPU.
-- [ ] **Glowing spheres and solids as lights, and photons from mesh lights**: only triangles
-  are sampled now, and caustics take no light from glowing surfaces. Low to medium.
+- [x] **Mesh lights**: glowing triangles and spheres sampled as lights, with MIS, on the CPU
+  and the GPU.
+- [ ] **Glowing solids as lights, and photons from mesh lights**: boxes, cylinders, tubes, cones
+  and tori are not sampled yet, and caustics take no light from glowing surfaces. Low to medium.
 - [ ] **A light tree**: mesh lights are drawn by their power alone, wherever the point is; in a
   scene with many glowing surfaces far apart, drawing by distance too would cut noise. Medium.
 - [ ] **Caustics on an infinite mirror ground**: photons are not aimed at it, and scenes with

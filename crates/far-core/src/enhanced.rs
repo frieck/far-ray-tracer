@@ -840,7 +840,7 @@ impl<'a> Tracer<'a> {
         let pick = self.random();
         let (u, v) = self.pair();
         let Some(light) = lights.pick(pick) else { return };
-        let target = light.point(u, v);
+        let Some((target, light_pdf)) = light.sample(a.pos, u, v) else { return };
         let delta = target - a.pos;
         let distance = delta.length();
         if distance <= SURFACE_OFFSET {
@@ -848,8 +848,7 @@ impl<'a> Tracer<'a> {
         }
         let l = delta * (1.0 / distance);
         let dot = l.dot(a.original);
-        let light_pdf = light.pdf(distance, light.normal.dot(l));
-        if dot <= 0.0 || light_pdf <= 0.0 {
+        if dot <= 0.0 {
             return;
         }
         let start = a.pos + a.geo * SURFACE_OFFSET;
@@ -1363,12 +1362,10 @@ impl<'a> Tracer<'a> {
         if !lights.is_empty() {
             let pick = self.random();
             let (u, v) = self.pair();
-            if let Some(light) = lights.pick(pick) {
-                let target = light.point(u, v);
+            if let Some((light, (target, pdf))) = lights.pick(pick).and_then(|l| Some((l, l.sample(pos, u, v)?))) {
                 let delta = target - pos;
                 let distance = delta.length();
                 let l = delta * (1.0 / distance.max(1e-12));
-                let pdf = light.pdf(distance, light.normal.dot(l));
                 if distance > 0.0 && pdf > 0.0 {
                     let transmitted = self.visibility(pos, l, distance * (1.0 - 1e-4));
                     acc += crate::mesh_light::emission_at(scene, light.prim, target) * transmitted
@@ -1461,10 +1458,15 @@ impl<'a> Tracer<'a> {
         // reflection it is weighed against that sampling.
         if !self.fixed {
             if let Some(light) = self.ctx.scene.mesh_lights().of(prim) {
-                if !allow_emission {
-                    a.emission = Color::default();
-                } else if let Some(pdf) = emission_mis {
-                    a.emission *= crate::ggx::power_weight(pdf, light.pdf(dist, r.d.dot(light.normal)));
+                // Where light sampling cannot draw it, from inside a glowing sphere, rebounds
+                // keep finding it.
+                let light_pdf = light.pdf_from(r.o, r.d, dist);
+                if light_pdf > 0.0 {
+                    if !allow_emission {
+                        a.emission = Color::default();
+                    } else if let Some(pdf) = emission_mis {
+                        a.emission *= crate::ggx::power_weight(pdf, light_pdf);
+                    }
                 }
             }
         }
@@ -2699,36 +2701,59 @@ mod tests {
     #[test]
     fn mesh_lights_give_the_light_bounces_found_with_far_less_noise() {
         // A floor, a glossy metal ball and a small glowing panel above them, made of triangles,
-        // dim enough that no sample reaches the caps on rebounds and samples, which would darken
-        // the light rebounds find.
-        let text = r#"{"lights": [], "objects": [
-            {"type": "plane", "points": [[-20, -2, -6], [20, -2, -6], [20, -2, 30], [-20, -2, 30]],
+        // or a small glowing sphere; dim enough that no sample reaches the caps on rebounds and
+        // samples, which would darken the light rebounds find.
+        let room = r#"{"type": "plane", "points": [[-20, -2, -6], [20, -2, -6], [20, -2, 30], [-20, -2, 30]],
              "material": {"color": [0.8, 0.8, 0.8], "specular": 0}},
             {"type": "sphere", "center": [1.6, -1, 8], "radius": 1,
-             "material": {"color": [0.9, 0.9, 0.9], "surface": {"preset": "metal", "roughness": 0.3}}},
-            {"type": "plane", "points": [[-0.6, 1, 7.4], [0.6, 1, 7.4], [0.6, 1, 8.6], [-0.6, 1, 8.6]],
-             "material": {"color": [0, 0, 0], "emission": {"color": [1, 0.8, 0.6], "strength": 2}}}]}"#;
-        let sampled = test_scene(text);
-        assert_eq!(sampled.mesh_lights().lights.len(), 2);
-        let chances: f32 = sampled.mesh_lights().lights.iter().map(|l| l.chance).sum();
-        assert!((chances - 1.0).abs() < 1e-5);
-        // As before mesh lights: only rebounds that meet the panel find its light.
-        let found = test_scene(text);
-        found.mesh_lights.set(std::sync::Arc::new(crate::mesh_light::MeshLights::default())).unwrap();
-        let light = |scene: &Scene, samples: u32| {
-            let op = Options { samples, ..small(samples) };
-            rendered(scene, &op, None).1.unwrap().layers(&op).light
-        };
-        let (with, without) = (light(&sampled, 64), light(&found, 1024));
-        let total = |l: &[[f32; 3]]| l.iter().map(|c| (c[0] + c[1] + c[2]) as f64).sum::<f64>();
-        let (a, b) = (total(&with), total(&without));
-        assert!((a / b - 1.0).abs() < 0.04, "the same light: {a} against {b}");
-        // Noise: the error against many samples, at the same number of samples each way.
-        let reference = light(&sampled, 1024);
-        let error = |l: &[[f32; 3]]| l.iter().zip(&reference)
-            .map(|(c, r)| (0..3).map(|k| ((c[k] - r[k]) as f64).powi(2)).sum::<f64>()).sum::<f64>();
-        let (sampled_error, found_error) = (error(&with), error(&light(&found, 64)));
-        assert!(sampled_error * 4.0 < found_error, "{sampled_error} against {found_error}");
+             "material": {"color": [0.9, 0.9, 0.9], "surface": {"preset": "metal", "roughness": 0.3}}}"#;
+        let glow = r#""material": {"color": [0, 0, 0], "emission": {"color": [1, 0.8, 0.6], "strength": 2}}"#;
+        let panel = format!(r#"{{"lights": [], "objects": [{room},
+            {{"type": "plane", "points": [[-0.6, 1, 7.4], [0.6, 1, 7.4], [0.6, 1, 8.6], [-0.6, 1, 8.6]], {glow}}}]}}"#);
+        let ball = format!(r#"{{"lights": [], "objects": [{room},
+            {{"type": "sphere", "center": [-0.8, 0.6, 8], "radius": 0.45, {glow}}}]}}"#);
+        for (text, lights) in [(panel, 2), (ball, 1)] {
+            let sampled = test_scene(&text);
+            assert_eq!(sampled.mesh_lights().lights.len(), lights);
+            let chances: f32 = sampled.mesh_lights().lights.iter().map(|l| l.chance).sum();
+            assert!((chances - 1.0).abs() < 1e-5);
+            // As before mesh lights: only rebounds that meet the light find it.
+            let found = test_scene(&text);
+            found.mesh_lights.set(std::sync::Arc::new(crate::mesh_light::MeshLights::default())).unwrap();
+            let light = |scene: &Scene, samples: u32| {
+                let op = Options { samples, ..small(samples) };
+                rendered(scene, &op, None).1.unwrap().layers(&op).light
+            };
+            let (with, without) = (light(&sampled, 64), light(&found, 1024));
+            let total = |l: &[[f32; 3]]| l.iter().map(|c| (c[0] + c[1] + c[2]) as f64).sum::<f64>();
+            let (a, b) = (total(&with), total(&without));
+            assert!((a / b - 1.0).abs() < 0.04, "{lights} lights, the same light: {a} against {b}");
+            // Noise: the error against many samples, at the same number of samples each way.
+            let reference = light(&sampled, 1024);
+            let error = |l: &[[f32; 3]]| l.iter().zip(&reference)
+                .map(|(c, r)| (0..3).map(|k| ((c[k] - r[k]) as f64).powi(2)).sum::<f64>()).sum::<f64>();
+            let (sampled_error, found_error) = (error(&with), error(&light(&found, 64)));
+            assert!(sampled_error * 4.0 < found_error, "{lights} lights: {sampled_error} against {found_error}");
+        }
+    }
+
+    #[test]
+    fn a_glowing_sphere_is_drawn_within_the_cone_it_fills() {
+        let scene = test_scene(r#"{"lights": [], "objects": [{"type": "sphere", "center": [0, 0, 10], "radius": 2,
+            "material": {"emission": {"color": [1, 1, 1], "strength": 1}}}]}"#);
+        let light = &scene.mesh_lights().lights[0];
+        let from = Vec3::default();
+        // The cone's solid angle, 2π(1 - cos θ) with sin θ = 2/10, is what its density inverts.
+        let solid_angle = 2.0 * PI * (1.0 - (1.0f32 - 0.04).sqrt());
+        for (u, v) in [(0.0, 0.0), (0.5, 0.25), (0.999, 0.7)] {
+            let (point, pdf) = light.sample(from, u, v).unwrap();
+            assert!(((point - light.p0).length() - 2.0).abs() < 1e-3, "on the sphere");
+            assert!((point - from).length() < 10.0 + 1e-3, "on its near side");
+            assert!((pdf * solid_angle - 1.0).abs() < 1e-3);
+            let d = (point - from) * (1.0 / (point - from).length());
+            assert!((light.pdf_from(from, d, (point - from).length()) - pdf).abs() < 1e-6);
+        }
+        assert!(light.sample(Vec3::new(0.0, 0.0, 10.5), 0.5, 0.5).is_none(), "nothing from inside");
     }
 
     #[test]

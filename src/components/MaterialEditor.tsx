@@ -209,7 +209,7 @@ function EmissionControl({ original, edit, onChange }: {
       <ScrubRow label="Strength" keywords="emission light emissive glow" value={shown.strength} min={0} max={20} hard={[0, 1000]}
         step={0.1} disabled={!on} hint="As bright as a light panel of the same intensity, from both sides."
         onChange={(strength) => set({ ...shown, strength })} />
-      <Hint>Glowing triangles light the scene like lamps; glowing spheres and solids light it only through bounces.</Hint>
+      <Hint>Glowing triangles and spheres light the scene like lamps; other solids light it only through bounces.</Hint>
     </Section>
   );
 }
