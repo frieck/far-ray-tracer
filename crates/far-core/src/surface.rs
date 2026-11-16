@@ -194,6 +194,26 @@ mod tests {
             r#"{"preset":"metal","rougness":0.2}"#,
         ] { assert!(serde_json::from_str::<Surface>(json).is_err(), "{json}"); }
     }
+    #[test]
+    fn an_emission_edit_turns_a_glow_on_changes_it_and_turns_it_off() {
+        let text = r#"{"lights":[],"objects":[
+            {"type":"plane","points":[[0,0,5],[1,0,5],[1,1,5],[0,1,5]],"material":{"color":[0.5,0.5,0.5]}},
+            {"type":"plane","points":[[0,0,6],[1,0,6],[1,1,6],[0,1,6]],"material":{"emission":{"color":[1,0.5,0.25],"strength":4}}}]}"#;
+        let scene = crate::Scene::from_far(text.as_bytes(), std::path::Path::new("test.far")).unwrap();
+        let (mut plain, mut glowing) = (scene.materials[0].clone(), scene.materials[1].clone());
+        assert_eq!(EmissionEdit::of(&plain), None);
+        assert_eq!(EmissionEdit::of(&glowing), Some(EmissionEdit { color: [1.0, 0.5, 0.25], strength: 4.0 }));
+        let on = MaterialEdit { emission: Some(EmissionEdit { color: [0.2, 1.0, 0.5], strength: 3.0 }), ..Default::default() };
+        on.apply(&mut plain).unwrap();
+        assert_eq!(plain.maps.emission.unwrap().color.array(), [0.6, 3.0, 1.5]);
+        let off = MaterialEdit { emission: Some(EmissionEdit { color: [1.0, 1.0, 1.0], strength: 0.0 }), ..Default::default() };
+        off.apply(&mut glowing).unwrap();
+        assert_eq!(glowing.maps.emission, None);
+        for bad in [EmissionEdit { color: [1.0, 2.0, 0.0], strength: 1.0 }, EmissionEdit { color: [1.0; 3], strength: -1.0 },
+            EmissionEdit { color: [1.0; 3], strength: f32::NAN }] {
+            assert!(MaterialEdit { emission: Some(bad), ..Default::default() }.apply(&mut plain).is_err(), "{bad:?}");
+        }
+    }
 }
 
 /// An edit from the app's material editor: a new surface, a new bump strength, or both.
@@ -203,6 +223,30 @@ mod tests {
 pub struct MaterialEdit {
     pub surface: Option<Surface>,
     pub bump_strength: Option<f32>,
+    /// The light the surface gives off; a strength of 0 turns it off.
+    pub emission: Option<EmissionEdit>,
+}
+
+/// A glow, as a scene file writes it: a color from 0 to 1 and a strength, its radiance being
+/// their product. A map the material has keeps tinting it.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct EmissionEdit {
+    pub color: [f32; 3],
+    pub strength: f32,
+}
+
+/// The most a glow's strength may be.
+pub const MAX_EMISSION_STRENGTH: f32 = 1000.0;
+
+impl EmissionEdit {
+    /// The material's glow as a color whose brightest channel is 1 and a strength; None when
+    /// it does not glow.
+    pub fn of(m: &crate::scene::Material) -> Option<Self> {
+        let e = m.maps.emission?;
+        let strength = e.color.x.max(e.color.y).max(e.color.z);
+        (strength > 0.0).then(|| Self { color: (e.color * (1.0 / strength)).array(), strength })
+    }
 }
 
 impl MaterialEdit {
@@ -217,6 +261,16 @@ impl MaterialEdit {
             if let Some(bump) = m.bump.as_mut() {
                 bump.strength = strength;
             }
+        }
+        if let Some(glow) = self.emission {
+            if !(0.0..=MAX_EMISSION_STRENGTH).contains(&glow.strength)
+                || glow.color.iter().any(|c| !(0.0..=1.0).contains(c)) {
+                return Err(format!("A glow needs a color from 0 to 1 and a strength from 0 to {MAX_EMISSION_STRENGTH}"));
+            }
+            let map = m.maps.emission.and_then(|e| e.map);
+            let color = Vec3::new(glow.color[0], glow.color[1], glow.color[2]) * glow.strength;
+            m.maps.emission = (color.x.max(color.y).max(color.z) > 0.0)
+                .then_some(crate::scene::Emission { color, map });
         }
         Ok(())
     }

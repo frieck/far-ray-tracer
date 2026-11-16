@@ -290,6 +290,15 @@ pub fn material_ball(
     if let Some(bump) = edited.bump.as_mut() {
         bump.texture += offset;
     }
+    let maps = &mut edited.maps;
+    for map in [&mut maps.roughness, &mut maps.metallic, &mut maps.alpha] {
+        if let Some(texture) = map.as_mut() {
+            *texture += offset;
+        }
+    }
+    if let Some(texture) = maps.emission.as_mut().and_then(|e| e.map.as_mut()) {
+        *texture += offset;
+    }
     // A preview tessellates on every edit, so displacement keeps a modest detail here.
     if let Some(d) = edited.displacement.as_mut() {
         d.texture += offset;

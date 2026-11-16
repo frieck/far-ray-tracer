@@ -1,7 +1,7 @@
 import { Maximize2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { drawPreview, renderMaterialBall } from "../materialPreview";
-import type { BumpInfo, Device, MaterialOverride, MaterialPreset, SceneMaterial, SurfaceMaterial } from "../types";
+import type { BumpInfo, Device, Glow, MaterialOverride, MaterialPreset, SceneMaterial, SurfaceMaterial } from "../types";
 import { Choice, ColorRow, Hint, Row, ScrubRow, Section } from "./props";
 
 const PRESETS: Record<Exclude<MaterialPreset, "custom">, { roughness: number; metallic: number; ior: number }> = {
@@ -118,9 +118,10 @@ export function MaterialEditor({ materials, overrides, scenePath, device, select
   const color = current.color ?? material.color;
   const glass = current.preset === "glass";
   /** Stores the edit, or drops it when nothing is left to change. */
-  const store = (next: Omit<MaterialOverride, "id">) => {
+  const store = (change: Partial<Omit<MaterialOverride, "id">>) => {
+    const next = { surface: edit?.surface ?? null, bump_strength: edit?.bump_strength ?? null, emission: edit?.emission ?? null, ...change };
     const others = overrides.filter((m) => m.id !== material.id);
-    onChange(next.surface || next.bump_strength !== null ? [...others, { id: material.id, ...next }] : others);
+    onChange(next.surface || next.bump_strength !== null || next.emission ? [...others, { id: material.id, ...next }] : others);
   };
   const bumpStrength = edit?.bump_strength ?? null;
   const apply = (surface: SurfaceMaterial) => store({ surface, bump_strength: bumpStrength });
@@ -173,7 +174,43 @@ export function MaterialEditor({ materials, overrides, scenePath, device, select
         <BumpControl bump={material.bump} strength={bumpStrength}
           onChange={(strength) => store({ surface: edit?.surface ?? null, bump_strength: strength })} />
       )}
+      <EmissionControl key={material.id} original={material.emission} edit={edit?.emission ?? null} onChange={(emission) => store({ emission })} />
     </>
+  );
+}
+
+/** A glow that matches the scene's, or no glow where the scene has none, is no edit. */
+function sameGlow(a: Glow | null, b: Glow | null): boolean {
+  const strength = (g: Glow | null) => g?.strength ?? 0;
+  if (strength(a) === 0 || strength(b) === 0) return strength(a) === strength(b);
+  return a!.strength === b!.strength && a!.color.every((c, k) => Math.abs(c - b!.color[k]) < 1e-6);
+}
+
+/** The light the surface gives off: off, or a color and a strength. */
+function EmissionControl({ original, edit, onChange }: {
+  original: Glow | null;
+  edit: Glow | null;
+  onChange: (emission: Glow | null) => void;
+}) {
+  const glow = edit ?? original;
+  const on = (glow?.strength ?? 0) > 0;
+  // The last glow it had, so turning it back on brings it back.
+  const [last, setLast] = useState<Glow>(glow && on ? glow : { color: [1, 0.85, 0.65], strength: 5 });
+  const set = (next: Glow) => {
+    if (next.strength > 0) setLast(next);
+    onChange(sameGlow(next, original) ? null : next);
+  };
+  const shown = on ? glow! : last;
+  return (
+    <Section id="material-emission" title="Emission" defaultOpen={on}
+      enabled={{ checked: on, onChange: (checked) => set(checked ? last : { ...shown, strength: 0 }) }}>
+      <ColorRow label="Glow color" value={shown.color} disabled={!on}
+        onChange={(color) => set({ ...shown, color })} />
+      <ScrubRow label="Strength" keywords="emission light emissive glow" value={shown.strength} min={0} max={20} hard={[0, 1000]}
+        step={0.1} disabled={!on} hint="As bright as a light panel of the same intensity, from both sides."
+        onChange={(strength) => set({ ...shown, strength })} />
+      <Hint>Glowing triangles light the scene like lamps; glowing spheres and solids light it only through bounces.</Hint>
+    </Section>
   );
 }
 

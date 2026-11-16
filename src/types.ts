@@ -55,9 +55,18 @@ export interface SceneMaterial {
   ior: number;
   surface: SurfaceMaterial | null;
   bump: BumpInfo | null;
+  /** The light it gives off, its brightest channel 1; null when it does not glow. */
+  emission: Glow | null;
 }
-/** An edit of one material: a new surface, a new bump strength, or both. */
-export interface MaterialOverride { id: number; surface: SurfaceMaterial | null; bump_strength: number | null }
+/** A glow as scene files write it: a color from 0 to 1 and a strength, 0 for none. */
+export interface Glow { color: [number, number, number]; strength: number }
+/** An edit of one material: a new surface, bump strength or glow; null keeps the scene's. */
+export interface MaterialOverride {
+  id: number;
+  surface: SurfaceMaterial | null;
+  bump_strength: number | null;
+  emission?: Glow | null;
+}
 export interface BumpInfo {
   /** A height map, whose strength is a depth in scene units, or a tangent-space normal map. */
   kind: "height" | "normal";

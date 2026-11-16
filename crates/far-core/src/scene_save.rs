@@ -8,7 +8,6 @@
 
 use crate::environment::EnvironmentConfig;
 use crate::scene::{find_data_folder, MaterialSource, Scene};
-use crate::surface::Surface;
 use serde_json::{json, Map, Value};
 use std::path::{Component, Path, PathBuf};
 
@@ -17,8 +16,9 @@ pub struct SceneEdits {
     pub camera: crate::camera::Camera,
     /// None removes the environment.
     pub environment: Option<EnvironmentConfig>,
-    /// Material id, its new surface (None keeps the file's), and its new bump strength.
-    pub materials: Vec<(usize, Option<Surface>, Option<f32>)>,
+    /// Material id and its edit: a new surface, bump strength or glow; what it leaves None
+    /// keeps the file's.
+    pub materials: Vec<(usize, crate::surface::MaterialEdit)>,
     /// The app's render settings, stored as they are.
     pub render: Option<Value>,
 }
@@ -42,7 +42,8 @@ pub fn save(scene: &Scene, original: &Path, target: &Path, edits: &SceneEdits) -
         None => { root.remove("environment"); }
         Some(config) => { root.insert("environment".into(), environment_value(config, &to)); }
     }
-    for (id, surface, bump) in &edits.materials {
+    for (id, edit) in &edits.materials {
+        let (surface, bump) = (&edit.surface, &edit.bump_strength);
         let source = scene.material_sources.get(*id).copied().unwrap_or(MaterialSource::None);
         match source {
             MaterialSource::Object(index) => {
@@ -56,6 +57,19 @@ pub fn save(scene: &Scene, original: &Path, target: &Path, edits: &SceneEdits) -
                 if let Some(strength) = bump {
                     if let Some(bump) = material.get_mut("bump").and_then(Value::as_object_mut) {
                         bump.insert("strength".into(), json!(strength));
+                    }
+                }
+                // A glow keeps the file's map; a strength of 0 removes it.
+                if let Some(glow) = edit.emission {
+                    if glow.strength > 0.0 {
+                        let entry = material.entry("emission").or_insert_with(|| json!({}));
+                        if !entry.is_object() {
+                            *entry = json!({});
+                        }
+                        entry["color"] = json!(glow.color);
+                        entry["strength"] = json!(glow.strength);
+                    } else {
+                        material.remove("emission");
                     }
                 }
             }
@@ -202,13 +216,20 @@ mod tests {
         // Read without the light, whose IES file here is a stub.
         let mut scene = Scene::from_far(text.replace(r#", "ies": "lamp.ies""#, "").as_bytes(), &original).unwrap();
         scene.source = Some(std::sync::Arc::new(serde_json::from_str(text).unwrap()));
-        let surface: Surface = serde_json::from_str(r#"{"preset": "metal", "roughness": 0.3}"#).unwrap();
+        let surface: crate::surface::Surface = serde_json::from_str(r#"{"preset": "metal", "roughness": 0.3}"#).unwrap();
         let first = scene.material_sources.iter().position(|s| *s == MaterialSource::Object(0)).unwrap();
         let second = scene.material_sources.iter().position(|s| *s == MaterialSource::Object(1)).unwrap();
         let edits = SceneEdits {
             camera: crate::camera::Camera { zoom: 2.0, ..Default::default() },
             environment: Some(EnvironmentConfig { sky: Some(Default::default()), ..Default::default() }),
-            materials: vec![(first, None, Some(0.5)), (second, Some(surface), None)],
+            materials: vec![
+                (first, crate::surface::MaterialEdit { bump_strength: Some(0.5), ..Default::default() }),
+                (second, crate::surface::MaterialEdit {
+                    surface: Some(surface),
+                    emission: Some(crate::surface::EmissionEdit { color: [1.0, 0.5, 0.0], strength: 3.0 }),
+                    ..Default::default()
+                }),
+            ],
             render: Some(json!({"samples": 256})),
         };
         // Saved elsewhere: the IES path and the data folder are rewritten.
@@ -223,6 +244,8 @@ mod tests {
         assert!(saved["environment"]["sky"].is_object());
         assert_eq!(saved["objects"][0]["material"]["bump"]["strength"], 0.5);
         assert_eq!(saved["objects"][1]["material"]["surface"]["preset"], "metal");
+        assert_eq!(saved["objects"][1]["material"]["emission"], json!({"color": [1.0, 0.5, 0.0], "strength": 3.0}));
+        assert!(saved["objects"][0]["material"].get("emission").is_none());
         let name = dir.file_name().unwrap().to_string_lossy().into_owned();
         assert_eq!(saved["lights"][0]["ies"], format!("../{name}/scenes/lamp.ies"));
         assert_eq!(saved["data_folder"], format!("../{name}/scene-data"));

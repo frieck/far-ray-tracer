@@ -669,8 +669,11 @@ listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 The **Materials** panel selects an object's material and applies Metal, Plastic,
 Ceramic, Glass or Custom presets. Roughness spreads reflections; metallic blends
 dielectric and metal response. Color controls the base color; IOR controls dielectric
-Fresnel reflectance. Edits apply to this session's Enhanced renders. **Original scene
-material** removes the override. Reopening a scene resets edits.
+Fresnel reflectance. **Emission** turns a glow on or off for any material and sets its color
+and strength, as a scene file's `emission` does; a map the material has keeps tinting it, and
+glowing triangles become mesh lights at once. Edits apply to this session's Enhanced renders,
+and **File > Save Scene** writes them. **Original scene material** removes the surface's
+override. Reopening a scene resets edits.
 
 Author persistent materials in a `.far` object's `material`:
 ```json

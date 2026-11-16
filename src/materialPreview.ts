@@ -20,7 +20,7 @@ export interface PreviewRequest {
 export async function renderMaterialBall(request: PreviewRequest): Promise<ImageData> {
   const { edit, ...rest } = request;
   const buffer = await invoke<ArrayBuffer>("material_preview", {
-    ...rest, surface: edit?.surface ?? null, bumpStrength: edit?.bump_strength ?? null,
+    ...rest, surface: edit?.surface ?? null, bumpStrength: edit?.bump_strength ?? null, emission: edit?.emission ?? null,
   });
   return new ImageData(new Uint8ClampedArray(buffer), request.width, request.height);
 }

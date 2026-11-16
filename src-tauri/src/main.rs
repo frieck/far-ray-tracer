@@ -107,6 +107,8 @@ struct SceneMaterial {
     ior: f32,
     surface: Option<far_core::surface::Surface>,
     bump: Option<BumpInfo>,
+    /// The glow, as a color whose brightest channel is 1 and a strength; None for none.
+    emission: Option<far_core::surface::EmissionEdit>,
 }
 
 #[derive(Serialize)]
@@ -123,11 +125,13 @@ struct MaterialOverride {
     surface: Option<far_core::surface::Surface>,
     #[serde(default)]
     bump_strength: Option<f32>,
+    #[serde(default)]
+    emission: Option<far_core::surface::EmissionEdit>,
 }
 
 impl MaterialOverride {
     fn edit(&self) -> far_core::surface::MaterialEdit {
-        far_core::surface::MaterialEdit { surface: self.surface.clone(), bump_strength: self.bump_strength }
+        far_core::surface::MaterialEdit { surface: self.surface.clone(), bump_strength: self.bump_strength, emission: self.emission }
     }
 }
 
@@ -305,7 +309,8 @@ fn open_scene(path: &Path, state: &AppState) -> Result<SceneInfo, String> {
         };
         let m = &scene.materials[id];
         Some(SceneMaterial { id, label: format!("Material {} ({kind})", seen.len()), color: m.color.array(), ior: m.ior, surface: m.surface.clone(),
-            bump: m.bump.map(|b| BumpInfo { kind: b.kind, strength: b.strength }) })
+            bump: m.bump.map(|b| BumpInfo { kind: b.kind, strength: b.strength }),
+            emission: far_core::surface::EmissionEdit::of(m) })
     }).collect();
     let info = SceneInfo {
         environment: scene.environment.as_ref().map(|e| e.config.clone()),
@@ -572,6 +577,7 @@ fn material_preview(
     id: usize,
     surface: Option<far_core::surface::Surface>,
     bump_strength: Option<f32>,
+    emission: Option<far_core::surface::EmissionEdit>,
     width: u32,
     height: u32,
     samples: u32,
@@ -589,7 +595,7 @@ fn material_preview(
     let open = state.scene.lock().unwrap().clone().ok_or("No scene is open")?;
     let environment = state.studio.get_or_init(|| studio_environment(&app)).clone();
     let data = scenes_folder(&app).unwrap_or_default();
-    let edit = far_core::surface::MaterialEdit { surface, bump_strength };
+    let edit = far_core::surface::MaterialEdit { surface, bump_strength, emission };
     let ball = far_core::preview::material_ball(&open.scene, id, Some(&edit), environment, &data)?;
     if let Some(pose) = &pose {
         pose.validate()?;
@@ -852,7 +858,7 @@ fn save_scene(choose: bool, request: SaveSceneRequest, app: AppHandle, state: St
     let edits = far_core::scene_save::SceneEdits {
         camera: request.camera,
         environment: request.environment,
-        materials: request.material_overrides.iter().map(|m| (m.id, m.surface.clone(), m.bump_strength)).collect(),
+        materials: request.material_overrides.iter().map(|m| (m.id, m.edit())).collect(),
         render: Some(request.render),
     };
     let warnings = far_core::scene_save::save(&open.scene, &open.path, &target, &edits)?;
@@ -974,6 +980,10 @@ fn render_scene(
                 return Err("Unknown object material".into());
             }
             edit.edit().apply(&mut copy.materials[edit.id])?;
+        }
+        // A changed glow changes which triangles are lights.
+        if request.material_overrides.iter().any(|edit| edit.emission.is_some()) {
+            copy.mesh_lights = Default::default();
         }
         edited = Some(copy);
     }
@@ -1302,6 +1312,27 @@ mod tests {
             r#"{"id":0,"surface":{"preset":"metal","roughness":0.2,"metallic":1,"ior":1.5,"color":null}}"#).unwrap();
         assert!(surface.surface.is_some() && surface.bump_strength.is_none());
         assert!(serde_json::from_str::<MaterialOverride>(r#"{"id":0,"bump":1}"#).is_err());
+        let glow: MaterialOverride = serde_json::from_str(r#"{"id":1,"surface":null,"bump_strength":null,
+            "emission":{"color":[1,0.5,0.25],"strength":4}}"#).unwrap();
+        assert_eq!(glow.edit().emission, Some(far_core::surface::EmissionEdit { color: [1.0, 0.5, 0.25], strength: 4.0 }));
+    }
+
+    #[test]
+    fn a_glow_edit_makes_a_plane_a_mesh_light() {
+        let text = r#"{"lights":[],"objects":[
+            {"type":"plane","points":[[0,0,5],[1,0,5],[1,1,5],[0,1,5]],"material":{"color":[0.5,0.5,0.5]}}]}"#;
+        let path = std::env::temp_dir().join(format!("far-glow-edit-{}.far", std::process::id()));
+        std::fs::write(&path, text).unwrap();
+        let scene = Scene::open(&path);
+        let _ = std::fs::remove_file(&path);
+        let scene = scene.unwrap();
+        assert!(scene.mesh_lights().is_empty());
+        // As the render applies edits: a copy of the scene, whose table of lights starts over.
+        let mut copy = scene.clone();
+        let edit: MaterialOverride = serde_json::from_str(r#"{"id":0,"emission":{"color":[1,1,1],"strength":2}}"#).unwrap();
+        edit.edit().apply(&mut copy.materials[0]).unwrap();
+        copy.mesh_lights = Default::default();
+        assert_eq!(copy.mesh_lights().lights.len(), 2);
     }
 
     #[test]

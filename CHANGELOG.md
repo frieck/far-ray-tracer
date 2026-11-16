@@ -41,6 +41,10 @@ are not used. The shader is compiled for what
   scattered dots. About a tenth of the error at the same samples on a floor lit by a small
   glowing panel. New example: Techniques > Glowing surfaces.
 
+- The material editor sets a material's glow: **Materials > Emission** turns it on or off and
+  sets its color and strength, shown on the material ball, saved with the scene, and glowing
+  triangles light the scene as mesh lights.
+
 - A camera much like V-Ray's physical camera, in the **Camera** tab and on the command line,
   for Enhanced rendering: exposure by ISO and shutter speed (`--iso`, `--shutter`), or one
   Brightness in stops that says which ISO and shutter a camera would pick; white balance and
@@ -66,6 +70,8 @@ are not used. The shader is compiled for what
 
 ### Fixed
 
+- The material ball read a material's roughness, metallic, emission and alpha maps from the
+  wrong images.
 - The Photon map panel now reports photons actually traced instead of the requested count,
   and explains empty maps without recommending more photons. Empty maps no longer cause
   unnecessary lookups or suppress lighting. This affected the beta releases and 3.0.0-rc.1.
