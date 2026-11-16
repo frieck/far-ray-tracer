@@ -1,5 +1,6 @@
 {
  "camera": {
+  "scene_unit": 0.01,
   "position": [
    0,
    0.2,

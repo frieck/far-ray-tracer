@@ -10,8 +10,8 @@ import { Renderer, type RenderJob, type RenderView } from "./renderer";
 import { alignView, dolly, orbit, pan, retarget } from "./orbit";
 import { SceneView, type PreviewScene } from "./sceneView";
 import {
-  activeComparison, activeMode, buildPreview, buildRequest, defaultSettings, imageSize, sceneSaveRequest,
-  withSavedRenderSettings,
+  activeComparison, activeMode, buildPreview, buildRequest, defaultSettings, DOF_PRESETS, fNumberFor, focalLength, imageSize,
+  sceneSaveRequest, withSavedRenderSettings,
 } from "./settings";
 import type { Area, EnvironmentConfig, MenuAction, Pose, RenderRequest, SceneInfo, Settings, Startup } from "./types";
 
@@ -24,13 +24,13 @@ const scenePose = ({ camera: { position, target, zoom } }: SceneInfo): Pose => (
 
 /**
  * The job without how the light is shown (exposure, tone mapping, the camera's white balance,
- * tint, vignetting, chromatic aberration, grain and halation, denoise and bloom): two jobs
+ * tint, vignetting, chromatic aberration, grain and halation, the LUT, denoise and bloom): two jobs
  * with the same light differ only in what the engine shows again at once, without rendering.
  */
 function lightKey(job: RenderJob): string {
   const strip = (request: RenderRequest | null) => request && ({
     ...request, exposure: 0, tone_mapping: null, white_balance: 0, tint: 0, vignette: 0, chromatic_aberration: 0, grain: 0, iso: 0,
-    halation: 0, denoise: false, bloom: false,
+    halation: 0, lut: null, lut_strength: 0, denoise: false, bloom: false,
   });
   return JSON.stringify({ ...job, main: strip(job.main), comparison: strip(job.comparison) });
 }
@@ -126,7 +126,12 @@ export function App() {
             depthOfField: info.camera.aperture > 0,
             dofPreset: info.camera.aperture > 0 ? "custom" : "portrait",
             dofPasses: 256,
-            aperture: info.camera.aperture > 0 ? info.camera.aperture : 0.5,
+            // The scene keeps the opening's diameter; the panel shows it as an f-number.
+            fNumber: info.camera.aperture > 0
+              ? fNumberFor(focalLength(info.camera.zoom, info.camera.sensor_width), info.camera.aperture, info.camera.scene_unit)
+              : DOF_PRESETS.portrait.fNumber,
+            sensorWidth: info.camera.sensor_width,
+            sceneUnit: info.camera.scene_unit,
             focusDistance: info.camera.focus_distance,
             blades: info.camera.blades,
             bladeRotation: info.camera.blade_rotation,
@@ -308,6 +313,15 @@ export function App() {
       if (request === environmentRequest.current) publish({ status: `Error: ${String(error)}` });
     } finally {
       if (request === environmentRequest.current) setLoadingEnvironment(false);
+    }
+  };
+
+  const chooseLut = async () => {
+    try {
+      const lut = await invoke<string | null>("choose_lut");
+      if (lut) setSettings((old) => old && ({ ...old, lut }));
+    } catch (error) {
+      publish({ status: `Error: ${String(error)}` });
     }
   };
 
@@ -499,6 +513,7 @@ export function App() {
             settings={settings}
             loadingEnvironment={loadingEnvironment}
             onImportEnvironment={() => void importEnvironment()}
+            onChooseLut={() => void chooseLut()}
             scene={scene}
             onResetCamera={resetCamera}
             cores={cores}

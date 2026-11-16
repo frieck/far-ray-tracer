@@ -88,7 +88,11 @@ export interface Pose {
 export interface SceneInfo {
   environment: EnvironmentConfig | null;
   materials: SceneMaterial[];
-  camera: Pose & { aperture: number; focus_distance: number; blades: number; blade_rotation: number };
+  camera: Pose & {
+    aperture: number; focus_distance: number; blades: number; blade_rotation: number;
+    /** The sensor's width in millimetres, and a scene unit's length in metres. */
+    sensor_width: number; scene_unit: number;
+  };
   center: [number, number, number] | null;
   name: string;
   path: string;
@@ -169,6 +173,10 @@ export interface RenderRequest {
   grain: number;
   iso: number;
   halation: number;
+  /** A color look graded over the finished picture: a bundled look's name or a .cube file's
+   * path, and how strongly, from 0 to 1. */
+  lut: string | null;
+  lut_strength: number;
   caustics: boolean;
   photons: number;
   caustic_radius: number;
@@ -214,7 +222,12 @@ export interface Settings {
   depthOfField: boolean;
   dofPreset: DofPreset;
   dofPasses: number;
-  aperture: number;
+  /** The lens opening as an f-number: the depth of field's, and in Physical exposure the light's. */
+  fNumber: number;
+  /** The sensor's width in millimetres, which turns the zoom into a focal length. */
+  sensorWidth: number;
+  /** How long a scene unit is, in metres, which turns the f-number into an opening. */
+  sceneUnit: number;
   focusDistance: number;
   blades: number;
   bladeRotation: number;
@@ -233,6 +246,9 @@ export interface Settings {
   chromaticAberration: number;
   grain: number;
   halation: number;
+  /** A bundled look's name, such as "warm-film", or the path of a .cube file; null for none. */
+  lut: string | null;
+  lutStrength: number;
   denoise: boolean;
   bloom: boolean;
   caustics: boolean;

@@ -48,13 +48,23 @@ usage:
       --halation N    reddish glow around bright light, as on film, 0 to 1 (default 0)
       --vignette N    darkens the corners as a lens does, 0 to 1 (default 0)
       --chromatic-aberration N   red and blue fringes toward the corners, 0 to 1 (default 0)
+      --lut FILE      grades the finished picture with a .cube LUT, as a color look; the
+                      program's own are in assets/luts
+      --lut-strength N   how much of the LUT's look to show, 0 to 1 (default 1)
       --aperture N    lens diameter in scene units; 0 disables depth of field
+      --f-number N    the lens opening as a camera's f-number, which sets the depth of field
+                      and, as on a camera, the light: f/8 leaves it as rendered, and each
+                      stop wider (f/5.6, f/4) doubles it
       --focus-distance N   focus-plane distance from camera in scene units
       --blades N      diaphragm blades, the shape of out-of-focus highlights; 0 is round
       --blade-rotation N   turns that shape, in degrees
       --camera X,Y,Z  camera position in enhanced mode
       --target X,Y,Z  point the camera looks at in enhanced mode
       --zoom N        lens magnification in enhanced mode (default 1)
+      --focal-length MM    the lens's focal length, in place of --zoom: 22.5 is zoom 1 on
+                      a full-frame sensor
+      --sensor-width MM    the sensor's width (default the scene's, or 36, full frame)
+      --scene-unit M  how long a scene unit is, in metres (default the scene's, or 0.1)
       --caustics      trace photons so glass and mirrors focus light
       --photons N     photons for caustics (default 1000000)
       --caustic-radius N    photon lookup radius, smaller is sharper (default 0.12)
@@ -80,6 +90,15 @@ fn number<T: std::str::FromStr>(args: &mut impl Iterator<Item = String>, name: &
         .unwrap_or_else(|| fail(&format!("{name} needs a number")))
 }
 
+/// A number above 0.
+fn positive(args: &mut impl Iterator<Item = String>, name: &str) -> f32 {
+    let value: f32 = number(args, name);
+    if value.is_nan() || value <= 0.0 || value.is_infinite() {
+        fail(&format!("{name} needs a number above 0"));
+    }
+    value
+}
+
 /// A number from 0 to 1.
 fn fraction(args: &mut impl Iterator<Item = String>, name: &str) -> f32 {
     let value: f32 = number(args, name);
@@ -101,6 +120,7 @@ fn render_command(mut args: impl Iterator<Item = String>) {
     let (mut scene, mut output) = (None, None);
     let (mut position, mut target, mut zoom) = (None, None, None);
     let (mut iso, mut shutter, mut grain) = (far_core::lens::REFERENCE_ISO, far_core::lens::REFERENCE_SHUTTER, 0.0);
+    let (mut focal_length, mut sensor_width, mut scene_unit, mut f_number) = (None, None, None, None::<f32>);
     while let Some(a) = args.next() {
         match a.as_str() {
             "-o" => output = args.next(),
@@ -137,6 +157,10 @@ fn render_command(mut args: impl Iterator<Item = String>) {
             "--camera" => position = Some(point(&mut args, &a)),
             "--target" => target = Some(point(&mut args, &a)),
             "--zoom" => zoom = Some(number(&mut args, &a)),
+            "--focal-length" => focal_length = Some(positive(&mut args, &a)),
+            "--sensor-width" => sensor_width = Some(positive(&mut args, &a)),
+            "--scene-unit" => scene_unit = Some(positive(&mut args, &a)),
+            "--f-number" => f_number = Some(positive(&mut args, &a)),
             "--exposure" => options.exposure = number(&mut args, &a),
             "--white-balance" => {
                 options.white_balance = number(&mut args, &a);
@@ -169,6 +193,12 @@ fn render_command(mut args: impl Iterator<Item = String>) {
             "--grain" => grain = fraction(&mut args, &a),
             "--halation" => options.halation = fraction(&mut args, &a),
             "--chromatic-aberration" => options.chromatic_aberration = fraction(&mut args, &a),
+            "--lut" => {
+                let path = args.next().unwrap_or_else(|| fail("--lut needs a .cube file"));
+                let lut = far_core::lut::Lut::open(std::path::Path::new(&path)).unwrap_or_else(|e| fail(&e));
+                options.lut = Some(std::sync::Arc::new(lut));
+            }
+            "--lut-strength" => options.lut_strength = fraction(&mut args, &a),
             "--caustics" => options.caustics = true,
             "--photons" => options.photons = number(&mut args, &a),
             "--caustic-radius" => options.caustic_radius = number(&mut args, &a),
@@ -192,13 +222,29 @@ fn render_command(mut args: impl Iterator<Item = String>) {
         eprintln!("{HELP}");
         exit(2);
     };
-    // The camera's ISO and shutter join --exposure, and the ISO sets the grain's strength.
-    options.exposure *= far_core::lens::exposure(iso, shutter);
+    if zoom.is_some() && focal_length.is_some() {
+        fail("--zoom and --focal-length both set the field of view; give one");
+    }
+    if options.aperture.is_some() && f_number.is_some() {
+        fail("--aperture and --f-number both set the lens opening; give one");
+    }
+    // The camera's ISO, shutter and f-number join --exposure, and the ISO sets the grain's
+    // strength.
+    options.exposure *= far_core::lens::exposure(iso, shutter, f_number.unwrap_or(far_core::lens::REFERENCE_F_NUMBER));
     options.grain = far_core::lens::grain_at_iso(grain, iso);
 
     let t0 = Instant::now();
     let scene = Scene::open(Path::new(&scene)).unwrap_or_else(|e| fail(&e));
+    let sensor_width = sensor_width.unwrap_or(scene.camera.sensor_width);
+    let scene_unit = scene_unit.unwrap_or(scene.camera.scene_unit);
+    let zoom = zoom.or(focal_length.map(|f| far_core::camera::zoom_for(f, sensor_width)));
+    if let Some(f_number) = f_number {
+        let focal = far_core::camera::focal_length(zoom.unwrap_or(scene.camera.zoom), sensor_width);
+        options.aperture = Some(far_core::camera::aperture_for(focal, f_number, scene_unit));
+    }
     let camera = far_core::Camera {
+        sensor_width,
+        scene_unit,
         aperture: options.aperture.unwrap_or(scene.camera.aperture),
         focus_distance: options.focus_distance.unwrap_or(scene.camera.focus_distance),
         blades: options.blades.unwrap_or(scene.camera.blades),

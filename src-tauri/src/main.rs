@@ -64,6 +64,10 @@ fn reference_iso() -> f32 {
     far_core::lens::REFERENCE_ISO
 }
 
+fn full() -> f32 {
+    1.0
+}
+
 struct FinishedImage {
     width: u32,
     height: u32,
@@ -76,6 +80,8 @@ struct FinishedImage {
 #[derive(Default)]
 struct AppState {
     environment_cache: Mutex<Option<(String, Arc<EnvironmentMap>)>>,
+    /// The last LUT read, by path and the time its file changed.
+    lut_cache: Mutex<Option<(PathBuf, Option<std::time::SystemTime>, Arc<far_core::lut::Lut>)>>,
     scene: Mutex<Option<Arc<OpenScene>>>,
     progress: Arc<Progress>,
     rendering: AtomicBool,
@@ -234,6 +240,12 @@ struct RenderRequest {
     iso: f32,
     #[serde(default)]
     halation: f32,
+    /// A color look graded over the finished picture: a bundled look by name, such as
+    /// `warm-film`, or the path of a .cube file; and how strongly, from 0 to 1.
+    #[serde(default)]
+    lut: Option<String>,
+    #[serde(default = "full")]
+    lut_strength: f32,
     caustics: bool,
     photons: u32,
     caustic_radius: f32,
@@ -546,6 +558,48 @@ fn choose_environment(app: AppHandle, state: State<'_, AppState>) -> Result<Opti
     let environment = Environment::load(config.clone())?;
     *state.environment_cache.lock().unwrap() = Some((config.map_key(), environment.map));
     Ok(Some(config))
+}
+
+/// Picks a .cube LUT and reads it, so a broken file is reported at once; gives its path.
+#[tauri::command(async)]
+fn choose_lut(app: AppHandle, state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let Some(file) = app.dialog().file().add_filter("LUT", &["cube"]).blocking_pick_file() else {
+        return Ok(None);
+    };
+    let path = file.into_path().map_err(|e| e.to_string())?.to_string_lossy().into_owned();
+    load_lut(&app, &state, &path)?;
+    Ok(Some(path))
+}
+
+/// The folder of bundled looks, or the checkout's in development.
+fn luts_folder(app: &AppHandle) -> Option<PathBuf> {
+    let bundled = app.path().resource_dir().ok().map(|d| d.join("assets/luts"));
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/luts");
+    bundled.into_iter().chain([repository]).find(|p| p.is_dir())
+}
+
+/// Where a LUT a render asks for is: a bundled look's name, such as `warm-film`, or a path.
+fn lut_path(luts: Option<PathBuf>, name: &str) -> Result<PathBuf, String> {
+    if !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+        return Ok(luts.ok_or("The bundled looks are missing")?.join(format!("{name}.cube")));
+    }
+    Ok(PathBuf::from(name))
+}
+
+/// Reads a LUT, or takes the one read last while its file is unchanged: slider edits show the
+/// picture again many times a second.
+fn load_lut(app: &AppHandle, state: &AppState, name: &str) -> Result<Arc<far_core::lut::Lut>, String> {
+    let path = lut_path(luts_folder(app), name)?;
+    let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+    let mut cache = state.lut_cache.lock().unwrap();
+    if let Some((cached, time, lut)) = cache.as_ref() {
+        if *cached == path && *time == modified {
+            return Ok(lut.clone());
+        }
+    }
+    let lut = Arc::new(far_core::lut::Lut::open(&path)?);
+    *cache = Some((path, modified, lut.clone()));
+    Ok(lut)
 }
 
 /// Largest side of a material preview, in pixels.
@@ -928,6 +982,7 @@ fn render_with_frames(
 
 #[tauri::command(async)]
 fn render_scene(
+    app: AppHandle,
     request: RenderRequest,
     channel: Channel<Response>,
     state: State<'_, AppState>,
@@ -996,6 +1051,13 @@ fn render_scene(
         ..far_core::Camera::default()
     }.validate()?;
     request.pose.validate()?;
+    if !(0.0..=1.0).contains(&request.lut_strength) {
+        return Err("The LUT's strength is 0 to 1".into());
+    }
+    let lut = match request.lut.as_deref().filter(|_| mode == Mode::Enhanced) {
+        Some(name) => Some(load_lut(&app, &state, name)?),
+        None => None,
+    };
     let options = Options {
         pose: Some(request.pose),
         aperture: Some(request.aperture),
@@ -1018,6 +1080,8 @@ fn render_scene(
         chromatic_aberration: request.chromatic_aberration,
         grain: far_core::lens::grain_at_iso(request.grain, request.iso),
         halation: request.halation,
+        lut,
+        lut_strength: request.lut_strength,
         caustics: request.caustics,
         photons: request.photons,
         caustic_radius: request.caustic_radius,
@@ -1254,6 +1318,7 @@ fn main() {
             open_repository,
             choose_scene,
             choose_environment,
+            choose_lut,
             environment_preview,
             load_scene,
             cancel,
@@ -1301,6 +1366,18 @@ mod tests {
         assert_eq!(request.camera.blades, 6);
         assert!(request.environment.unwrap().sky.unwrap().time.is_some());
         assert_eq!(request.render["toneMapping"], "agx_punchy");
+    }
+
+    #[test]
+    fn a_lut_is_a_bundled_look_by_name_or_a_file() {
+        let luts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/luts");
+        for look in ["warm-film", "teal-orange", "bleach-bypass", "black-and-white", "faded"] {
+            let path = lut_path(Some(luts.clone()), look).unwrap();
+            assert!(far_core::lut::Lut::open(&path).is_ok(), "{}", path.display());
+        }
+        assert_eq!(lut_path(None, "/my/looks/Kodak 2383.cube").unwrap(), PathBuf::from("/my/looks/Kodak 2383.cube"));
+        assert_eq!(lut_path(None, "film.cube").unwrap(), PathBuf::from("film.cube"));
+        assert!(lut_path(None, "warm-film").is_err());
     }
 
     #[test]

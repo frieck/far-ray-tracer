@@ -59,8 +59,26 @@ are not used. The shader is compiled for what
   (`-o image.exr`): the linear light of an Enhanced render before tone mapping and, when it
   denoised, the denoised light, albedo, normal and depth passes.
 
+- Color looks from LUTs: **Camera > Film > LUT** grades the finished picture with a `.cube` file, as
+  DaVinci Resolve and V-Ray's frame buffer do, with a strength. Five looks come with the
+  program (Warm film, Teal and orange, Bleach bypass, Black and white, Faded print), made by
+  `tools/generate_luts.py`, and any 1D or 3D `.cube` file loads. It changes without rendering
+  again and is saved with the scene; on the command line, `--lut FILE` and `--lut-strength N`.
+
+- Camera presets in **Camera > Camera**: Digital, 35 mm color film, Black-and-white film,
+  Cinema camera, Phone and Vintage set the sensor, grain, halation, vignetting, chromatic
+  aberration, tone mapping and look together, keeping the framing and the exposure. The
+  Sensor list adds Super 35 and a phone's.
+
 ### Changed
 
+- The camera has a focal length, a sensor and an f-number, as in V-Ray and Blender: **Camera >
+  Lens** shows the zoom as a focal length in millimetres and the aperture as an f-number, which
+  a scene's unit (10 cm by default) and the sensor (full frame) turn into the opening. Depth of
+  field presets are f/5.6, f/2.8 and f/1.4, and in Physical exposure the f-number sets the
+  light too. On the command line: `--focal-length`, `--sensor-width`, `--scene-unit` and
+  `--f-number`. Scenes keep their aperture, so they look the same; the Bokeh and Depth of
+  field examples use a 1 cm unit.
 - Exposure moved from **Image** to **Camera > Exposure**. Scenes saved with the earlier
   Exposure multiplier open with the same light, as a Brightness.
 

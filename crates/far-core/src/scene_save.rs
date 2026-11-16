@@ -240,6 +240,8 @@ mod tests {
         let saved: Value = serde_json::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
         assert_eq!(saved["bounds"][1][0], 9);
         assert_eq!(saved["camera"]["zoom"], 2.0);
+        assert_eq!(saved["camera"]["sensor_width"], 36.0);
+        assert!((saved["camera"]["scene_unit"].as_f64().unwrap() - 0.1).abs() < 1e-6);
         assert_eq!(saved["format"], crate::scene_file::FORMAT);
         assert!(saved["environment"]["sky"].is_object());
         assert_eq!(saved["objects"][0]["material"]["bump"]["strength"], 0.5);

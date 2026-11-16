@@ -6,16 +6,16 @@
 use crate::engine::{Image, Region};
 use std::sync::atomic::Ordering::Relaxed;
 
-/// The ISO and shutter time, in seconds, that give the light as rendered: exposure 1.
+/// The ISO, shutter time in seconds and f-number that give the light as rendered: exposure 1.
 pub const REFERENCE_ISO: f32 = 100.0;
 pub const REFERENCE_SHUTTER: f32 = 1.0 / 125.0;
+pub const REFERENCE_F_NUMBER: f32 = 8.0;
 
-/// The exposure multiplier of a camera's ISO and shutter time, in seconds: twice the ISO or
-/// twice the time is twice the light, and ISO 100 at 1/125 s leaves it as rendered. The
-/// aperture's f-number is not part of it: the depth of field's aperture is a diameter in scene
-/// units, without a focal length to make an f-number of.
-pub fn exposure(iso: f32, shutter: f32) -> f32 {
-    (iso / REFERENCE_ISO) * (shutter / REFERENCE_SHUTTER)
+/// The exposure multiplier of a camera's ISO, shutter time in seconds and f-number, as a real
+/// camera's: twice the ISO or twice the time is twice the light, and so is an f-number smaller
+/// by the square root of 2, one stop. ISO 100 at 1/125 s and f/8 leaves it as rendered.
+pub fn exposure(iso: f32, shutter: f32, f_number: f32) -> f32 {
+    (iso / REFERENCE_ISO) * (shutter / REFERENCE_SHUTTER) * (REFERENCE_F_NUMBER / f_number).powi(2)
 }
 
 /// The white balance that leaves colors as rendered: daylight, the white of an sRGB screen.
@@ -291,9 +291,10 @@ mod tests {
 
     #[test]
     fn exposure_follows_iso_and_shutter() {
-        assert_eq!(exposure(REFERENCE_ISO, REFERENCE_SHUTTER), 1.0);
-        assert!((exposure(400.0, 1.0 / 250.0) - 2.0).abs() < 1e-6);
-        assert!((exposure(100.0, 1.0 / 60.0) - 125.0 / 60.0).abs() < 1e-6);
+        assert_eq!(exposure(REFERENCE_ISO, REFERENCE_SHUTTER, REFERENCE_F_NUMBER), 1.0);
+        assert!((exposure(400.0, 1.0 / 250.0, 8.0) - 2.0).abs() < 1e-6);
+        assert!((exposure(100.0, 1.0 / 60.0, 8.0) - 125.0 / 60.0).abs() < 1e-6);
+        assert!((exposure(100.0, 1.0 / 125.0, 4.0) - 4.0).abs() < 1e-5, "two stops wider, four times the light");
     }
 
     #[test]

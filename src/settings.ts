@@ -70,16 +70,134 @@ export const CAUSTIC_PRESETS: Record<Exclude<CausticPreset, "custom">, { photons
   sharp: { photons: 16_000_000, radius: 0.07 },
 };
 
-export const DOF_PRESETS: Record<Exclude<DofPreset, "custom">, { aperture: number; passes: number }> = {
-  subtle: { aperture: 0.25, passes: 128 },
-  portrait: { aperture: 0.6, passes: 256 },
-  strong: { aperture: 1.2, passes: 512 },
+export const DOF_PRESETS: Record<Exclude<DofPreset, "custom">, { fNumber: number; passes: number }> = {
+  subtle: { fNumber: 5.6, passes: 128 },
+  portrait: { fNumber: 2.8, passes: 256 },
+  strong: { fNumber: 1.4, passes: 512 },
 };
 
+/** The camera as far-core's camera.rs: the image plane 5 units ahead, a 4:3 picture 8 wide. */
+const IMAGE_DISTANCE = 5;
+const PICTURE_WIDTH = 8;
+export const DEFAULT_SENSOR_WIDTH = 36;
+export const DEFAULT_SCENE_UNIT = 0.1;
+/** Sensor widths in millimetres, from the largest. */
+export const SENSORS: { width: number; label: string }[] = [
+  { width: 43.8, label: "Medium format" },
+  { width: 36, label: "Full frame" },
+  { width: 24.9, label: "Super 35" },
+  { width: 23.6, label: "APS-C" },
+  { width: 17.3, label: "Micro Four Thirds" },
+  { width: 13.2, label: "1-inch" },
+  { width: 9.8, label: "Phone" },
+];
+
+/** The color looks bundled in assets/luts, by the name a render asks for. */
+export const LOOKS: { name: string; label: string }[] = [
+  { name: "warm-film", label: "Warm film" },
+  { name: "teal-orange", label: "Teal and orange" },
+  { name: "bleach-bypass", label: "Bleach bypass" },
+  { name: "black-and-white", label: "Black and white" },
+  { name: "faded", label: "Faded print" },
+];
+
+/** A LUT as the panel names it: the bundled look's name, or the file's. */
+export function lutLabel(lut: string): string {
+  return LOOKS.find((look) => look.name === lut)?.label ?? lut.split(/[\\/]/).pop() ?? lut;
+}
+
+/** What a camera preset sets: the sensor, the look of film and lens, the curve and the LUT. */
+export interface CameraPreset {
+  label: string;
+  note: string;
+  sensorWidth: number;
+  toneMapping: import("./types").ToneMapping;
+  lut: string | null;
+  lutStrength: number;
+  grain: number;
+  halation: number;
+  vignette: number;
+  chromaticAberration: number;
+}
+
+/**
+ * Cameras as a whole: choosing one keeps the framing and the exposure, so the lens's focal
+ * length follows the sensor, and with it how much the f-number blurs.
+ */
+export const CAMERA_PRESETS: Record<string, CameraPreset> = {
+  digital: {
+    label: "Digital", note: "A clean full-frame camera: no grain, no look.",
+    sensorWidth: 36, toneMapping: "agx", lut: null, lutStrength: 1, grain: 0, halation: 0, vignette: 0, chromaticAberration: 0,
+  },
+  colorFilm: {
+    label: "35 mm color film", note: "Color negative film printed warm, with grain and a little halation.",
+    sensorWidth: 36, toneMapping: "agx", lut: "warm-film", lutStrength: 1, grain: 0.3, halation: 0.3, vignette: 0.2,
+    chromaticAberration: 0.05,
+  },
+  blackAndWhite: {
+    label: "Black-and-white film", note: "Panchromatic film with strong grain.",
+    sensorWidth: 36, toneMapping: "agx", lut: "black-and-white", lutStrength: 1, grain: 0.45, halation: 0, vignette: 0.25,
+    chromaticAberration: 0,
+  },
+  cinema: {
+    label: "Cinema camera", note: "A Super 35 sensor, the ACES curve and a teal-and-orange grade.",
+    sensorWidth: 24.9, toneMapping: "aces", lut: "teal-orange", lutStrength: 0.8, grain: 0.12, halation: 0.2, vignette: 0.1,
+    chromaticAberration: 0.05,
+  },
+  phone: {
+    label: "Phone", note: "A small sensor, so nearly everything is sharp, and punchy colors.",
+    sensorWidth: 9.8, toneMapping: "agx_punchy", lut: null, lutStrength: 1, grain: 0, halation: 0, vignette: 0.1,
+    chromaticAberration: 0.15,
+  },
+  vintage: {
+    label: "Vintage", note: "An old lens on faded film: dark corners, color fringes and grain.",
+    sensorWidth: 36, toneMapping: "agx", lut: "faded", lutStrength: 1, grain: 0.4, halation: 0.35, vignette: 0.55,
+    chromaticAberration: 0.4,
+  },
+};
+
+const PRESET_KEYS = ["sensorWidth", "toneMapping", "lut", "lutStrength", "grain", "halation", "vignette", "chromaticAberration"] as const;
+
+/** The camera preset the settings match, or null when any of its values was changed. */
+export function cameraPresetOf(settings: Settings): string | null {
+  return Object.keys(CAMERA_PRESETS).find((name) =>
+    PRESET_KEYS.every((key) => CAMERA_PRESETS[name][key] === settings[key])) ?? null;
+}
+
+/** What a camera preset changes; the zoom stays, so the framing does and the focal length follows the sensor. */
+export function withCameraPreset(name: string): Partial<Settings> {
+  const preset = CAMERA_PRESETS[name];
+  if (!preset) return {};
+  return Object.fromEntries(PRESET_KEYS.map((key) => [key, preset[key]])) as Partial<Settings>;
+}
+
+/** The focal length, in millimetres, of a zoom on a sensor `sensorWidth` millimetres wide. */
+export function focalLength(zoom: number, sensorWidth: number): number {
+  return (IMAGE_DISTANCE * sensorWidth * zoom) / PICTURE_WIDTH;
+}
+
+/** The zoom of a focal length on a sensor. */
+export function zoomFor(focal: number, sensorWidth: number): number {
+  return (PICTURE_WIDTH * focal) / (IMAGE_DISTANCE * sensorWidth);
+}
+
+/** The lens opening's diameter in scene units, for a focal length and an f-number. */
+export function apertureFor(focal: number, fNumber: number, sceneUnit: number): number {
+  return focal / fNumber / (1000 * sceneUnit);
+}
+
+/** The f-number of an opening `aperture` scene units across. */
+export function fNumberFor(focal: number, aperture: number, sceneUnit: number): number {
+  return focal / (aperture * 1000 * sceneUnit);
+}
+
+/** The depth of field's f-number and passes, and the opening they make, in scene units. */
 export function dofValues(settings: Settings) {
-  return settings.dofPreset === "custom"
-    ? { aperture: settings.aperture, passes: settings.dofPasses }
+  const { fNumber, passes } = settings.dofPreset === "custom"
+    ? { fNumber: settings.fNumber, passes: settings.dofPasses }
     : DOF_PRESETS[settings.dofPreset];
+  const aperture = apertureFor(focalLength(settings.pose.zoom, settings.sensorWidth), fNumber, settings.sceneUnit);
+  return { fNumber, passes, aperture };
 }
 
 /** Passes of the quality preset, or the custom count. */
@@ -100,11 +218,11 @@ export function withPasses(passes: number): Partial<Settings> {
 }
 
 /** Depth of field values after editing one of them: the preset they match, or Custom. */
-export function withDof(settings: Settings, change: Partial<{ aperture: number; passes: number }>): Partial<Settings> {
+export function withDof(settings: Settings, change: Partial<{ fNumber: number; passes: number }>): Partial<Settings> {
   const values = { ...dofValues(settings), ...change };
   const preset = (Object.keys(DOF_PRESETS) as Exclude<DofPreset, "custom">[])
-    .find((name) => DOF_PRESETS[name].aperture === values.aperture && DOF_PRESETS[name].passes === values.passes);
-  return { dofPreset: preset ?? "custom", aperture: values.aperture, dofPasses: values.passes };
+    .find((name) => DOF_PRESETS[name].fNumber === values.fNumber && DOF_PRESETS[name].passes === values.passes);
+  return { dofPreset: preset ?? "custom", fNumber: values.fNumber, dofPasses: values.passes };
 }
 
 /** Caustic values as the panel shows them, from the preset or the custom fields. */
@@ -149,25 +267,35 @@ export const DEFAULT_SUN_TIME: import("./types").SunTime = { hour: 15, latitude:
 /** ISO 100 at 1/125 s leaves the light as rendered, as in the engine's `lens::exposure`. */
 export const REFERENCE_ISO = 100;
 export const REFERENCE_SHUTTER = 1 / 125;
+export const REFERENCE_F_NUMBER = 8;
 /** The usual ranges of the camera's ISO and shutter time. */
 export const ISO_RANGE: [number, number] = [25, 6400];
 export const SHUTTER_RANGE: [number, number] = [1 / 4000, 1];
 
-/** The light's multiplier: 2 to the brightness, or what the ISO and shutter make of it. */
+/** How much more light than at f/8 the lens lets in: twice per stop wider. */
+function apertureGain(settings: Settings): number {
+  return (REFERENCE_F_NUMBER / dofValues(settings).fNumber) ** 2;
+}
+
+/**
+ * The light's multiplier: 2 to the brightness, or what the ISO, shutter and f-number make of
+ * it, as in the engine's `lens::exposure`.
+ */
 export function exposureOf(settings: Settings): number {
   if (settings.exposureMode === "simple") return 2 ** settings.brightness;
-  return (settings.iso / REFERENCE_ISO) * (settings.shutter / REFERENCE_SHUTTER);
+  return (settings.iso / REFERENCE_ISO) * (settings.shutter / REFERENCE_SHUTTER) * apertureGain(settings);
 }
 
 /**
  * The ISO and shutter time of the picture: as set, or in Simple what a camera in program mode
- * would pick for that light. From ISO 100 at 1/125 s, more light takes a longer shutter down to
- * 1/30 s, held in the hand, then a higher ISO up to 6400, then longer still, on a tripod; less
- * light takes a shorter shutter up to 1/4000 s, then ISO down to 50.
+ * would pick for that light at the lens's f-number. From ISO 100 at 1/125 s, more light takes a
+ * longer shutter down to 1/30 s, held in the hand, then a higher ISO up to 6400, then longer
+ * still, on a tripod; less light takes a shorter shutter up to 1/4000 s, then ISO down to 50.
  */
 export function cameraOf(settings: Settings): { iso: number; shutter: number } {
   if (settings.exposureMode === "physical") return { iso: settings.iso, shutter: settings.shutter };
-  const stops = settings.brightness;
+  // What the ISO and shutter must give, the opening's share taken out.
+  const stops = settings.brightness - Math.log2(apertureGain(settings));
   const handheld = Math.log2((1 / 30) / REFERENCE_SHUTTER);
   const fastest = Math.log2(SHUTTER_RANGE[0] / REFERENCE_SHUTTER);
   let shutterStops: number;
@@ -194,6 +322,28 @@ export function withExposureMode(settings: Settings, mode: Settings["exposureMod
   return { exposureMode: mode, brightness: Math.round(Math.log2(exposureOf(settings)) * 100) / 100 };
 }
 
+/** The values cameras mark, in thirds of a stop: of shutter speed (the N of 1/N s) and of ISO. */
+const MARKED_SPEEDS = [8000, 6400, 5000, 4000, 3200, 2500, 2000, 1600, 1250, 1000, 800, 640, 500, 400, 320, 250, 200, 160,
+  125, 100, 80, 60, 50, 40, 30, 25, 20, 15, 13, 10, 8, 6, 5, 4, 3, 2.5, 2, 1.6, 1.3, 1, 0.8, 0.6, 0.5, 0.4, 0.3];
+const MARKED_ISOS = [25, 32, 40, 50, 64, 80, 100, 125, 160, 200, 250, 320, 400, 500, 640, 800, 1000, 1250, 1600, 2000, 2500,
+  3200, 4000, 5000, 6400, 8000, 10000, 12800, 16000, 20000, 25600];
+
+/** The marked value nearest `value` in stops, or `value` itself beyond the marks. */
+function nearestMark(marks: number[], value: number): number {
+  const best = marks.reduce((a, b) => (Math.abs(Math.log2(b / value)) < Math.abs(Math.log2(a / value)) ? b : a));
+  return Math.abs(Math.log2(best / value)) <= 1 / 6 ? best : value;
+}
+
+/** A shutter time as a camera would mark it, for a time a program picked. */
+export function markedShutter(seconds: number): string {
+  return shutterLabel(1 / nearestMark(MARKED_SPEEDS, 1 / seconds));
+}
+
+/** An ISO as a camera would mark it, for one a program picked. */
+export function markedIso(iso: number): number {
+  return Math.round(nearestMark(MARKED_ISOS, iso));
+}
+
 /** A shutter time as cameras show it: 1/125 s, or 2 s. */
 export function shutterLabel(seconds: number): string {
   if (seconds >= 0.4) return `${Number(seconds.toFixed(seconds >= 10 ? 0 : 1))} s`;
@@ -207,8 +357,10 @@ export function defaultSettings(cores: number): Settings {
     pose: { position: [0, 0, -5], target: [0, 0, 0], zoom: 1 },
     depthOfField: false,
     dofPreset: "portrait",
+    fNumber: DOF_PRESETS.portrait.fNumber,
+    sensorWidth: DEFAULT_SENSOR_WIDTH,
+    sceneUnit: DEFAULT_SCENE_UNIT,
     dofPasses: 256,
-    aperture: 0.5,
     focusDistance: 10,
     blades: 0,
     bladeRotation: 0,
@@ -225,6 +377,8 @@ export function defaultSettings(cores: number): Settings {
     chromaticAberration: 0,
     grain: 0,
     halation: 0,
+    lut: null,
+    lutStrength: 1,
     denoise: true,
     bloom: false,
     caustics: false,
@@ -301,7 +455,7 @@ function causticValues(settings: Settings) {
 const SAVED_SETTINGS = [
   "quality", "customPasses", "resolution", "customWidth", "customHeight", "depth", "glossyDepth", "transmissionDepth",
   "exposureMode", "brightness", "iso", "shutter", "toneMapping", "whiteBalance", "tint", "vignette",
-  "chromaticAberration", "grain", "halation",
+  "chromaticAberration", "grain", "halation", "lut", "lutStrength",
   "denoise", "bloom", "indirect", "bounces", "caustics", "causticPreset", "photonMillions", "causticRadius",
   "causticStrength", "dofPreset", "dofPasses",
 ] as const satisfies readonly (keyof Settings)[];
@@ -322,6 +476,8 @@ export function withSavedRenderSettings(settings: Settings, saved: unknown): Set
       ? value === null || (typeof value === "object" && value !== null)
       : key === "glossyDepth" || key === "transmissionDepth"
       ? value === null || (typeof value === "number" && value >= 1)
+      : key === "lut"
+      ? value === null || (typeof value === "string" && value !== "")
       : key === "exposureMode"
       ? value === "simple" || value === "physical"
       : typeof value === typeof current || (key === "quality" && (typeof value === "number" || value === "custom"));
@@ -344,6 +500,8 @@ export function sceneSaveRequest(settings: Settings) {
       ...settings.pose,
       aperture: settings.depthOfField ? dofValues(settings).aperture : 0,
       focus_distance: settings.focusDistance,
+      sensor_width: settings.sensorWidth,
+      scene_unit: settings.sceneUnit,
       blades: settings.blades,
       blade_rotation: settings.bladeRotation,
     },
@@ -408,6 +566,8 @@ export function buildRequest(settings: Settings, mode: Mode, keep: boolean): Ren
     grain: settings.grain,
     iso: cameraOf(settings).iso,
     halation: settings.halation,
+    lut: mode === "enhanced" ? settings.lut : null,
+    lut_strength: settings.lutStrength,
     caustics: settings.caustics,
     ...causticValues(settings),
     caustics_only: false,

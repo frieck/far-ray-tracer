@@ -5,6 +5,37 @@ use serde::{Deserialize, Serialize};
 
 /// Distance from the eye to the image plane, which sets the base field of view.
 const IMAGE_DISTANCE: f32 = 5.0;
+/// Half the width of a 4:3 picture on the image plane at zoom 1; see `engine::view_half_size`.
+const HALF_WIDTH: f32 = 4.0;
+
+/// A full-frame sensor's width, in millimetres.
+pub const DEFAULT_SENSOR_WIDTH: f32 = 36.0;
+/// How long a scene unit is, in metres, when a scene does not say: the scale the examples were
+/// built at, where a wine glass is about two units tall.
+pub const DEFAULT_SCENE_UNIT: f32 = 0.1;
+
+/// The lens's focal length, in millimetres, for a zoom on a sensor `sensor_width` millimetres
+/// wide. The sensor's width spans a 4:3 picture; wider pictures see more to the sides, taller
+/// ones more above and below. Zoom 1 on a full-frame sensor is 22.5 mm, 77 degrees across.
+pub fn focal_length(zoom: f32, sensor_width: f32) -> f32 {
+    IMAGE_DISTANCE * sensor_width * zoom / (2.0 * HALF_WIDTH)
+}
+
+/// The zoom of a focal length, in millimetres, on a sensor `sensor_width` millimetres wide.
+pub fn zoom_for(focal_length: f32, sensor_width: f32) -> f32 {
+    2.0 * HALF_WIDTH * focal_length / (IMAGE_DISTANCE * sensor_width)
+}
+
+/// The lens opening's diameter in scene units, a scene unit being `scene_unit` metres, for a
+/// focal length in millimetres and an f-number, which is their ratio.
+pub fn aperture_for(focal_length: f32, f_number: f32, scene_unit: f32) -> f32 {
+    focal_length / f_number / (1000.0 * scene_unit)
+}
+
+/// The f-number of an opening `aperture` scene units across.
+pub fn f_number_for(focal_length: f32, aperture: f32, scene_unit: f32) -> f32 {
+    focal_length / (aperture * 1000.0 * scene_unit)
+}
 
 /// Where the camera is and what it looks at. Enhanced mode only; 2008 and Fixed keep
 /// the default, so that they stay comparable with the original.
@@ -49,18 +80,35 @@ pub struct Camera {
     pub position: [f32; 3],
     pub target: [f32; 3],
     pub zoom: f32,
+    /// The sensor's width in millimetres, which turns the zoom into a focal length.
+    pub sensor_width: f32,
+    /// How long a scene unit is, in metres, which turns the aperture into an f-number.
+    pub scene_unit: f32,
 }
 
 impl Default for Camera {
     fn default() -> Self {
         let pose = Pose::default();
-        Self { aperture: 0.0, focus_distance: 10.0, blades: 0, blade_rotation: 0.0, position: pose.position, target: pose.target, zoom: pose.zoom }
+        Self {
+            aperture: 0.0, focus_distance: 10.0, blades: 0, blade_rotation: 0.0, position: pose.position, target: pose.target,
+            zoom: pose.zoom, sensor_width: DEFAULT_SENSOR_WIDTH, scene_unit: DEFAULT_SCENE_UNIT,
+        }
     }
 }
 
 impl Camera {
     pub fn pose(&self) -> Pose {
         Pose { position: self.position, target: self.target, zoom: self.zoom }
+    }
+
+    /// The focal length, in millimetres.
+    pub fn focal_length(&self) -> f32 {
+        focal_length(self.zoom, self.sensor_width)
+    }
+
+    /// The f-number of the opening; None for a pinhole.
+    pub fn f_number(&self) -> Option<f32> {
+        (self.aperture > 0.0).then(|| f_number_for(self.focal_length(), self.aperture, self.scene_unit))
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -75,6 +123,12 @@ impl Camera {
         }
         if !self.blade_rotation.is_finite() {
             return Err("Camera blade_rotation must be finite".into());
+        }
+        if self.sensor_width.is_nan() || self.sensor_width <= 0.0 || self.sensor_width > 1000.0 {
+            return Err("Camera sensor_width must be more than 0 and at most 1000 mm".into());
+        }
+        if self.scene_unit.is_nan() || self.scene_unit <= 0.0 || self.scene_unit > 1e6 {
+            return Err("Camera scene_unit must be more than 0 and at most 1,000,000 metres".into());
         }
         self.pose().validate()
     }
@@ -210,6 +264,25 @@ pub fn pick_focus(scene: &crate::Scene, kd: Option<&crate::KdTree>, pose: &Pose,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn focal_length_and_f_number_turn_into_zoom_and_aperture_and_back() {
+        // Zoom 1 on full frame: 22.5 mm, 77 degrees across a 4:3 picture.
+        assert!((focal_length(1.0, DEFAULT_SENSOR_WIDTH) - 22.5).abs() < 1e-4);
+        let across = 2.0 * (DEFAULT_SENSOR_WIDTH / (2.0 * 22.5)).atan().to_degrees();
+        assert!((across - 77.32).abs() < 0.01, "{across}");
+        assert!((zoom_for(50.0, 36.0) - 50.0 / 22.5).abs() < 1e-5);
+        assert!((zoom_for(focal_length(1.7, 23.6), 23.6) - 1.7).abs() < 1e-5);
+        // A 50 mm lens at f/2 is 25 mm across: a quarter of a 10 cm unit.
+        assert!((aperture_for(50.0, 2.0, 0.1) - 0.25).abs() < 1e-6);
+        assert!((f_number_for(50.0, 0.25, 0.1) - 2.0).abs() < 1e-5);
+        let camera = Camera { aperture: 0.14, zoom: 1.9, ..Camera::default() };
+        assert!((camera.f_number().unwrap() - 42.75 / 14.0).abs() < 1e-4);
+        assert_eq!(Camera::default().f_number(), None);
+        assert!(Camera { sensor_width: 0.0, ..Camera::default() }.validate().is_err());
+        assert!(Camera { scene_unit: f32::NAN, ..Camera::default() }.validate().is_err());
+    }
+
     #[test]
     fn progressive_lens_samples_cover_the_aperture_without_clustering() {
         for pixel in [0, 123, 54321] {

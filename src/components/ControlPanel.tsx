@@ -29,6 +29,16 @@ import {
   SHUTTER_RANGE,
   shutterLabel,
   withExposureMode,
+  focalLength,
+  markedIso,
+  markedShutter,
+  SENSORS,
+  zoomFor,
+  CAMERA_PRESETS,
+  cameraPresetOf,
+  withCameraPreset,
+  LOOKS,
+  lutLabel,
 } from "../settings";
 import type {
   Bounces, DofPreset, CausticPreset, CausticReport, Comparison, Device, ExposureMode, Mode, Quality, Resolution, Settings, SkyConfig, SunTime, ToneMapping,
@@ -43,6 +53,8 @@ import { ButtonRow, CheckBox, CheckRow, Choice, ChoiceRow, Hint, Row, ScrubRow, 
 interface ControlPanelProps {
   loadingEnvironment: boolean;
   onImportEnvironment: () => void;
+  /** Picks a .cube file for the LUT. */
+  onChooseLut: () => void;
   scene: import("../types").SceneInfo | null;
   pickingFocus: boolean;
   onPickFocus: () => void;
@@ -466,12 +478,49 @@ function CameraTab({ props, update, enhanced }: TabContext) {
   const { settings } = props;
   const dof = dofValues(settings);
   const camera = cameraOf(settings);
+  const focal = focalLength(settings.pose.zoom, settings.sensorWidth);
+  const preset = cameraPresetOf(settings);
   return (
     <>
-      <Section id="lens" title="Lens">
-        <ScrubRow label="Zoom" value={settings.pose.zoom} min={0.25} max={4} hard={[0.01, 100]} step={0.01} disabled={!enhanced}
-          format={(value) => `${value.toFixed(2)}×`} hint="Drag the image to orbit. Shift-drag to pan, scroll to move closer."
-          onChange={(zoom) => update({ pose: { ...settings.pose, zoom } })} />
+      <Section id="camera-preset" title="Camera">
+        <ChoiceRow<string> label="Preset" keywords="camera body film look style lut" value={preset ?? "custom"} disabled={!enhanced}
+          hint={preset
+            ? `${CAMERA_PRESETS[preset].note} Keeps the framing and the exposure.`
+            : "Sets the sensor, film, lens flaws, tone mapping and LUT together. Keeps the framing and the exposure."}
+          onChange={(name) => update(withCameraPreset(name))}>
+          {Object.entries(CAMERA_PRESETS).map(([name, p]) => <option key={name} value={name}>{p.label}</option>)}
+          {!preset && <option value="custom" disabled>Custom</option>}
+        </ChoiceRow>
+      </Section>
+      <Section id="lens" title="Lens"
+        advanced={
+          <>
+            <ChoiceRow<string> label="Sensor" keywords="film gate crop camera" value={String(settings.sensorWidth)}
+              hint="The sensor's width. A smaller one, with the same lens, frames tighter, as a crop does."
+              onChange={(width) => update({
+                sensorWidth: Number(width),
+                pose: { ...settings.pose, zoom: zoomFor(focal, Number(width)) },
+              })}>
+              {SENSORS.map((s) => <option key={s.width} value={String(s.width)}>{s.label} ({s.width} mm)</option>)}
+              {!SENSORS.some((s) => s.width === settings.sensorWidth) && (
+                <option value={String(settings.sensorWidth)}>{settings.sensorWidth} mm</option>
+              )}
+            </ChoiceRow>
+            <ScrubRow label="Scene unit" keywords="scale size metres meters centimetres" value={settings.sceneUnit * 100}
+              min={1} max={100} hard={[0.001, 1e8]} step={0.001} log disabled={!enhanced}
+              format={(value) => (value >= 100 ? `${Number((value / 100).toFixed(2))} m` : `${Number(value.toFixed(2))} cm`)}
+              hint="How long one scene unit is, which sets how much an f-number blurs: a small scene blurs more, as close-ups do. The examples use 10 cm."
+              onChange={(centimetres) => update({ sceneUnit: centimetres / 100 })} />
+          </>
+        }>
+        <ScrubRow label="Focal length" keywords="zoom lens field of view" value={focal} min={10} max={200} hard={[0.5, 1e5]} step={0.1} log
+          disabled={!enhanced} format={(value) => `${Number(value.toFixed(value < 100 ? 1 : 0))} mm`}
+          hint="Longer lenses frame tighter and blur more. Drag the image to orbit, shift-drag to pan, scroll to move closer."
+          onChange={(mm) => update({ pose: { ...settings.pose, zoom: zoomFor(mm, settings.sensorWidth) } })} />
+        <ScrubRow label="f-number" keywords="aperture f-stop opening blur depth of field" value={dof.fNumber} min={1} max={22}
+          hard={[0.1, 1000]} step={0.1} log disabled={!enhanced} format={(value) => `f/${Number(value.toFixed(value < 10 ? 1 : 0))}`}
+          hint={`The opening is ${Number((focal / dof.fNumber).toFixed(1))} mm across. A lower number blurs what is out of focus more, when Depth of field is on, and in Physical exposure lets in more light.`}
+          onChange={(fNumber) => update(withDof(settings, { fNumber }))} />
         <ScrubRow label="Vignette" keywords="corners dark falloff" value={settings.vignette} min={0} max={1} step={0.01} strict
           disabled={!enhanced} format={(value) => `${Math.round(value * 100)}%`}
           hint="Darkens the corners as a lens does, with light falling off away from its axis."
@@ -507,7 +556,9 @@ function CameraTab({ props, update, enhanced }: TabContext) {
               disabled={!enhanced} format={(value) => `${value > 0 ? "+" : ""}${value.toFixed(1)}`}
               hint="In stops, as cameras count light: +1 doubles it, −1 halves it."
               onChange={(brightness) => update({ brightness })} />
-            {enhanced && <Hint>Like a camera at ISO {Math.round(camera.iso)} and {shutterLabel(camera.shutter)}.</Hint>}
+            {enhanced && (
+              <Hint>Like a camera at ISO {markedIso(camera.iso)}, {markedShutter(camera.shutter)} and f/{Number(dof.fNumber.toFixed(1))}.</Hint>
+            )}
           </>
         ) : (
           <>
@@ -518,7 +569,7 @@ function CameraTab({ props, update, enhanced }: TabContext) {
             <ScrubRow label="Shutter speed" keywords="exposure time" value={1 / settings.shutter} min={1 / SHUTTER_RANGE[1]}
               max={1 / SHUTTER_RANGE[0]} hard={[0.01, 1e5]} step={0.01} log disabled={!enhanced}
               format={(value) => shutterLabel(1 / value)}
-              hint="Typed as the N of 1/N s: 60 is 1/60 s. A longer time lets in more light. ISO 100 at 1/125 s shows the light as rendered."
+              hint="Typed as the N of 1/N s: 60 is 1/60 s. A longer time lets in more light. ISO 100 at 1/125 s and f/8 show the light as rendered."
               onChange={(speed) => update({ shutter: 1 / speed })} />
           </>
         )}
@@ -555,9 +606,6 @@ function CameraTab({ props, update, enhanced }: TabContext) {
         }>
         <ScrubRow label="Focus distance" keywords="focus" value={settings.focusDistance} min={0.1} max={50} hard={[0.01, 1e6]} step={0.01}
           hint="Scene units, measured from the camera." onChange={(focusDistance) => update({ focusDistance })} />
-        <ScrubRow label="Aperture" keywords="blur" value={dof.aperture} min={0.01} max={2} hard={[0.001, 1000]} step={0.001}
-          hint="Lens diameter in scene units. Larger softens the foreground and background more."
-          onChange={(aperture) => update(withDof(settings, { aperture }))} />
         <ChoiceRow<string> label="Shape" hint="Outline of out-of-focus highlights (bokeh)." value={String(settings.blades)}
           onChange={(blades) => update({ blades: Number(blades) })}>
           <option value="0">Round</option>
@@ -576,6 +624,25 @@ function CameraTab({ props, update, enhanced }: TabContext) {
           disabled={!enhanced} format={(value) => `${Math.round(value * 100)}%`}
           hint="A reddish glow around very bright light, as cinema film shows. Applied when the render finishes."
           onChange={(halation) => update({ halation })} />
+        <ChoiceRow<string> label="LUT" keywords="look grade color grading cube film" value={settings.lut ?? "none"} disabled={!enhanced}
+          hint="A color look graded over the finished picture, as in DaVinci Resolve or V-Ray's frame buffer: one of the program's own, or a .cube file made for sRGB or Rec. 709 images. Saved EXR files keep the light without it."
+          onChange={(value) => {
+            if (value === "load") props.onChooseLut();
+            else update({ lut: value === "none" ? null : value });
+          }}>
+          <option value="none">None</option>
+          {LOOKS.map((look) => <option key={look.name} value={look.name}>{look.label}</option>)}
+          {settings.lut && !LOOKS.some((look) => look.name === settings.lut) && (
+            <option value={settings.lut}>{lutLabel(settings.lut)}</option>
+          )}
+          <option value="load">Load .cube…</option>
+        </ChoiceRow>
+        {settings.lut && (
+          <ScrubRow label="LUT strength" keywords="look grade mix" value={settings.lutStrength} min={0} max={1} step={0.01} strict
+            disabled={!enhanced} format={(value) => `${Math.round(value * 100)}%`}
+            hint="How much of the look to show over the picture's own colors."
+            onChange={(lutStrength) => update({ lutStrength })} />
+        )}
       </Section>
     </>
   );

@@ -1811,16 +1811,19 @@ fn channel(v: f32) -> u32 {
 /// Samples are averaged as linear light, and the mean goes through the tone mapping curve: the
 /// light of a small bright source keeps its energy, and exposure and the curve can change
 /// afterwards without rendering again.
-struct Display {
+struct Display<'a> {
     curve: ToneMapping,
     /// White balance and vignetting, on the light before the curve.
     film: crate::lens::Film,
     /// The brightest a sample may be, before exposure; None in scenes lit by an HDR image or a
     /// sky, whose sun is far brighter than any lamp.
     cap: Option<f32>,
+    /// The LUT's look and its strength, for the passes shown while a render runs; the finished
+    /// picture is graded last, in `finish_like_film`.
+    look: Option<(&'a crate::lut::Lut, f32)>,
 }
 
-impl Display {
+impl Display<'_> {
     fn sample(self, radiance: f32, exposure: f32) -> f32 {
         (self.cap.map_or(radiance, |cap| radiance.min(cap)) * exposure).max(0.)
     }
@@ -1961,7 +1964,7 @@ const HALATION_COLOR: [f32; 3] = [1.0, 0.28, 0.06];
 const HALATION_STRENGTH: f32 = 1.5;
 
 /// What the camera does last, on the finished picture: halation around bright light, the
-/// lens's chromatic aberration, then grain.
+/// lens's chromatic aberration, grain, then the LUT's look.
 #[allow(clippy::too_many_arguments)]
 fn finish_like_film(sum: &[AtomicU32], counts: &[AtomicU32], scale: f32, display: Display, op: &Options, image: &Image,
     rendered: engine::Region) {
@@ -1970,6 +1973,10 @@ fn finish_like_film(sum: &[AtomicU32], counts: &[AtomicU32], scale: f32, display
     }
     crate::lens::chromatic_aberration(image, op.chromatic_aberration, rendered);
     crate::lens::grain(image, op.grain, rendered);
+    // The look is graded last, over the grain, as a colorist grades a scanned film.
+    if let Some((lut, strength)) = display.look {
+        crate::lut::grade(image, lut, strength, rendered);
+    }
 }
 
 /// Film halation: light far brighter than white goes through the film, reflects off its base
@@ -2021,7 +2028,11 @@ fn accumulate(sum: &[AtomicU32], p: usize, color: Vec3, exposure: f32, count: u3
         total.store(value.to_bits(), Relaxed);
         value / count as f32
     });
-    let shown = display.show_at(mean, p);
+    let mut shown = display.show_at(mean, p);
+    if let Some((lut, strength)) = display.look {
+        let graded = lut.apply(shown.map(|v| v.clamp(0.0, 1.0)));
+        shown = [0, 1, 2].map(|k| shown[k] + (graded[k] - shown[k]) * strength.clamp(0.0, 1.0));
+    }
     0xff00_0000 | channel(shown[0]) | channel(shown[1]) << 8 | channel(shown[2]) << 16
 }
 
@@ -2200,12 +2211,13 @@ fn rendered_area(op: &Options, fixed: bool) -> (u32, u32, u32, u32) {
     }
 }
 
-fn display_for(scene: &Scene, op: &Options) -> Display {
+fn display_for<'a>(scene: &Scene, op: &'a Options) -> Display<'a> {
     let hdr = scene.environment.as_ref().is_some_and(|e| e.active());
     Display {
         curve: op.tone_mapping,
         film: crate::lens::Film::new(op.white_balance, op.tint, op.vignette, op.width, op.height),
         cap: (!hdr).then_some(MAX_SAMPLE_RADIANCE),
+        look: op.lut.as_deref().filter(|_| op.mode != Mode::Fixed && op.lut_strength > 0.0).map(|lut| (lut, op.lut_strength)),
     }
 }
 
@@ -2511,6 +2523,10 @@ pub fn render_continuing(scene: &Scene, kd: Option<&KdTree>, op: &Options, image
             width: w, height: h, rendered, passes: finished, sum, counts, guide, glow, exposure: op.exposure,
         });
     }
+    // The passes were shown through the look, which the finish grades once more over the rest.
+    if display.look.is_some() {
+        paint(&sum, &counts, 1.0, display, image, rendered);
+    }
     if let Some(guide) = &guide {
         apply_denoiser(&sum, guide, &counts, 1.0, display, image, progress, rendered);
     }
@@ -2635,7 +2651,7 @@ mod tests {
                 render_continuing(&scene, Some(&kd), &op, &image, &progress, None)
             }).expect("a cancelled render keeps what it gathered");
             // On a fast machine the render may finish first; then it simply is not continued.
-            let next = Options { exposure, ..op };
+            let next = Options { exposure, ..op.clone() };
             let (continued, acc) = rendered(&scene, &next, Some(partial));
             assert_eq!(acc.unwrap().passes(), 24);
             let (fresh, _) = rendered(&scene, &next, None);
@@ -2649,6 +2665,8 @@ mod tests {
         let agx = Options { tone_mapping: ToneMapping::Agx, denoise: true, bloom: true, ..small(6) };
         let (_, acc) = rendered(&scene, &agx, None);
         let acc = acc.unwrap();
+        let warm = std::sync::Arc::new(crate::lut::Lut::open(&std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/luts/warm-film.cube")).unwrap());
         let shown = |op: &Options| {
             let image = Image::new(op.width, op.height);
             redisplay(&acc, &scene, op, &image, &Progress::default())
@@ -2656,13 +2674,15 @@ mod tests {
         };
         // Exposure, curve and denoise on linear light.
         for op in [
-            Options { exposure: 1.7, bloom: false, ..agx },
-            Options { tone_mapping: ToneMapping::Aces, exposure: 0.6, bloom: false, ..agx },
-            Options { denoise: false, ..agx },
-            Options { bloom: false, tone_mapping: ToneMapping::AgxPunchy, ..agx },
+            Options { exposure: 1.7, bloom: false, ..agx.clone() },
+            Options { tone_mapping: ToneMapping::Aces, exposure: 0.6, bloom: false, ..agx.clone() },
+            Options { denoise: false, ..agx.clone() },
+            Options { bloom: false, tone_mapping: ToneMapping::AgxPunchy, ..agx.clone() },
             // The camera's white balance, vignetting and chromatic aberration.
-            Options { white_balance: 3200.0, vignette: 0.6, chromatic_aberration: 1.0, ..agx },
-            Options { tint: 0.5, grain: 0.8, halation: 1.0, exposure: 1.0, ..agx },
+            Options { white_balance: 3200.0, vignette: 0.6, chromatic_aberration: 1.0, ..agx.clone() },
+            Options { tint: 0.5, grain: 0.8, halation: 1.0, exposure: 1.0, ..agx.clone() },
+            // A look graded over the finished picture.
+            Options { lut: Some(warm.clone()), lut_strength: 0.7, grain: 0.5, ..agx.clone() },
         ] {
             let again = shown(&op).expect("shown again");
             let (fresh, _) = rendered(&scene, &op, None);
@@ -2678,24 +2698,31 @@ mod tests {
         assert!(redisplay(kept.as_ref().unwrap(), &cornell, &brighter, &image, &Progress::default()));
         let again: Vec<u32> = image.pixels.iter().map(|p| p.load(Relaxed)).collect();
         assert!(largest_difference(&again, &rendered(&cornell, &brighter, None).0) <= 1);
-        assert!(shown(&Options { exposure: 2.0, ..agx }).is_none());
+        assert!(shown(&Options { exposure: 2.0, ..agx.clone() }).is_none());
         // Balanced for tungsten, the picture turns bluer; vignetted, its corner darker.
         let mean = |pixels: &[u32], k: usize| pixels.iter().map(|p| ((p >> (8 * k)) & 0xff) as u64).sum::<u64>();
         let neutral = shown(&agx).unwrap();
-        let warm_light = shown(&Options { white_balance: 3200.0, ..agx }).unwrap();
+        let warm_light = shown(&Options { white_balance: 3200.0, ..agx.clone() }).unwrap();
         assert!(mean(&warm_light, 2) * mean(&neutral, 0) > mean(&warm_light, 0) * mean(&neutral, 2));
-        let dark = shown(&Options { vignette: 1.0, ..agx }).unwrap();
+        let dark = shown(&Options { vignette: 1.0, ..agx.clone() }).unwrap();
         let brightness = |p: u32| (p & 0xff) + ((p >> 8) & 0xff) + ((p >> 16) & 0xff);
         assert!(brightness(dark[0]) < brightness(neutral[0]));
         let center = (agx.height as usize / 2) * agx.width as usize + agx.width as usize / 2;
         assert!(brightness(dark[center]).abs_diff(brightness(neutral[center])) <= 3);
         // Halation adds red, and only red mostly, around light brighter than white.
-        let haloed = shown(&Options { halation: 1.0, exposure: 4.0, bloom: false, ..agx });
-        let plain = shown(&Options { exposure: 4.0, bloom: false, ..agx });
+        let haloed = shown(&Options { halation: 1.0, exposure: 4.0, bloom: false, ..agx.clone() });
+        let plain = shown(&Options { exposure: 4.0, bloom: false, ..agx.clone() });
         let (haloed, plain) = (haloed.unwrap(), plain.unwrap());
         let gain = |k: usize| mean(&haloed, k) - mean(&plain, k);
         assert!(gain(0) > 0 && gain(0) > 3 * gain(2), "{} {}", gain(0), gain(2));
-        assert!(shown(&Options { width: 32, ..agx }).is_none());
+        assert!(shown(&Options { width: 32, ..agx.clone() }).is_none());
+        // Black and white looks grey everywhere, the halation's red included; at no strength,
+        // a look changes nothing.
+        let grey = std::sync::Arc::new(crate::lut::Lut::open(&std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/luts/black-and-white.cube")).unwrap());
+        let mono = shown(&Options { lut: Some(grey.clone()), halation: 1.0, exposure: 4.0, bloom: false, ..agx.clone() }).unwrap();
+        assert!(mono.iter().all(|p| (p & 0xff) == ((p >> 8) & 0xff) && (p & 0xff) == ((p >> 16) & 0xff)));
+        assert_eq!(shown(&Options { lut: Some(grey), lut_strength: 0.0, ..agx.clone() }).unwrap(), neutral);
     }
 
     #[test]
@@ -3120,7 +3147,7 @@ mod tests {
         // A bright source covering 1/32 of the samples has mean radiance 0.5: averaged before
         // the curve, it shows as 0.5 whatever the order of the samples.
         let red = |rgba: u32| rgba & 0xff;
-        let display = Display { curve: ToneMapping::Standard, film: Default::default(), cap: None };
+        let display = Display { curve: ToneMapping::Standard, film: Default::default(), cap: None, look: None };
         let bright = Vec3::new(16., 0., 0.);
         let dark = Vec3::new(0., 0., 0.);
         let run = |display: Display, order: &[Vec3]| {

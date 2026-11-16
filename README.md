@@ -542,22 +542,33 @@ Depth of field is available in Enhanced mode under **Camera > Depth of field**.
 **Camera > Lens > Focus** turns the cursor into a crosshair. Click a surface to enable
 depth of field and set its focus distance; Esc cancels picking. Clicking the background
 keeps the picker active. Glass and mirrors focus on their first surface.
-A larger aperture increases defocus; focus distance is measured along the viewing
-axis from the camera, in scene units. The aperture value is the lens diameter in
-scene units, not an f-number. Opening a scene loads its camera settings:
+The lens works as a real camera's, as in V-Ray and Blender. **Camera > Lens** sets the
+**Focal length**, in millimetres, and the **f-number**; its Advanced part, the **Sensor**
+(full frame by default) and the **Scene unit**, how long one scene unit is (10 cm by default,
+the scale the examples were built at). The opening is the focal length over the f-number,
+25 mm for a 50 mm lens at f/2, and the scene unit turns it into scene units. So, as with a
+real camera, a lower f-number, a longer lens or a smaller scene blurs more: a wide lens keeps
+nearly everything sharp, and a close-up of small things blurs a lot. Focus distance is
+measured along the viewing axis from the camera, in scene units. A focal length of 22.5 mm on
+full frame is the original view, 77 degrees across a 4:3 picture; the sensor's width spans a
+4:3 picture, and wider pictures see more to the sides. A smaller sensor with the same lens
+frames tighter, as a crop does.
+
+A scene keeps the opening's diameter, in scene units, so it looks the same whatever the panel
+shows; the sensor and the scene unit are kept with it:
 
 ```json
-"camera": { "aperture": 1.2, "focus_distance": 11.7 }
+"camera": { "aperture": 1.2, "focus_distance": 11.7, "zoom": 1, "sensor_width": 36, "scene_unit": 0.01 }
 ```
 
-The app offers depth-of-field presets. They change aperture and minimum render passes,
+The app offers depth-of-field presets. They change the f-number and minimum render passes,
 while keeping the selected focus distance:
 
-| Preset | Aperture diameter | Minimum passes |
+| Preset | f-number | Minimum passes |
 | --- | ---: | ---: |
-| Subtle | 0.25 | 128 |
-| Portrait | 0.60 | 256 |
-| Strong | 1.20 | 512 |
+| Subtle | f/5.6 | 128 |
+| Portrait | f/2.8 | 256 |
+| Strong | f/1.4 | 512 |
 | Custom | Adjustable | 1–4096 |
 
 The actual pass count is the higher of the Quality setting and the depth-of-field
@@ -605,7 +616,7 @@ base colors, without textures, shadows or reflections, through the same lens as 
 A scene opens in this 3D view and is ray traced only when you press **Render**; turn on
 **Render after each change** to render again after every change, as soon as you let go of the camera.
 If WebGL is unavailable, that option stays on and a small ray traced image follows the
-camera instead. **Camera > Lens > Zoom** changes the lens and **Reset** returns to the scene's view.
+camera instead. **Camera > Lens > Focal length** changes the lens and **Reset** returns to the scene's view.
 Camera moves last for the session; to keep one, add it to the scene:
 
 ```json
@@ -999,24 +1010,27 @@ header:
   more light takes a longer shutter down to 1/30 s, held in the hand, then a higher ISO up to
   6400, then a longer shutter on a tripod; less light a shorter shutter up to 1/4000 s, then
   ISO down to 50.
-- **Physical**: the **ISO** and the **Shutter speed**, typed as the N of 1/N s. Twice the ISO
-  or twice the time is twice the light; ISO 100 at 1/125 s shows it as rendered.
+- **Physical**: the **ISO**, the **Shutter speed**, typed as the N of 1/N s, and the lens's
+  **f-number**. Twice the ISO or twice the time is twice the light, and so is an f-number one
+  stop lower (f/8 to f/5.6); ISO 100 at 1/125 s and f/8 shows it as rendered. So, as on a
+  camera, opening the lens for more blur also brightens the picture, until the ISO or shutter
+  makes up for it. The f-number counts even with Depth of field off.
 
-Switching modes keeps the light. The aperture's f-number is not part of exposure, as it is in
-a real camera: the depth of field's aperture is a diameter in scene units, and the camera has
-no focal length to make an f-number of. The shutter only sets the light until there is
-motion blur. Scenes saved with the earlier Exposure multiplier open with the same light, as a
+Switching modes keeps the light. In Simple, the program's ISO and shutter take the f-number
+into account, and the panel says them as a camera marks them, such as "ISO 200, 1/60 s and
+f/2.8". The shutter only sets the light until there is motion blur. Scenes saved with the earlier Exposure multiplier open with the same light, as a
 brightness.
 
 | Setting | Where | Command line | What it does |
 | --- | --- | --- | --- |
-| Exposure | Camera > Exposure | `--iso N`, `--shutter T` (such as `1/60`), `--exposure N` | The light's multiplier: ISO / 100 × time × 125, times `--exposure` (default 1). |
+| Exposure | Camera > Exposure, Camera > Lens | `--iso N`, `--shutter T` (such as `1/60`), `--f-number N`, `--exposure N` | The light's multiplier: ISO / 100 × time × 125 × (8 / f-number)², times `--exposure` (default 1). `--f-number` also sets the depth of field's opening, with `--focal-length`, `--sensor-width` and `--scene-unit`. |
 | White balance | Camera > Exposure | `--white-balance K` | The color temperature that comes out white, 1500 to 15000 K. 6500 K, daylight and the white of an sRGB screen, changes nothing. Lower values suit warmer light (about 3200 K for lamps, 2000 K for candles) and turn the picture bluer; higher ones warm it. Grey keeps its brightness. |
 | Tint | Camera > Exposure | `--tint N` | White balance's other axis, −1 to 1: toward magenta to take out the green of fluorescent tubes, or toward green. |
 | Vignette | Camera > Lens | `--vignette N` | Darkens the corners, 0 to 1. Light falls off as the fourth power of the cosine of its angle off the lens axis (natural vignetting); at 1 the corners are at 60 degrees and get a sixteenth of the light. |
 | Chromatic aberration | Camera > Lens | `--chromatic-aberration N` | Red and blue fringes toward the corners, 0 to 1, as a simple lens bends red light less than blue: the red image is a little larger and the blue smaller, up to 1.2% of the distance from the center at 1. |
 | Grain | Camera > Film | `--grain N` | Film grain, 0 to 1: a fixed pattern of fine grey specks, strongest in the mid-tones. It grows with the square root of the ISO, so ISO 400 doubles it; the same picture always gets the same grain. |
 | Halation | Camera > Film | `--halation N` | The reddish glow cinema film shows around very bright light, 0 to 1, which goes through the film, reflects off its base and lights the red layer again. |
+| LUT | Camera > Film | `--lut FILE`, `--lut-strength N` | A color look graded over the finished picture, from a `.cube` file, and how much of it to show, 0 to 1; see below. |
 
 Exposure, white balance, tint and vignetting act on the light before the curve, so they show
 while the image builds up, the denoiser and bloom see them, and an EXR file holds them.
@@ -1024,6 +1038,43 @@ Halation, chromatic aberration and grain work on the finished picture, in that o
 the denoiser and bloom, so on the CPU they show when the render finishes; they are left out
 of an EXR, whose passes then line up with the light. The environment preview in **Light >
 Environment** shows the exposure, white balance and tint too.
+
+**Camera presets.** **Camera > Camera > Preset** sets a whole camera at once: its sensor, its
+film (grain and halation), its lens's flaws (vignetting and chromatic aberration), the tone
+mapping and the look. The framing and the exposure stay, so a smaller sensor gets a shorter
+lens, and the same f-number blurs less, as on a phone. Changing any of those values afterwards
+shows the preset as Custom.
+
+| Preset | Sensor | Curve | Look | Grain, halation, vignette, aberration |
+| --- | --- | --- | --- | --- |
+| Digital | Full frame | AgX | None | None |
+| 35 mm color film | Full frame | AgX | Warm film | 30%, 30%, 20%, 5% |
+| Black-and-white film | Full frame | AgX | Black and white | 45%, 0, 25%, 0 |
+| Cinema camera | Super 35 (24.9 mm) | ACES | Teal and orange at 80% | 12%, 20%, 10%, 5% |
+| Phone | 9.8 mm | AgX Punchy | None | 0, 0, 10%, 15% |
+| Vintage | Full frame | AgX | Faded print | 40%, 35%, 55%, 40% |
+
+**Looks from LUTs.** **Camera > Film > LUT** grades the finished picture with a lookup table in the
+`.cube` format that DaVinci Resolve, Premiere, Photoshop and V-Ray's frame buffer read and
+write, as a colorist grades a scanned film: last of all, over the grain. **LUT strength** mixes
+it over the picture's own colors. Five looks come with the program, in `assets/luts`, made by
+`python3 tools/generate_luts.py`:
+
+| Look | What it does |
+| --- | --- |
+| Warm film | A color negative printed warm: soft contrast, lifted blacks, warm mid-tones. |
+| Teal and orange | The cinema grade: shadows toward teal, light and skin toward orange, more contrast. |
+| Bleach bypass | Silver left in the print: little color, deep blacks, hard contrast. |
+| Black and white | Panchromatic film, a little more sensitive to red than the eye, with a gentle S-curve. |
+| Faded print | An old print: lifted blacks, yellowed highlights, faded colors. |
+
+**Load .cube…** takes any other 1D or 3D `.cube` file. A LUT maps the screen colors after tone
+mapping, so it suits looks made for sRGB or Rec. 709 images, as most photographic looks are;
+one made for a camera's log footage expects other values and shows washed out or too strong.
+3D tables are read between their points by tetrahedral interpolation, as Resolve does. The
+look changes without rendering again, shows while a render builds up, is saved with the scene
+(bundled looks by name, other files by path) and in PNG and BMP images, and is left out of an
+EXR, which keeps the light. On the command line, `--lut assets/luts/warm-film.cube`.
 
 ### Volumes: fog, smoke and light shafts (Enhanced)
 

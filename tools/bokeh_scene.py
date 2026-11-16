@@ -35,7 +35,9 @@ def bulbs():
 
 scene = {
     "camera": {"position": [0, 0.2, -3], "target": [0, 0.15, 4], "zoom": 1.2,
-               "aperture": 0.9, "focus_distance": 6.9, "blades": 6, "blade_rotation": 0},
+               "aperture": 0.9, "focus_distance": 6.9, "blades": 6, "blade_rotation": 0,
+               # Small lamps a few centimetres apart: a 32 mm lens at f/3.6.
+               "scene_unit": 0.01},
     # The studio, dim and hidden behind the black background, gives the metal something to
     # reflect.
     "environment": {"path": "../../environments/studio.hdr", "intensity": 0.3, "rotation": 200, "visible": False},

@@ -827,6 +827,10 @@ mod tests {
         let text = br#"{"camera":{"position":[1,2,3],"target":[0,0,9],"zoom":2},"lights":[],"objects":[]}"#;
         let scene = Scene::from_far(text, Path::new("test.far")).unwrap();
         assert_eq!(scene.camera.pose(), crate::Pose { position: [1., 2., 3.], target: [0., 0., 9.], zoom: 2. });
+        let sized = br#"{"camera":{"zoom":2,"sensor_width":23.6,"scene_unit":0.01},"lights":[],"objects":[]}"#;
+        let sized = Scene::from_far(sized, Path::new("test.far")).unwrap();
+        assert_eq!((sized.camera.sensor_width, sized.camera.scene_unit), (23.6, 0.01));
+        assert!(Scene::from_far(br#"{"camera":{"scene_unit":0},"lights":[],"objects":[]}"#, Path::new("test.far")).is_err());
         let same = br#"{"camera":{"position":[1,2,3],"target":[1,2,3]},"lights":[],"objects":[]}"#;
         assert!(Scene::from_far(same, Path::new("test.far")).is_err());
     }

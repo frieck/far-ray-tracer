@@ -103,6 +103,10 @@ pub struct Options {
     pub grain: f32,
     /// Enhanced mode: the reddish glow film shows around bright light, from 0 to 1.
     pub halation: f32,
+    /// Enhanced mode: a color look graded over the finished picture, and how strongly, from 0
+    /// to 1; see `lut::grade`.
+    pub lut: Option<std::sync::Arc<crate::lut::Lut>>,
+    pub lut_strength: f32,
     /// Traces photons so glass and mirrors focus light, in Enhanced mode.
     pub caustics: bool,
     /// Photons emitted for caustics. More photons allow a smaller radius.
@@ -151,6 +155,8 @@ impl Default for Options {
             chromatic_aberration: 0.0,
             grain: 0.0,
             halation: 0.0,
+            lut: None,
+            lut_strength: 1.0,
             caustics: false,
             photons: 1_000_000,
             caustic_radius: 0.12,
