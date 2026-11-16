@@ -13,6 +13,7 @@
 
 use bytemuck::{Pod, Zeroable};
 use far_core::bvh::Bvh;
+use far_core::caustics::PhotonMap;
 use far_core::camera::View;
 use far_core::scene::Primitive;
 use far_core::solid::Shape;
@@ -37,6 +38,12 @@ struct Params {
     volume_count: u32,
     /// far-core's spectral::white, which a wavelength's color is divided by.
     white: [f32; 3],
+    /// The caustic photon map in `texels`: its buckets (0 for none), where their starts are and
+    /// where the photons are, and the lookup radius.
+    photon_buckets: u32, bucket_first: u32, photon_first: u32, photon_radius: f32,
+    /// The multiplier of caustic light; whether only that light is shown; whether photons carry
+    /// the environment's light.
+    caustic_strength: f32, caustics_only: u32, photon_env: u32, pad: u32,
 }
 
 #[repr(C)]
@@ -383,8 +390,26 @@ fn storage<T: Pod + Zeroable>(device: &wgpu::Device, label: &str, data: &[T]) ->
 }
 
 /// Renders `op.samples` passes of the scene on the GPU. `cancel` is checked between passes.
+/// With caustics on, the CPU traces the photons first, through a KD-Tree: testing each photon
+/// against every primitive takes seconds in a scene with a model.
 pub fn render(scene: &Scene, bvh: &Bvh, op: &Options, cancel: &dyn Fn() -> bool) -> Result<Rendered, String> {
-    Gpu::new()?.render(scene, bvh, op, cancel, None, &mut |_| {})
+    let pose = op.pose.unwrap_or(scene.camera.pose());
+    let kd = op.caustics.then(|| far_core::KdTree::build_corrected(scene));
+    let photons = far_core::enhanced::caustic_map(scene, kd.as_ref(), op, &pose, &far_core::engine::Progress::default());
+    Gpu::new()?.render(scene, bvh, op, photons.as_ref(), cancel, None, &mut |_| {})
+}
+
+/// A unit vector in 32 bits: its octahedral projection, two signed 16-bit halves, as WGSL's
+/// unpack2x16snorm reads them.
+fn octahedral(n: far_core::vector::Vec3) -> u32 {
+    let sum = n.x.abs() + n.y.abs() + n.z.abs();
+    let (mut x, mut y) = (n.x / sum, n.y / sum);
+    if n.z < 0.0 {
+        let sign = |v: f32| if v >= 0.0 { 1.0 } else { -1.0 };
+        (x, y) = ((1.0 - y.abs()) * sign(x), (1.0 - x.abs()) * sign(y));
+    }
+    let snorm = |v: f32| (v.clamp(-1.0, 1.0) * 32767.0).round() as i16 as u16 as u32;
+    snorm(x) | snorm(y) << 16
 }
 
 /// The graphics card, ready to render: made once and kept, since compiling the shader takes a
@@ -520,7 +545,9 @@ impl Gpu {
     /// Renders `op.samples` passes of the whole image; `op.region` and adaptive sampling are
     /// left to the CPU. `cancel` is checked between passes. With `frames`, `on_frame` gets the
     /// sums so far about that often, for a progressive display.
-    pub fn render(&self, scene: &Scene, bvh: &Bvh, op: &Options, cancel: &dyn Fn() -> bool,
+    /// `photons` is the caustic map far-core's caustic_map traced for `op`, if any.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render(&self, scene: &Scene, bvh: &Bvh, op: &Options, photons: Option<&PhotonMap>, cancel: &dyn Fn() -> bool,
         frames: Option<std::time::Duration>, on_frame: &mut dyn FnMut(&Sums)) -> Result<Rendered, String> {
         let (device, queue) = (&self.device, &self.queue);
         let packed = pack(scene, bvh);
@@ -529,6 +556,9 @@ impl Gpu {
         let view = View::new(&pose, w, h);
         let environment = scene.environment.as_ref().filter(|e| e.active());
         let bounces = far_core::Bounces::resolve(scene, op);
+        // An empty map changes nothing, as on the CPU.
+        let caustics_only = op.caustics_only && photons.is_some();
+        let photons = photons.filter(|map| !map.is_empty());
         // The light per pixel, then the first hits for the denoiser, then the light for bloom.
         let features = op.denoise;
         let glow_at = if op.bloom { 1 + 2 * features as u32 } else { 0 };
@@ -538,7 +568,7 @@ impl Gpu {
             corner: view.plane_point(-1.0, 1.0).array(), height: h,
             dx: (view.right * (2.0 * view.half_width / w as f32)).array(), pass_index: 0,
             dy: (view.up * (-2.0 * view.half_height / h as f32)).array(),
-            max_bounces: if op.indirect { bounces.max } else { 0 },
+            max_bounces: if op.indirect && !caustics_only { bounces.max } else { 0 },
             plane_count: packed.plane_count, light_count: packed.lights.len() as u32,
             has_env: environment.is_some() as u32,
             env_visible: environment.is_some_and(|e| e.config.visible) as u32,
@@ -551,7 +581,8 @@ impl Gpu {
             up: view.up.array(), focus: op.focus_distance.unwrap_or(scene.camera.focus_distance),
             forward: view.forward.array(), blades: op.blades.unwrap_or(scene.camera.blades),
             blade_rotation: op.blade_rotation.unwrap_or(scene.camera.blade_rotation).to_radians(),
-            has_glass: scene.materials.iter().any(|m| m.refr > 0.0) as u32,
+            // With caustics, photons carry the light through glass, so shadow rays stop there.
+            has_glass: (photons.is_none() && scene.materials.iter().any(|m| m.refr > 0.0)) as u32,
             strength: bounces.strength, clamp: bounces.clamp,
             // Mirror-like and glass segments of a path, as the CPU counts depth from 1.
             max_depth: op.max_depth.max(1) as u32 - 1,
@@ -561,6 +592,9 @@ impl Gpu {
             stride, features: features as u32, glow_at,
             volume_first: packed.volume_first, volume_count: packed.volume_count,
             white: far_core::spectral::white().array(),
+            photon_buckets: 0, bucket_first: 0, photon_first: 0, photon_radius: op.caustic_radius.max(1e-3),
+            caustic_strength: op.caustic_strength, caustics_only: caustics_only as u32,
+            photon_env: photons.is_some_and(|map| map.carries_environment()) as u32, pad: 0,
         };
 
         // The environment's sampling tables go after the texels, as float bits.
@@ -569,6 +603,26 @@ impl Gpu {
         if let Some(e) = environment {
             params.env_tables = texels.len() as u32;
             texels.extend(e.map.sampling_tables().iter().map(|v| v.to_bits()));
+        }
+        // The photon map after them: the start of each bucket, then each photon as its position,
+        // its normal in 32 bits and its power.
+        if let Some(map) = photons {
+            params.photon_buckets = map.bucket_starts().len() as u32 - 1;
+            params.photon_radius = map.radius();
+            params.bucket_first = texels.len() as u32;
+            texels.extend_from_slice(map.bucket_starts());
+            params.photon_first = texels.len() as u32;
+            texels.reserve(7 * map.len());
+            for p in map.photons() {
+                texels.extend([p.pos.x, p.pos.y, p.pos.z].map(f32::to_bits));
+                texels.push(octahedral(p.normal));
+                texels.extend([p.power.x, p.power.y, p.power.z].map(f32::to_bits));
+            }
+        }
+        let limit = device.limits().max_storage_buffer_binding_size as u64;
+        if 4 * texels.len() as u64 > limit {
+            return Err(format!("The textures and photons take {} MB, more than the {} MB the graphics card binds",
+                4 * texels.len() as u64 >> 20, limit >> 20));
         }
 
         // The environment as a texture; a single black texel when there is none.
@@ -689,8 +743,13 @@ mod tests {
 
     /// Mean brightness of the CPU's and the GPU's render of a scene, or None without a GPU.
     fn brightness(name: &str) -> Option<(f32, f32)> {
+        brightness_with(name, Options::default())
+    }
+
+    /// The same, with other options: `op`'s size, samples and mode are set here.
+    fn brightness_with(name: &str, op: Options) -> Option<(f32, f32)> {
         let scene = Scene::open(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scenes").join(name)).unwrap();
-        let op = Options { mode: Mode::Enhanced, width: 96, height: 72, samples: 256, ..Options::default() };
+        let op = Options { mode: Mode::Enhanced, width: 96, height: 72, samples: 256, ..op };
         let rendered = match render(&scene, &Bvh::build(&scene), &op, &|| false) {
             Ok(rendered) => rendered,
             Err(e) if e.contains("no graphics card") => {
@@ -728,6 +787,20 @@ mod tests {
             let Some((cpu, gpu)) = brightness(name) else { return };
             assert!(cpu > 0.02, "{name}: the CPU image is black");
             assert!((gpu - cpu).abs() < 0.05 * cpu + 0.005, "{name}: CPU {cpu} against GPU {gpu}");
+        }
+    }
+
+    #[test]
+    fn the_gpu_gathers_the_caustics_the_cpu_traces() {
+        // The light glass focuses from a bulb and from the sky, alone and with the rest: the
+        // photons are the CPU's, so the two gather the same light.
+        for name in ["materials/glass.far", "techniques/environment-caustics.far"] {
+            for only in [true, false] {
+                let op = Options { caustics: true, caustics_only: only, ..Options::default() };
+                let Some((cpu, gpu)) = brightness_with(name, op) else { return };
+                assert!(cpu > 0.001, "{name}: the CPU's caustics are black");
+                assert!((gpu - cpu).abs() < 0.05 * cpu + 0.003, "{name}, caustics only {only}: CPU {cpu} against GPU {gpu}");
+            }
         }
     }
 

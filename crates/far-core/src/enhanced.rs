@@ -1549,6 +1549,32 @@ fn photon_targets(scene: &Scene) -> Vec<PhotonTarget<'_>> {
     targets
 }
 
+/// The caustic photon map an Enhanced render with `op` reads, traced from the lights, or None
+/// when caustics are off. Its statistics, and the preview when `progress` asks for one, go to
+/// `progress` as a render reports them. The GPU renderer reads the same map.
+pub fn caustic_map(scene: &Scene, kd: Option<&KdTree>, op: &Options, pose: &crate::camera::Pose,
+    progress: &Progress) -> Option<PhotonMap> {
+    if !op.caustics {
+        return None;
+    }
+    let start = Instant::now();
+    let (map, emitted) = build_photon_map(scene, kd, op, progress);
+    *progress.photon_stats.lock().unwrap() = Some(PhotonStats {
+        emitted,
+        stored: map.len(),
+        trace_ms: start.elapsed().as_millis() as u64,
+        memory_bytes: map.memory_bytes(),
+    });
+    if progress.capture_photon_preview.load(Relaxed) && !map.is_empty() && !progress.cancel.load(Relaxed) {
+        let scale = 1024.0 / op.width.max(op.height) as f32;
+        let scale = scale.min(1.0);
+        let width = (op.width as f32 * scale).round().max(1.0) as u32;
+        let height = (op.height as f32 * scale).round().max(1.0) as u32;
+        *progress.photon_preview.lock().unwrap() = Some(map.preview(pose, width, height));
+    }
+    Some(map)
+}
+
 /// Legacy spheres aim photons at specular objects with their historical no-falloff
 /// weighting. Rectangular panels emit from uniform positions and cosine-weighted
 /// directions over their front hemisphere, with power proportional to their area.
@@ -2024,24 +2050,7 @@ pub fn render_continuing(scene: &Scene, kd: Option<&KdTree>, op: &Options, image
     *progress.photon_preview.lock().unwrap() = None;
     progress.photon_lookups.store(0, Relaxed);
     progress.photons_gathered.store(0, Relaxed);
-    let photon_map = (op.caustics && !fixed).then(|| {
-        let start = Instant::now();
-        let (map, emitted) = build_photon_map(scene, kd, op, progress);
-        *progress.photon_stats.lock().unwrap() = Some(PhotonStats {
-            emitted,
-            stored: map.len(),
-            trace_ms: start.elapsed().as_millis() as u64,
-            memory_bytes: map.memory_bytes(),
-        });
-        if progress.capture_photon_preview.load(Relaxed) && !map.is_empty() && !progress.cancel.load(Relaxed) {
-            let scale = 1024.0 / op.width.max(op.height) as f32;
-            let scale = scale.min(1.0);
-            let width = (op.width as f32 * scale).round().max(1.0) as u32;
-            let height = (op.height as f32 * scale).round().max(1.0) as u32;
-            *progress.photon_preview.lock().unwrap() = Some(map.preview(&pose, width, height));
-        }
-        map
-    });
+    let photon_map = if fixed { None } else { caustic_map(scene, kd, op, &pose, progress) };
     let camera = crate::camera::Camera {
         aperture: if fixed { 0.0 } else { op.aperture.unwrap_or(scene.camera.aperture) },
         focus_distance: op.focus_distance.unwrap_or(scene.camera.focus_distance),

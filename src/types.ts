@@ -161,8 +161,9 @@ export interface CausticReport {
   stored: number;
   trace_ms: number;
   memory_bytes: number;
-  lookups: number;
-  photons_per_lookup: number;
+  /** Counted on the CPU only: null after a GPU render. */
+  lookups: number | null;
+  photons_per_lookup: number | null;
 }
 
 export interface RenderResult {

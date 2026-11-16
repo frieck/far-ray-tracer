@@ -32,6 +32,12 @@ struct Params {
     volume_first: u32, volume_count: u32,
     // far-core's spectral::white.
     white_r: f32, white_g: f32, white_b: f32,
+    // The caustic photon map in `texels`, as lib.rs packs it: its buckets (0 for none), where
+    // their starts are and where the photons are, seven words each, and the lookup radius.
+    photon_buckets: u32, bucket_first: u32, photon_first: u32, photon_radius: f32,
+    // The multiplier of caustic light; whether only that light is shown; whether photons carry
+    // the environment's light.
+    caustic_strength: f32, caustics_only: u32, photon_env: u32, pad: u32,
 }
 
 struct Node { low: vec3<f32>, first: u32, high: vec3<f32>, count: u32 }
@@ -609,6 +615,12 @@ fn respond(m: Material, albedo: vec3<f32>, spec: f32, n: vec3<f32>, ng: vec3<f32
     let cosine = dot(l, n);
     if (cosine <= 0.0 || dot(l, ng) <= 0.0) { return vec3<f32>(0.0); }
     if (HAS_GGX && m.kind == 1u) {
+        // What the specular lobes would bring, the photons already carry.
+        if (diffuse_only) {
+            let sum = wo + l;
+            if (dot(n, wo) <= 0.0 || dot(sum, sum) < 1e-12) { return vec3<f32>(0.0); }
+            return ggx_diffuse(m, n, wo, l, normalize(sum), cosine);
+        }
         var pdf = -1.0;
         if (light_pdf > 0.0 && reflect_chance > 0.0) { pdf = light_pdf / reflect_chance; }
         return ggx_evaluate(m, n, wo, l, pdf);
@@ -627,6 +639,7 @@ fn respond(m: Material, albedo: vec3<f32>, spec: f32, n: vec3<f32>, ng: vec3<f32
 fn direct(pos: vec3<f32>, m: Material, albedo: vec3<f32>, spec: f32, n: vec3<f32>, ng: vec3<f32>, wo: vec3<f32>,
     reflect_chance: f32) -> vec3<f32> {
     var sum = vec3<f32>(0.0);
+    diffuse_only = photons_carry;
     var emitters = 0u;
     for (var i = 0u; i < params.light_count; i++) {
         if (lights[i].kind == 0u) { sum += from_light(i, 1.0, pos, m, albedo, spec, n, ng, wo, reflect_chance); }
@@ -634,6 +647,7 @@ fn direct(pos: vec3<f32>, m: Material, albedo: vec3<f32>, spec: f32, n: vec3<f32
     }
     if (HAS_ENV && params.has_env != 0u && (m.kind == 1u || any(albedo > vec3<f32>(0.0)))) {
         let drawn = sample_environment(rand(), rand());
+        diffuse_only = photons_carry && params.photon_env != 0u;
         if (drawn.w > 0.0) {
             // No 2008 highlight from the sky, as on the CPU.
             let f = respond(m, albedo, 0.0, n, ng, wo, drawn.xyz, drawn.w, reflect_chance);
@@ -641,6 +655,7 @@ fn direct(pos: vec3<f32>, m: Material, albedo: vec3<f32>, spec: f32, n: vec3<f32
                 sum += f * environment(drawn.xyz) * visibility(pos + ng * OFFSET, drawn.xyz, FAR) / drawn.w;
             }
         }
+        diffuse_only = photons_carry;
     }
     if (emitters <= 4u) {
         for (var i = 0u; i < params.light_count; i++) {
@@ -1674,6 +1689,60 @@ fn tilt(prim: u32, m: Material, pos: vec3<f32>, normal: vec3<f32>, map: u32, str
     return normal;
 }
 
+// Whether the caustic photons carry the light that reaches the surface being lit through
+// mirrors, glass and GGX lobes: after a diffuse rebound in a render with caustics, as the
+// CPU's photons_carry. Light sampling then leaves out what GGX reflects, `diffuse_only`.
+var<private> photons_carry: bool;
+var<private> diffuse_only: bool;
+
+fn photon_cell(v: vec3<f32>) -> vec3<i32> {
+    return vec3<i32>(floor(v / (2.0 * params.photon_radius)));
+}
+
+// The light the photon map holds at `pos` on a surface facing `n`, as far-core's
+// PhotonMap::irradiance: the photons within the radius on that surface, with a cone filter.
+fn caustic_light(pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
+    let r = params.photon_radius;
+    let r2 = r * r;
+    let low = photon_cell(pos - vec3<f32>(r));
+    let high = photon_cell(pos + vec3<f32>(r));
+    var sum = vec3<f32>(0.0);
+    for (var x = low.x; x <= high.x; x++) {
+        for (var y = low.y; y <= high.y; y++) {
+            for (var z = low.z; z <= high.z; z++) {
+                let hash = (u32(x) * 73856093u) ^ (u32(y) * 19349663u) ^ (u32(z) * 83492791u);
+                let b = params.bucket_first + (hash & (params.photon_buckets - 1u));
+                for (var i = texels[b]; i < texels[b + 1u]; i++) {
+                    let at = params.photon_first + 7u * i;
+                    let p = vec3<f32>(bitcast<f32>(texels[at]), bitcast<f32>(texels[at + 1u]), bitcast<f32>(texels[at + 2u]));
+                    let offset = p - pos;
+                    let d2 = dot(offset, offset);
+                    if (d2 >= r2 || abs(dot(offset, n)) >= 0.5 * r) { continue; }
+                    if (dot(octahedral(texels[at + 3u]), n) <= 0.7) { continue; }
+                    // Different cells can share a bucket; each photon counts once.
+                    if (any(photon_cell(p) != vec3<i32>(x, y, z))) { continue; }
+                    let power = vec3<f32>(bitcast<f32>(texels[at + 4u]), bitcast<f32>(texels[at + 5u]), bitcast<f32>(texels[at + 6u]));
+                    sum += power * (1.0 - d2 / r2);
+                }
+            }
+        }
+    }
+    // The cone integrates to half a disk, hence the factor of 2.
+    return sum * (2.0 / (PI * r2));
+}
+
+// A unit vector from 32 bits, as lib.rs's octahedral packs it.
+fn octahedral(e: u32) -> vec3<f32> {
+    let f = unpack2x16snorm(e);
+    var n = vec3<f32>(f.x, f.y, 1.0 - abs(f.x) - abs(f.y));
+    if (n.z < 0.0) {
+        let sx = select(-1.0, 1.0, n.x >= 0.0);
+        let sy = select(-1.0, 1.0, n.y >= 0.0);
+        n = vec3<f32>((1.0 - abs(f.y)) * sx, (1.0 - abs(f.x)) * sy, n.z);
+    }
+    return normalize(n);
+}
+
 fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
     var o = origin;
     var d = direction;
@@ -1706,7 +1775,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
             absorbing = NO_TEXTURE;
         }
         let lamp = emitter(o, d, hit.t);
-        if (HAS_VOLUMES && params.volume_count > 0u) {
+        if (HAS_VOLUMES && params.volume_count > 0u && params.caustics_only == 0u) {
             // What the camera ray meets first guides the denoiser even when it scatters in fog.
             if (segment == 0u && hit.t < FAR) {
                 first_albedo = materials[hit.material].color;
@@ -1755,8 +1824,12 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
                 }
             }
         }
+        // With caustics, the light that gets to a diffuse rebound through mirrors and glass
+        // comes from the photons instead.
+        let caustics = params.photon_buckets != 0u;
+        photons_carry = caustics && diffuse_bounces > 0u;
         if (lamp.t < hit.t) {
-            if (sees_lights) {
+            if (sees_lights && !photons_carry && params.caustics_only == 0u) {
                 var weight = 1.0;
                 if (HAS_GGX && mis_pdf > 0.0) { weight = power_weight(mis_pdf, lamp_pdf(lamp, mis_from, o, d)); }
                 light += capped(through * lamp.color * weight, rebound);
@@ -1765,7 +1838,8 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
         }
         if (hit.t >= FAR) {
             // After a diffuse rebound the environment was drawn already, by its light.
-            if (sees_lights && (segment > 0u || params.env_visible != 0u)) {
+            let carried = photons_carry && params.photon_env != 0u;
+            if (sees_lights && !carried && params.caustics_only == 0u && (segment > 0u || params.env_visible != 0u)) {
                 var weight = 1.0;
                 if (HAS_GGX && mis_pdf > 0.0 && params.has_env != 0u) { weight = power_weight(mis_pdf, environment_pdf(d)); }
                 light += capped(through * environment(d) * weight, rebound);
@@ -1815,7 +1889,17 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
             first_depth = hit.t;
         }
         let wo = -d;
-        light += capped(through * m.emission, rebound);
+        if (params.caustics_only == 0u) { light += capped(through * m.emission, rebound); }
+        // The caustic light where the camera sees a diffuse surface, directly or through mirrors
+        // and glass, as the CPU gathers it.
+        if (caustics && diffuse_bounces == 0u && front) {
+            var diff = m.diff;
+            if (HAS_GGX && m.kind == 1u) {
+                let f = ggx_fresnel(m, dot(ns, wo));
+                diff = (1.0 - m.metallic) * (1.0 - max(max(f.x, f.y), f.z));
+            }
+            if (diff > 0.0) { light += through * m.color * (params.caustic_strength * diff * caustic_light(pos, stored)); }
+        }
         mis_pdf = -1.0;
         let specular = glossy_count + transmission_count;
         let may_reflect = specular < params.max_depth && glossy_count < params.glossy_max;
@@ -1834,7 +1918,9 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
             let chances = lobe_chances(select(-1.0, diff * brightest, bounces),
                 select(-1.0, m.subsurface * (1.0 - m.metallic) * brightest, scatters), select(-1.0, m.refl, reflects));
             let reflect_chance = chances.z;
-            light += capped(through * direct(pos, m, vec3<f32>(0.0), 0.0, ns, ng, wo, reflect_chance), rebound);
+            if (params.caustics_only == 0u) {
+                light += capped(through * direct(pos, m, vec3<f32>(0.0), 0.0, ns, ng, wo, reflect_chance), rebound);
+            }
             if (!reflects && !bounces && !scatters) { break; }
             let pick = rand();
             if (pick >= chances.x + reflect_chance) {
@@ -1899,7 +1985,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
         var scattered = m.color * diff;
         // The back of a 2008 surface shows only the highlight, as on the CPU.
         if (!front) { scattered = vec3<f32>(0.0); }
-        if (any(scattered > vec3<f32>(0.0)) || m.spec > 0.0) {
+        if (params.caustics_only == 0u && (any(scattered > vec3<f32>(0.0)) || m.spec > 0.0)) {
             light += capped(through * direct(pos, m, scattered, m.spec, ns, ng, wo, 0.0), rebound);
         }
         // Each way on that the CPU would not follow here is left out: past the depth limits,

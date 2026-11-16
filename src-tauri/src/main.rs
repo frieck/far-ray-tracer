@@ -220,7 +220,8 @@ struct RenderRequest {
 }
 
 /// Where Enhanced renders run. Auto takes the graphics card for scenes it renders as the CPU
-/// does, and the CPU for the rest; the other stages and caustics always run on the CPU.
+/// does, and the CPU for the rest; the other stages always run on the CPU. With caustics, the
+/// CPU traces the photons before a GPU render.
 #[derive(Deserialize, Clone, Copy, PartialEq, Eq, Default, Debug)]
 #[serde(rename_all = "snake_case")]
 enum Device {
@@ -236,8 +237,9 @@ struct CausticReport {
     stored: usize,
     trace_ms: u64,
     memory_bytes: usize,
-    lookups: u64,
-    photons_per_lookup: f64,
+    /// Reads of the map, and the photons each used on average: counted on the CPU only.
+    lookups: Option<u64>,
+    photons_per_lookup: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -905,18 +907,14 @@ fn render_scene(
         region: request.region.map(|[x0, y0, x1, y1]| far_core::engine::Region { x0, y0, x1, y1 }),
         noise_threshold: request.noise_threshold,
     };
-    // The graphics card renders the Enhanced stage without caustics; Auto also leaves it the
-    // scenes it would render differently.
+    // The graphics card renders the Enhanced stage; Auto leaves the CPU the scenes it would
+    // render differently.
     let mut gpu_notes = Vec::new();
     let mut cpu_reason = None;
     let gpu = match request.device {
         Device::Gpu | Device::Auto if mode == Mode::Enhanced => match state.gpu.get_or_init(far_gpu::Gpu::new) {
             Err(e) => {
                 cpu_reason = Some(format!("Rendered on the CPU: {e}"));
-                None
-            }
-            Ok(_) if request.caustics => {
-                cpu_reason = Some("Rendered on the CPU, which traces caustics".into());
                 None
             }
             Ok(gpu) => {
@@ -988,7 +986,7 @@ fn render_scene(
     let mut accumulated = None;
     let mut adapter = None;
     let render_ms = if let Some((gpu, bvh)) = gpu {
-        let (rendered, ms) = render_on_gpu(gpu, bvh, scene, &options, &image, progress, frame_interval, send_frame)?;
+        let (rendered, ms) = render_on_gpu(gpu, bvh, kd, scene, &options, &image, progress, frame_interval, send_frame)?;
         adapter = Some(rendered.0);
         accumulated = rendered.1;
         ms
@@ -1015,6 +1013,7 @@ fn render_scene(
         *state.last_image.lock().unwrap() =
             Some(FinishedImage { width: options.width, height: options.height, rgba });
     }
+    let on_gpu = adapter.is_some();
     let caustics = progress.photon_stats.lock().unwrap().map(|stats| {
         let lookups = progress.photon_lookups.load(Relaxed);
         let gathered = progress.photons_gathered.load(Relaxed);
@@ -1023,8 +1022,8 @@ fn render_scene(
             stored: stats.stored,
             trace_ms: stats.trace_ms,
             memory_bytes: stats.memory_bytes,
-            lookups,
-            photons_per_lookup: gathered as f64 / lookups.max(1) as f64,
+            lookups: (!on_gpu).then_some(lookups),
+            photons_per_lookup: (!on_gpu).then(|| gathered as f64 / lookups.max(1) as f64),
         }
     });
     Ok(RenderResult {
@@ -1049,6 +1048,7 @@ fn render_scene(
 fn render_on_gpu(
     gpu: &far_gpu::Gpu,
     bvh: &far_core::bvh::Bvh,
+    kd: Option<&KdTree>,
     scene: &Scene,
     options: &Options,
     image: &Image,
@@ -1076,7 +1076,11 @@ fn render_on_gpu(
     let ms = render_with_frames(
         || {
             let cancel = || progress.cancel.load(Relaxed);
-            outcome = gpu.render(scene, bvh, &options, &cancel, Some(GPU_FRAME_INTERVAL), &mut |sums| { show(sums, &quick); })
+            // The photons for caustics are traced on the CPU first, as for a CPU render, through
+            // the KD-Tree when there is one.
+            let pose = options.pose.unwrap_or(scene.camera.pose());
+            let photons = far_core::enhanced::caustic_map(scene, kd, &options, &pose, progress);
+            outcome = gpu.render(scene, bvh, &options, photons.as_ref(), &cancel, Some(GPU_FRAME_INTERVAL), &mut |sums| { show(sums, &quick); })
                 .map(|rendered| {
                     let accumulation = show(&rendered.sums, &options);
                     (rendered.adapter, (!rendered.cancelled).then_some(accumulation))
@@ -1191,7 +1195,7 @@ mod tests {
         };
         let (image, progress) = (Image::new(options.width, options.height), Progress::default());
         let frames = AtomicUsize::new(0);
-        let ((adapter, accumulation), _) = render_on_gpu(&gpu, &bvh, &scene, &options, &image, &progress,
+        let ((adapter, accumulation), _) = render_on_gpu(&gpu, &bvh, None, &scene, &options, &image, &progress,
             Duration::from_millis(5), || { frames.fetch_add(1, Relaxed); Ok(()) }).unwrap();
         assert!(!adapter.is_empty());
         assert!(frames.load(Relaxed) > 1, "no frames while rendering");

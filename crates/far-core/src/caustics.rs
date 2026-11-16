@@ -95,6 +95,28 @@ impl PhotonMap {
         self.photons.is_empty()
     }
 
+    /// The photons, sorted by bucket.
+    pub fn photons(&self) -> &[Photon] {
+        &self.photons
+    }
+
+    /// Where each bucket's photons start in `photons`, and one past the last: a power of two
+    /// buckets, which a cell is hashed into as `bucket_of` does. Empty when the map is.
+    pub fn bucket_starts(&self) -> &[u32] {
+        &self.bucket_start
+    }
+
+    /// The lookup radius; cells are twice as wide.
+    pub fn radius(&self) -> f32 {
+        self.radius
+    }
+
+    /// Whether photons carry the environment's light through glass and mirrors, which camera
+    /// paths then leave out after a diffuse bounce.
+    pub fn carries_environment(&self) -> bool {
+        self.environment
+    }
+
     pub fn memory_bytes(&self) -> usize {
         self.photons.len() * std::mem::size_of::<Photon>() + self.bucket_start.len() * 4
     }

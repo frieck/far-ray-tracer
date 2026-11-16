@@ -559,7 +559,7 @@ function SystemTab({ props, update }: TabContext) {
   return (
     <Section id="performance" title="Performance">
       <Row label="Device" keywords="gpu graphics card cpu metal directx vulkan"
-        hint="Auto renders on the graphics card when it gives the CPU's image, and on the CPU otherwise. The 2008 and Fixed stages and caustics always use the CPU.">
+        hint="Auto renders on the graphics card when it gives the CPU's image, and on the CPU otherwise. The 2008 and Fixed stages always use the CPU; with caustics, the CPU traces the photons first.">
         <Segmented<Device>
           label="Device"
           value={settings.device}

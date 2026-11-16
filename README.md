@@ -841,7 +841,7 @@ In the app, **System > Device** chooses where Enhanced renders run:
 - **GPU** always uses the card and lists what it left out.
 - **CPU** always uses the CPU engine.
 
-The 2008 and Fixed stages and caustics always run on the CPU. So does a machine that has
+The 2008 and Fixed stages always run on the CPU. So does a machine that has
 only a software renderer (WARP, llvmpipe), which would be slower than the CPU engine. The
 status line names the card after a GPU render.
 
@@ -868,7 +868,8 @@ Every example scene renders on the GPU in Auto mode.
 | --- | --- |
 | Every shape: meshes, spheres, boxes, cylinders, tubes, cones, tori, grounds, displaced grounds and objects | |
 | 2008 materials, GGX, glass with absorption and roughness, color textures, bump and normal maps; roughness, metallic, emission and alpha maps (rays look through the holes); clear coat, sheen and anisotropy; dispersion in glass, one wavelength per path; subsurface scattering, a random walk under GGX surfaces | |
-| 2008 lights, bulbs with spotlight cones and IES profiles, panels, one picked of many; indirect light with the 2008-light limits | Caustic photons |
+| 2008 lights, bulbs with spotlight cones and IES profiles, panels, one picked of many; indirect light with the 2008-light limits | |
+| Caustics: the CPU traces the photons, as for a CPU render, and the card gathers them | The photon lookup counts in the Photon map panel |
 | HDR environments and the sun and sky, drawn by their light; MIS for GGX reflections | |
 | Fog, height fog and smoke (up to eight volumes), with light shafts | More than eight volumes |
 | Depth of field and bokeh shapes, denoise and bloom (on the CPU, from the GPU's sums) | Regions and adaptive sampling (the whole image is rendered) |
@@ -894,6 +895,14 @@ material maps 8.8 s against 0.46 s; the models scene 14.1 s against 0.84 s; coat
 against 0.34 s; bokeh 6.7 s against 0.25 s; spotlights (in fog) 20.6 s against 1.8 s at 400 × 300
 and 512 samples; displacement 33.3 s against 5.5 s. A displaced ground costs the most on the GPU:
 every ray, shadow rays too, marches over the relief up to 1500 steps.
+
+With caustics, the CPU first traces the photons, through the KD-Tree, in a fraction of a
+second; the card then gathers them where the camera sees a diffuse surface, as the CPU does.
+Gathering is the costly part on the GPU: where glass focuses light, one cell of the map holds
+thousands of photons, and every pixel of a group waits for the one that reads them. So the GPU
+gains less with caustics than without, and the more photons, the less. At 800 × 600 with 256
+samples and a million photons: glass 8.0 s against 1.2 s, rhino 22.5 s against 2.6 s,
+environment caustics 10.2 s against 1.4 s, and 40.6 s against 7.9 s with six million photons.
 
 At few samples the GPU's image is grainier than the CPU's: the CPU draws its samples from
 stratified sequences, the GPU from a hash per pixel and pass. Both converge to the same image
@@ -1039,7 +1048,7 @@ between environment and reflection samples. Loading builds the sampling table
 once; intensity and rotation edits reuse it. Classic and Fixed ignore environments,
 and the historical C++ reference rejects them explicitly.
 
-In Enhanced CPU rendering, **Caustics** traces photons from HDRI maps and the physical
+In Enhanced rendering, **Caustics** traces photons from HDRI maps and the physical
 sky as well as local legacy sphere and rectangle lights. Both reflection and refraction
 can carry them onto diffuse surfaces. Environment intensity and rotation apply to photons;
 hiding the background does not turn off their illumination. Hiding the background produces

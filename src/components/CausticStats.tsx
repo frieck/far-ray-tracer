@@ -25,7 +25,7 @@ function Row({ label, value, hint }: RowProps) {
 
 export function CausticStats({ report }: { report: CausticReport }) {
   const share = report.emitted ? Math.round((report.stored / report.emitted) * 100) : 0;
-  const perLookup = Math.round(report.photons_per_lookup);
+  const perLookup = report.photons_per_lookup === null ? null : Math.round(report.photons_per_lookup);
   return (
     <div className="stats">
       <h2>Photon map</h2>
@@ -46,22 +46,26 @@ export function CausticStats({ report }: { report: CausticReport }) {
           value={`${formatNumber(report.memory_bytes / 1e6)} MB`}
           hint="Size of the photon map."
         />
-        <Row
-          label="Lookups"
-          value={count(report.lookups)}
-          hint="Times the render read the photon map to light a surface."
-        />
-        <Row
-          label="Photons per lookup"
-          value={formatNumber(perLookup)}
-          hint="Average photons found around each point. More is smoother."
-        />
+        {report.lookups !== null && (
+          <Row
+            label="Lookups"
+            value={count(report.lookups)}
+            hint="Times the render read the photon map to light a surface."
+          />
+        )}
+        {perLookup !== null && (
+          <Row
+            label="Photons per lookup"
+            value={formatNumber(perLookup)}
+            hint="Average photons found around each point. More is smoother."
+          />
+        )}
       </dl>
       {report.emitted === 0 ? (
         <p className="note">No photons were traced. Check for a supported light source and bounded reflective or glass objects. Environment photons do not support infinite reflective grounds.</p>
       ) : report.stored === 0 ? (
         <p className="note">No photons reached a diffuse surface after reflection or refraction. Check the lighting and scene geometry.</p>
-      ) : perLookup < LOW_PHOTONS_PER_LOOKUP && (
+      ) : perLookup !== null && perLookup < LOW_PHOTONS_PER_LOOKUP && (
         <p className="note">Few photons per lookup: surfaces may look blotchy. Add photons or raise the radius.</p>
       )}
     </div>
