@@ -1905,6 +1905,50 @@ impl Accumulation {
         self.passes
     }
 
+    /// The linear light and passes behind the image, at `op`'s exposure, for saving as EXR:
+    /// what the first hits recorded comes with a render that denoised, and the denoised light
+    /// too when Open Image Denoise is installed.
+    pub fn layers(&self, op: &Options) -> crate::layers::Layers {
+        let scale = op.exposure / self.exposure;
+        let counts: Vec<u32> = self.counts.iter().map(|c| c.load(Relaxed)).collect();
+        let per = |p: usize| if counts[p] == 0 { 0.0 } else { 1.0 / counts[p] as f32 };
+        let light: Vec<[f32; 3]> = (0..counts.len())
+            .map(|p| [0, 1, 2].map(|k| f32::from_bits(self.sum[p * 3 + k].load(Relaxed)) * scale * per(p)))
+            .collect();
+        let mut layers = crate::layers::Layers {
+            width: self.width, height: self.height, light, denoised: None, albedo: None, normal: None, depth: None,
+        };
+        if let Some(guide) = &self.guide {
+            let (_, primary) = guide.sums();
+            let mean = |v: [f32; 3], p: usize| v.map(|c| c * per(p));
+            layers.albedo = Some(primary.iter().enumerate().map(|(p, f)| mean(f.albedo, p)).collect());
+            layers.normal = Some(primary.iter().map(|f| {
+                let n = f.normal;
+                let length = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+                if length > 0.0 { n.map(|c| c / length) } else { [0.0; 3] }
+            }).collect());
+            layers.depth = Some(primary.iter().enumerate().map(|(p, f)| f.depth * per(p)).collect());
+            // Open Image Denoise over the rendered area, as the display does, but kept linear.
+            let r = self.rendered;
+            let width = self.width as usize;
+            let indices: Vec<usize> = (r.y0 as usize..r.y1 as usize)
+                .flat_map(|y| (r.x0 as usize..r.x1 as usize).map(move |x| y * width + x)).collect();
+            let pick = |values: &[[f32; 3]]| indices.iter().map(|&p| values[p]).collect::<Vec<_>>();
+            let (albedo, normal) = (layers.albedo.as_deref().unwrap_or_default(), layers.normal.as_deref().unwrap_or_default());
+            if self.passes >= denoise::MIN_PASSES {
+                if let Some(result) = crate::oidn::denoise(&pick(&layers.light), &pick(albedo), &pick(normal),
+                    (r.x1 - r.x0) as usize, (r.y1 - r.y0) as usize, true) {
+                    let mut denoised = vec![[0.0; 3]; layers.light.len()];
+                    for (&p, c) in indices.iter().zip(result) {
+                        denoised[p] = c;
+                    }
+                    layers.denoised = Some(denoised);
+                }
+            }
+        }
+        layers
+    }
+
     /// The sums again, for another renderer to add passes to, when a render with `op` can
     /// continue from them: the same image, area, denoising and bloom, more passes, and the same
     /// exposure unless the render has no bloom, in which case the light is scaled to the new
@@ -2386,6 +2430,34 @@ mod tests {
         let brighter = Options { exposure: 1.5, ..small(8) };
         let (restarted, _) = rendered(&scene, &brighter, first);
         assert_eq!(restarted, rendered(&scene, &brighter, None).0);
+    }
+
+    #[test]
+    fn the_layers_hold_the_light_the_image_shows_and_its_first_hits() {
+        let scene = example("cornell-box.far");
+        let op = Options { denoise: true, ..small(16) };
+        let (_, acc) = rendered(&scene, &op, None);
+        let acc = acc.unwrap();
+        // Twice the exposure doubles the light; the passes stay as they are.
+        let layers = acc.layers(&op);
+        let brighter = acc.layers(&Options { exposure: 2.0, ..op.clone() });
+        let p = 24 * 64 + 32;
+        assert!(layers.light[p].iter().all(|&c| c > 0.0));
+        assert!((0..3).all(|k| (brighter.light[p][k] - 2.0 * layers.light[p][k]).abs() < 1e-5));
+        // Shown with the standard curve, the light is the image without the denoiser.
+        let plain = Options { denoise: false, ..op.clone() };
+        let image = Image::new(op.width, op.height);
+        assert!(redisplay(&acc, &scene, &plain, &image, &Progress::default()));
+        let shown = display_for(&scene, &plain).show(layers.light[p]);
+        let pixel = image.pixels[p].load(Relaxed);
+        assert!((0..3).all(|k| ((pixel >> (8 * k)) & 0xff).abs_diff(channel(shown[k])) <= 1));
+        let (albedo, normal, depth) = (layers.albedo.unwrap(), layers.normal.unwrap(), layers.depth.unwrap());
+        assert!(albedo[p].iter().all(|&c| c > 0.0 && c <= 1.0) && depth[p] > 0.0);
+        assert!((normal[p].iter().map(|c| c * c).sum::<f32>() - 1.0).abs() < 1e-4);
+        // Without denoising, nothing records the first hits.
+        let (_, acc) = rendered(&scene, &small(16), None);
+        let layers = acc.unwrap().layers(&small(16));
+        assert!(layers.albedo.is_none() && layers.denoised.is_none());
     }
 
     #[test]

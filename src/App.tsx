@@ -389,6 +389,7 @@ export function App() {
       key={scene?.path}
       id={ballMaterial.id}
       label={ballMaterial.label}
+      device={settings.device}
       edit={settings.materialOverrides.find((m) => m.id === ballMaterial.id) ?? null}
       onClose={() => setShowMaterial(false)}
     />

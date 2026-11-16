@@ -52,11 +52,13 @@ Visual gain for the effort:
 - [x] **Film tone mapping (ACES or AgX)**: natural colors in bright light. Low.
 - [ ] **White balance**: a color temperature for the camera. Low.
 - [ ] **Motion blur**: needs moving objects in the scene format. Medium.
-- [ ] **Raw light and render passes**: save the render's linear light (EXR) and passes such as
-  albedo, direct and indirect light, or light groups, so colors, exposure and lights can be
-  changed after rendering, in the app or a compositor. The app already keeps the light for
-  exposure, tone mapping, denoise and bloom; changing a material's color still renders again.
-  Medium.
+- [x] **Raw light and render passes**: the linear light as EXR, with the denoised light,
+  albedo, normal and depth, from the app and the command line.
+- [ ] **Light groups and direct and indirect passes**: the light of each lamp (or group), of
+  the environment and of glowing materials kept apart, so the app can change their strength
+  and color after rendering, as Blender's light groups, and save them to the EXR. Every place
+  the CPU and GPU integrators add light would carry a color per group, and memory grows by
+  one image of light per group. Changing a material's color still renders again. High.
 
 ## Quality and speed
 
@@ -87,7 +89,7 @@ Visual gain for the effort:
      shader path tracer behind `far render --gpu` that follows the Enhanced integrator (every
      shape, 2008, GGX with MIS, glass with absorption, textures, light picking, environment
      sampling, depth of field), used by the app through a Device setting, with live frames,
-     denoise and bloom. Left: the material ball.
+     denoise and bloom, and the material ball (done).
   4. ~~Parity, feature by feature, each compared with the CPU~~ (done: every example renders
      on the GPU and matches the CPU within noise. Fog, smoke, bump and normal maps,
      roughness, metallic, emission and alpha maps, clear coat, sheen, anisotropy, spotlight

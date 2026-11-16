@@ -144,7 +144,15 @@ Example scenes are in **File > Open Example**, in `assets/scenes`:
 `2008/validation` and `debug` hold the simplest 2008 scenes, kept for the tests and the
 validation against the original but left out of the menu. Shortcuts: `Cmd/Ctrl+O` opens a
 scene, `Cmd/Ctrl+R` renders, `Cmd/Ctrl+S` saves the scene, `Cmd/Ctrl+Shift+S` saves it as a
-new file, `Cmd/Ctrl+E` exports the image as PNG and `Esc` cancels.
+new file, `Cmd/Ctrl+E` exports the image and `Esc` cancels.
+
+**File > Export Image** saves a PNG, or an OpenEXR file (`.exr`) with the light behind an
+Enhanced render, linear and before tone mapping, for a compositor or an image editor, where
+exposure, colors and curves can change without rendering again. A render that denoised adds
+its passes: the denoised light as R, G and B with the noisy light as `noisy.R`, `noisy.G` and
+`noisy.B` (the denoised one needs Open Image Denoise), then `albedo`, `normal` (in world space)
+and `depth` (the distance along each camera ray), the names Blender and Nuke read. The light
+is the exposed light the display shows; pixels a region left out are black.
 
 **File > Save Scene** writes the scene with the edits made in the app: the camera, depth of
 field and bokeh, the environment (HDR or sky), material edits and the render settings
@@ -162,7 +170,9 @@ cargo run --release -p far-cli -- render assets/scenes/2008/cube.far -o cube.png
 ```
 
 Without `--fixed` or `--enhanced` it renders the 2008 stage. Run `far` with no arguments to
-see all options. `far compare <a> <b>` reports how two images differ.
+see all options. `far compare <a> <b>` reports how two images differ. An output ending in
+`.exr` saves an Enhanced render's linear light and, with `--denoise`, its passes, as the app's
+export does.
 
 ## Project layout
 
@@ -926,6 +936,12 @@ scene has none, which frees registers so more threads run at once. Each set is c
 once and kept. Measured alternately against the shader with everything on, it saves 32% on
 the Cornell box, 20% on the primitives and 8% on the Rhino and the light shafts; scenes that
 use nearly everything, such as Christmas and the showcase, stay the same.
+
+The material ball in **Materials** renders on the card too, when Device is GPU or Auto (Auto
+keeps the CPU for a material the GPU would render differently, and a failed GPU preview falls
+back to the CPU). On an M4 Max the panel's preview, 384 pixels with 24 samples, takes 90 ms
+against 370 ms on the CPU, and the large view's last pass, 900 × 900 with 128 samples, 0.8 s
+against 8.7 s, denoising included.
 
 ### Tone mapping (Enhanced)
 

@@ -17,6 +17,7 @@ pub mod denoise;
 pub mod enhanced;
 pub mod engine;
 pub mod kdtree;
+pub mod layers;
 pub mod light_profile;
 pub mod mesh3ds;
 pub mod model;

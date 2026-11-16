@@ -28,7 +28,12 @@ and moves under its version when that version is released.
 for as little noise at few samples. Render regions and raising the passes work as on the CPU: a region
 renders only its pixels, and a longer render continues from the last one. Software renderers
 are not used. The shader is compiled for what
-  each scene uses, up to a third faster on simple scenes.
+  each scene uses, up to a third faster on simple scenes. The material ball renders on the
+  card too, 4 to 11 times faster.
+
+- Images save as OpenEXR, in the app (**File > Export Image**) and on the command line
+  (`-o image.exr`): the linear light of an Enhanced render before tone mapping and, when it
+  denoised, the denoised light, albedo, normal and depth passes.
 
 ### Changed
 

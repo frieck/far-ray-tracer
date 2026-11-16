@@ -8,7 +8,9 @@ use std::time::Instant;
 
 const HELP: &str = "\
 usage:
-  far render <scene.far> -o <output.png|bmp> [options]
+  far render <scene.far> -o <output.png|bmp|exr> [options]
+      an .exr file holds the linear light before tone mapping, in enhanced mode,
+      with --denoise also the denoised light, albedo, normal and depth
       --width N       image width (default 800)
       --height N      image height (default 600)
       --depth N       recursion depth (default 3)
@@ -158,6 +160,10 @@ fn render_command(mut args: impl Iterator<Item = String>) {
     if options.denoise {
         load_denoiser();
     }
+    let exr = is_exr(&output);
+    if exr && options.mode != Mode::Enhanced {
+        fail("an EXR file needs --enhanced, whose light is linear");
+    }
     if gpu {
         return render_on_gpu(&scene, &options, &output, t0);
     }
@@ -166,7 +172,12 @@ fn render_command(mut args: impl Iterator<Item = String>) {
     let t2 = Instant::now();
     let image = Image::new(options.width, options.height);
     let progress = Progress::default();
-    render(&scene, kd.as_ref(), &options, &image, &progress);
+    let accumulation = if exr {
+        far_core::enhanced::render_continuing(&scene, kd.as_ref(), &options, &image, &progress, None)
+    } else {
+        render(&scene, kd.as_ref(), &options, &image, &progress);
+        None
+    };
     let t3 = Instant::now();
 
     println!(
@@ -193,10 +204,23 @@ fn render_command(mut args: impl Iterator<Item = String>) {
             gathered as f64 / lookups.max(1) as f64,
         );
     }
+    save(&image, accumulation.as_ref(), &options, &output);
+}
+
+fn is_exr(path: &str) -> bool {
+    Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("exr"))
+}
+
+/// Writes the image, or for an .exr file the light and passes `accumulation` holds.
+fn save(image: &Image, accumulation: Option<&far_core::enhanced::Accumulation>, options: &Options, output: &str) {
+    if is_exr(output) {
+        let accumulation = accumulation.unwrap_or_else(|| fail("the render kept no light to save as EXR"));
+        return accumulation.layers(options).write_exr(Path::new(output)).unwrap_or_else(|e| fail(&e));
+    }
     let rgb: Vec<u8> = image.rgba().chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
     image::RgbImage::from_raw(options.width, options.height, rgb)
         .expect("image size")
-        .save(&output)
+        .save(output)
         .unwrap_or_else(|e| fail(&format!("{output}: {e}")));
 }
 
@@ -223,15 +247,12 @@ fn render_on_gpu(scene: &Scene, options: &Options, output: &str, t0: Instant) {
     // a region the image stays black, as on the CPU.
     let image = far_core::Image::new(options.width, options.height);
     let progress = far_core::Progress::default();
-    far_core::enhanced::redisplay(&rendered.sums.accumulation(&options), scene, &options, &image, &progress);
+    let accumulation = rendered.sums.accumulation(options);
+    far_core::enhanced::redisplay(&accumulation, scene, options, &image, &progress);
     if let Some(denoiser) = *progress.denoiser.lock().unwrap() {
         println!("denoiser={}", if denoiser == far_core::engine::Denoiser::Oidn { "oidn" } else { "builtin" });
     }
-    let rgb: Vec<u8> = image.rgba().chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
-    image::RgbImage::from_raw(options.width, options.height, rgb)
-        .expect("image size")
-        .save(output)
-        .unwrap_or_else(|e| fail(&format!("{output}: {e}")));
+    save(&image, Some(&accumulation), options, output);
 }
 
 fn material_ball(mut args: impl Iterator<Item = String>) {

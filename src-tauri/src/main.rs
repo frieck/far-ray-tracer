@@ -60,6 +60,9 @@ struct FinishedImage {
     width: u32,
     height: u32,
     rgba: Vec<u8>,
+    /// The exposure it was shown with, when the kept accumulation holds its light, which can
+    /// then be saved as EXR.
+    exposure: Option<f32>,
 }
 
 #[derive(Default)]
@@ -549,9 +552,11 @@ fn material_preview(
     samples: u32,
     pose: Option<far_core::Pose>,
     view: String,
+    device: Option<Device>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
+    let device = device.unwrap_or_default();
     let valid_side = 1..=MAX_PREVIEW_SIDE;
     if !valid_side.contains(&width) || !valid_side.contains(&height) || !(1..=MAX_PREVIEW_SAMPLES).contains(&samples) {
         return Err(format!("Previews need 1 to {MAX_PREVIEW_SIDE} pixels and 1 to {MAX_PREVIEW_SAMPLES} samples"));
@@ -568,8 +573,6 @@ fn material_preview(
     if let Some(previous) = state.previews.lock().unwrap().insert(view, progress.clone()) {
         previous.cancel.store(true, Relaxed);
     }
-    // A displaced ball is a dense mesh; the few shapes of a plain one are quicker without a tree.
-    let kd = (ball.prims.len() >= far_core::preview::BALL_TREE_FROM).then(|| KdTree::build_corrected(&ball));
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
     // While a render runs, half the cores keep the preview from stalling it.
     let threads = if state.rendering.load(Relaxed) { (cores / 2).max(1) } else { cores };
@@ -581,19 +584,55 @@ fn material_preview(
         samples,
         denoise: true,
         max_depth: 6,
-        use_kd: kd.is_some(),
         threads,
         ..Options::default()
     };
     let image = Image::new(width, height);
-    guarded("render the material preview", || {
-        render(&ball, kd.as_ref(), &options, &image, &progress);
-        Ok(())
+    // The graphics card renders the ball as it would the scene: Auto leaves the CPU a material
+    // it would render differently, and a failed GPU preview falls back to the CPU.
+    let gpu = match device {
+        Device::Gpu | Device::Auto => state.gpu.get_or_init(far_gpu::Gpu::new).as_ref().ok(),
+        Device::Cpu => None,
+    };
+    let on_gpu = guarded("render the material preview", || {
+        Ok(gpu.is_some_and(|gpu| ball_on_gpu(gpu, &ball, &options, device == Device::Auto, &image, &progress)))
     })?;
+    if !on_gpu && !progress.cancel.load(Relaxed) {
+        // A displaced ball is a dense mesh; the few shapes of a plain one are quicker without a tree.
+        let kd = (ball.prims.len() >= far_core::preview::BALL_TREE_FROM).then(|| KdTree::build_corrected(&ball));
+        let options = Options { use_kd: kd.is_some(), ..options };
+        guarded("render the material preview", || {
+            render(&ball, kd.as_ref(), &options, &image, &progress);
+            Ok(())
+        })?;
+    }
     if progress.cancel.load(Relaxed) {
         return Err("Replaced by a newer preview".into());
     }
     Ok(Response::new(image.rgba()))
+}
+
+/// Renders the material ball on the graphics card into `image`, denoised as on the CPU. Gives
+/// false, rendering nothing, when the card failed or, with `strict`, leaves out something the
+/// ball uses, so the CPU renders it instead.
+fn ball_on_gpu(gpu: &far_gpu::Gpu, ball: &Scene, options: &Options, strict: bool, image: &Image, progress: &Progress) -> bool {
+    let bvh = far_core::bvh::Bvh::build(ball);
+    if strict && !far_gpu::leaves_out(ball, &bvh).is_empty() {
+        return false;
+    }
+    let cancel = || progress.cancel.load(Relaxed);
+    match gpu.render(ball, &bvh, options, None, None, &cancel, None, &mut |_| {}) {
+        Ok(rendered) => {
+            if !rendered.cancelled {
+                far_core::enhanced::redisplay(&rendered.sums.accumulation(options), ball, options, image, progress);
+            }
+            true
+        }
+        Err(e) => {
+            eprintln!("The GPU material preview failed, so the CPU renders it: {e}");
+            false
+        }
+    }
 }
 
 fn render_environment(config: &EnvironmentConfig, scene: &Scene, state: &AppState) -> Result<Environment, String> {
@@ -638,11 +677,21 @@ fn cancel(state: State<'_, AppState>) {
 
 #[tauri::command(async)]
 fn save_image(name: String, app: AppHandle, state: State<'_, AppState>) -> Result<Option<String>, String> {
-    let dialog = app.dialog().file().add_filter("PNG image", &["png"]).set_file_name(format!("{name}.png"));
+    let dialog = app.dialog().file().add_filter("PNG image", &["png"])
+        .add_filter("OpenEXR: linear light and passes", &["exr"]).set_file_name(format!("{name}.png"));
     let Some(file) = dialog.blocking_save_file() else { return Ok(None) };
     let path = file.into_path().map_err(|e| e.to_string())?;
     let guard = state.last_image.lock().unwrap();
     let image = guard.as_ref().ok_or("There is no finished image to save")?;
+    // An EXR file takes the light behind the image, before tone mapping, and its passes.
+    if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("exr")) {
+        let exposure = image.exposure.ok_or("Only a finished Enhanced render has linear light to save as EXR")?;
+        let kept = state.accumulation.lock().unwrap();
+        let (_, accumulation) = kept.as_ref().ok_or("Only a finished Enhanced render has linear light to save as EXR")?;
+        let options = Options { mode: Mode::Enhanced, exposure, ..Options::default() };
+        guarded("save the EXR file", || accumulation.layers(&options).write_exr(&path))?;
+        return Ok(Some(path.to_string_lossy().into_owned()));
+    }
     let rgb: Vec<u8> = image.rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
     image::save_buffer(&path, &rgb, image.width, image.height, image::ColorType::Rgb8)
         .map_err(|e| e.to_string())?;
@@ -968,7 +1017,7 @@ fn render_scene(
             progress.tiles_done.store(1, Relaxed);
             send_frame().map_err(|e| e.to_string())?;
             *state.last_image.lock().unwrap() =
-                Some(FinishedImage { width: options.width, height: options.height, rgba: image.rgba() });
+                Some(FinishedImage { width: options.width, height: options.height, rgba: image.rgba(), exposure: Some(options.exposure) });
             let denoiser = *progress.denoiser.lock().unwrap();
             *state.accumulation.lock().unwrap() = previous.map(|a| (key.clone(), a));
             return Ok(RenderResult {
@@ -1009,14 +1058,17 @@ fn render_scene(
         )?
     };
     send_frame().map_err(|e| e.to_string())?;
+    let mut linear = false;
     if let (Some(key), Some(accumulation)) = (reuse_key, accumulated) {
         *state.accumulation.lock().unwrap() = Some((key, accumulation));
+        linear = true;
     }
 
     if request.keep {
         let rgba = image.rgba();
-        *state.last_image.lock().unwrap() =
-            Some(FinishedImage { width: options.width, height: options.height, rgba });
+        *state.last_image.lock().unwrap() = Some(FinishedImage {
+            width: options.width, height: options.height, rgba, exposure: linear.then_some(options.exposure),
+        });
     }
     let on_gpu = adapter.is_some();
     let caustics = progress.photon_stats.lock().unwrap().map(|stats| {
@@ -1189,6 +1241,30 @@ mod tests {
         assert_eq!(result.unwrap_err(), "Render failed: photon regression");
         // A later job can still complete normally.
         assert!(render_with_frames(|| {}, Duration::from_millis(1), || {}).is_ok());
+    }
+
+    #[test]
+    fn the_material_ball_renders_on_the_gpu_as_on_the_cpu() {
+        let gpu = match far_gpu::Gpu::new() {
+            Ok(gpu) => gpu,
+            Err(e) => return eprintln!("skipped: {e}"),
+        };
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let scene = Scene::open(&root.join("assets/scenes/cornell-box.far")).unwrap();
+        let config = EnvironmentConfig {
+            path: root.join("assets/environments/studio.hdr").to_string_lossy().into_owned(), rotation: 140.0,
+            ..EnvironmentConfig::default()
+        };
+        let environment = Environment::load(config).unwrap();
+        let ball = far_core::preview::material_ball(&scene, 0, None, Some(environment), &root.join("assets/scenes")).unwrap();
+        let options = Options { mode: Mode::Enhanced, width: 128, height: 128, samples: 64, denoise: true, max_depth: 6, ..Options::default() };
+        let mean = |image: &Image| image.rgba().chunks(4).map(|p| p[..3].iter().map(|&c| c as f32).sum::<f32>()).sum::<f32>() / (3.0 * 128.0 * 128.0);
+        let (on_gpu, progress) = (Image::new(128, 128), Progress::default());
+        assert!(ball_on_gpu(&gpu, &ball, &options, true, &on_gpu, &progress), "the ball fell back to the CPU");
+        let on_cpu = Image::new(128, 128);
+        render(&ball, None, &options, &on_cpu, &Progress::default());
+        let (g, c) = (mean(&on_gpu), mean(&on_cpu));
+        assert!(c > 20.0 && (g - c).abs() < 0.05 * c, "GPU {g} against CPU {c}");
     }
 
     #[test]

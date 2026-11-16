@@ -549,7 +549,7 @@ function MaterialsTab({ props, update }: TabContext) {
   if (!scene) return <Hint>Open a scene to edit its materials.</Hint>;
   return (
     <MaterialEditor key={scene.path} materials={scene.materials} overrides={settings.materialOverrides}
-      scenePath={scene.path} selected={props.selectedMaterial} onSelect={props.onSelectMaterial}
+      scenePath={scene.path} device={settings.device} selected={props.selectedMaterial} onSelect={props.onSelectMaterial}
       onExpand={props.onExpandMaterial} onChange={(materialOverrides) => update({ materialOverrides })} />
   );
 }

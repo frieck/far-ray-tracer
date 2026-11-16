@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { MaterialOverride, Pose } from "./types";
+import type { Device, MaterialOverride, Pose } from "./types";
 
 export interface PreviewRequest {
   id: number;
@@ -12,6 +12,8 @@ export interface PreviewRequest {
   pose: Pose | null;
   /** A newer request with the same view cancels this one, which then rejects. */
   view: "thumbnail" | "stage";
+  /** Where to render, as the Device setting: the graphics card or the CPU. */
+  device: Device;
 }
 
 /** Renders a material on the shader ball with the engine. */

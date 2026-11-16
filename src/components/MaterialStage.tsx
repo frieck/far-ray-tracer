@@ -3,7 +3,7 @@ import { RotateCcw, X } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { drawPreview, renderMaterialBall } from "../materialPreview";
 import { dolly, orbit, pan, viewHalfSize } from "../orbit";
-import type { MaterialOverride, Pose } from "../types";
+import type { Device, MaterialOverride, Pose } from "../types";
 
 /** Most pixels on the longer side of the image. */
 const MAX_SIDE = 1000;
@@ -32,10 +32,12 @@ function framed(pose: Pose, [width, height]: [number, number]): Pose {
  * The material ball rendered large over the image, with the same orbit, pan and zoom as the
  * scene camera. Renders progressively: coarse while moving, refined once the camera stops.
  */
-export function MaterialStage({ id, edit, label, onClose }: {
+export function MaterialStage({ id, edit, label, device, onClose }: {
   id: number;
   edit: MaterialOverride | null;
   label: string;
+  /** Where the ball renders, as the Device setting. */
+  device: Device;
   onClose: () => void;
 }) {
   const stage = useRef<HTMLDivElement>(null);
@@ -71,7 +73,7 @@ export function MaterialStage({ id, edit, label, onClose }: {
     return () => observer.disconnect();
   }, []);
 
-  const key = JSON.stringify([id, edit, pose, size, moving]);
+  const key = JSON.stringify([id, edit, pose, size, moving, device]);
   useEffect(() => {
     if (!pose || !size) return;
     const current = ++request.current;
@@ -81,7 +83,7 @@ export function MaterialStage({ id, edit, label, onClose }: {
       for (const { scale, samples } of passes) {
         const [width, height] = size.map((side) => Math.max(1, Math.round(side * scale)));
         try {
-          const pixels = await renderMaterialBall({ id, edit, width, height, samples, pose: framed(pose, size), view: "stage" });
+          const pixels = await renderMaterialBall({ id, edit, width, height, samples, pose: framed(pose, size), view: "stage", device });
           if (current !== request.current) return;
           drawPreview(canvas.current, pixels);
         } catch {

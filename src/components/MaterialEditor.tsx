@@ -1,7 +1,7 @@
 import { Maximize2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { drawPreview, renderMaterialBall } from "../materialPreview";
-import type { BumpInfo, MaterialOverride, MaterialPreset, SceneMaterial, SurfaceMaterial } from "../types";
+import type { BumpInfo, Device, MaterialOverride, MaterialPreset, SceneMaterial, SurfaceMaterial } from "../types";
 import { Choice, ColorRow, Hint, Row, ScrubRow, Section } from "./props";
 
 const PRESETS: Record<Exclude<MaterialPreset, "custom">, { roughness: number; metallic: number; ior: number }> = {
@@ -42,10 +42,11 @@ function matchingPreset(surface: SurfaceMaterial): MaterialPreset {
 }
 
 /** Renders the material on a shader ball with the engine, again after each edit. */
-function MaterialPreview({ id, edit, scenePath, onExpand }: {
+function MaterialPreview({ id, edit, scenePath, device, onExpand }: {
   id: number;
   edit: MaterialOverride | null;
   scenePath: string;
+  device: Device;
   onExpand: () => void;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -66,7 +67,7 @@ function MaterialPreview({ id, edit, scenePath, onExpand }: {
       for (const { size, samples } of PREVIEW_PASSES) {
         let pixels: ImageData;
         try {
-          pixels = await renderMaterialBall({ id, edit, width: size, height: size, samples, pose: null, view: "thumbnail" });
+          pixels = await renderMaterialBall({ id, edit, width: size, height: size, samples, pose: null, view: "thumbnail", device });
         } catch {
           // A newer edit replaced this preview, or the scene closed.
           if (current === request.current) setBusy(false);
@@ -95,10 +96,12 @@ function MaterialPreview({ id, edit, scenePath, onExpand }: {
   );
 }
 
-export function MaterialEditor({ materials, overrides, scenePath, selected, onSelect, onExpand, onChange }: {
+export function MaterialEditor({ materials, overrides, scenePath, device, selected, onSelect, onExpand, onChange }: {
   materials: SceneMaterial[];
   overrides: MaterialOverride[];
   scenePath: string;
+  /** Where previews render, as the Device setting. */
+  device: Device;
   /** The material being edited; null picks the first. */
   selected: number | null;
   onSelect: (id: number) => void;
@@ -139,7 +142,7 @@ export function MaterialEditor({ materials, overrides, scenePath, selected, onSe
             {materials.map((m) => <option key={m.id} value={String(m.id)}>{m.label}</option>)}
           </Choice>
         </Row>
-        <MaterialPreview id={material.id} edit={edit ?? null} scenePath={scenePath} onExpand={onExpand} />
+        <MaterialPreview id={material.id} edit={edit ?? null} scenePath={scenePath} device={device} onExpand={onExpand} />
       </Section>
       <Section id="material-surface" title="Surface" extra={
         <Choice<MaterialPreset | "original"> small label="Material preset" value={edit?.surface ? current.preset : "original"}
