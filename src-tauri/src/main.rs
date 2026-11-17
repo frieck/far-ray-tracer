@@ -306,6 +306,8 @@ struct SceneInfo {
     /// The file's objects and lights, in its order, for the outliner.
     objects: Vec<ObjectInfo>,
     light_list: Vec<LightInfo>,
+    /// The file's fog, as it writes it, for the Atmosphere settings; None without fog.
+    fog: Option<serde_json::Value>,
     warnings: Vec<String>,
     /// The automatic indirect light settings for this scene's lights.
     bounces: BounceInfo,
@@ -510,6 +512,7 @@ fn open_scene(path: &Path, state: &AppState) -> Result<SceneInfo, String> {
         objects: scene.objects.iter().enumerate().map(|(i, o)| ObjectInfo {
             name: o.name.clone(), kind: o.kind, materials: o.materials.clone().collect(), source: entry(&scene, "objects", i),
         }).collect(),
+        fog: scene.source.as_deref().and_then(|s| s.get("fog")).cloned(),
         light_list: scene.scene_lights.iter().enumerate().map(|(i, l)| LightInfo {
             name: l.name.clone(), kind: l.kind, source: entry(&scene, "lights", i),
         }).collect(),

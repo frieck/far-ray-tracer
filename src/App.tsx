@@ -18,7 +18,7 @@ import { alignView, dolly, orbit, pan, retarget } from "./orbit";
 import { SceneView, type PreviewScene } from "./sceneView";
 import {
   activeComparison, activeMode, buildPreview, buildRequest, defaultSettings, DOF_PRESETS, fNumberFor, focalLength, imageSize,
-  sceneSaveRequest, sceneView, withSavedRenderSettings,
+  sceneSaveRequest, sceneView, withSavedRenderSettings, fogOf,
 } from "./settings";
 import type { Area, EnvironmentConfig, MenuAction, Pose, RenderRequest, SceneInfo, Selection, Settings, Startup } from "./types";
 
@@ -189,7 +189,7 @@ export function App() {
           setSettings((old) => old && ({
             // What another scene hid means nothing here.
             ...withSavedRenderSettings({ ...old, hiddenObjects: [], hiddenLights: [], objectEdits: {}, lightEdits: {},
-              addedObjects: [], addedLights: [], removedObjects: [], removedLights: [] }, info.render),
+              addedObjects: [], addedLights: [], removedObjects: [], removedLights: [], fogEdit: null }, info.render),
             environment: info.environment,
             materialOverrides: [],
             pose: scenePose(info),
@@ -842,6 +842,7 @@ export function App() {
               }}
               selection={selection} onSelect={select}
               onOpenCamera={() => showTab("camera")} onOpenEnvironment={() => showTab("light")}
+              fog={fogOf(scene, settings) !== null} onOpenAtmosphere={() => showTab("light")}
               onEditMaterial={(id) => {
                 setSelectedMaterial(id);
                 showTab("materials");

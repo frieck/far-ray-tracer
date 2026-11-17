@@ -387,6 +387,7 @@ export function defaultSettings(cores: number): Settings {
     addedLights: [],
     removedObjects: [],
     removedLights: [],
+    fogEdit: null,
     denoise: true,
     bloom: false,
     caustics: false,
@@ -542,7 +543,14 @@ export function entryEdits(settings: Settings): import("./types").EntryEdits {
     added_lights: settings.addedLights,
     removed_objects: settings.removedObjects,
     removed_lights: settings.removedLights,
+    ...(settings.fogEdit === false ? { no_fog: true } : settings.fogEdit ? { fog: settings.fogEdit } : {}),
   };
+}
+
+/** The scene's fog as edited, or null when it has none. */
+export function fogOf(scene: import("./types").SceneInfo, settings: Settings): Record<string, unknown> | null {
+  if (settings.fogEdit === false) return null;
+  return settings.fogEdit ?? scene.fog;
 }
 
 /** What the interface changes in the scene, for picking, outlines and the 3D view. */

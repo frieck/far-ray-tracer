@@ -101,6 +101,8 @@ export interface SceneInfo {
   /** The file's objects and lights, in its order: what the outliner lists and hides by index. */
   objects: SceneObjectInfo[];
   light_list: SceneLightInfo[];
+  /** The file's fog, as it writes it; null without fog. */
+  fog: Record<string, unknown> | null;
   warnings: string[];
   /** Automatic indirect light settings for this scene's lights. */
   bounces: Bounces;
@@ -135,6 +137,9 @@ export interface EntryEdits {
   added_lights: Record<string, unknown>[];
   removed_objects: number[];
   removed_lights: number[];
+  /** A fog in place of the file's, or none at all. */
+  fog?: Record<string, unknown>;
+  no_fog?: boolean;
 }
 
 /** What the interface changes in the scene itself, for the commands that look at it. */
@@ -309,6 +314,8 @@ export interface Settings {
   addedLights: Record<string, unknown>[];
   removedObjects: number[];
   removedLights: number[];
+  /** The fog as edited: its fields, false for none, or null for the file's. */
+  fogEdit: Record<string, unknown> | false | null;
   denoise: boolean;
   bloom: boolean;
   caustics: boolean;

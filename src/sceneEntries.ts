@@ -23,8 +23,10 @@ export function lightKind(entry: Entry): string {
 
 /** The file's objects and lights, then the added ones. */
 export function sceneEntries(scene: SceneInfo, settings: Settings): Entries {
+  // The fog fills the scene: it is edited in Light > Atmosphere, not as an object, and as the
+  // engine puts it after every object, the added ones included, it is left out here.
   const objects: SceneObjectInfo[] = [
-    ...scene.objects,
+    ...scene.objects.filter((object) => object.kind !== "fog"),
     ...settings.addedObjects.map((entry) => ({
       name: String(entry.name ?? "Object"), kind: String(entry.type ?? "object"), materials: [], source: entry,
     })),

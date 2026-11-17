@@ -60,6 +60,9 @@ interface OutlinerProps {
   /** Opens the camera's or the environment's settings. */
   onOpenCamera: () => void;
   onOpenEnvironment: () => void;
+  /** The scene has fog, edited in Light > Atmosphere, which this opens. */
+  fog: boolean;
+  onOpenAtmosphere: () => void;
   /** Opens a material in the Materials tab. */
   onEditMaterial: (id: number) => void;
   /** Opens the selection in the Object tab. */
@@ -188,6 +191,7 @@ export function Outliner(props: OutlinerProps) {
             {query === "" && scene.environment && (
               <Item icon={Globe} name={scene.environment.sky ? "Physical sky" : "Environment"} onSelect={props.onOpenEnvironment} />
             )}
+            {query === "" && props.fog && <Item icon={CloudFog} name="Fog" onSelect={props.onOpenAtmosphere} />}
             <Group name="Lights" count={lights.length} open={open("lights")} onFold={() => fold("lights")} />
             {open("lights") && lights.length === 0 && query === "" && (
               <li className="outliner-empty">Only glowing objects and the environment light this scene.</li>

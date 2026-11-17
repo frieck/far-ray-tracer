@@ -1216,6 +1216,13 @@ sphere (`radius`). Where they overlap, their densities add.
 ]
 ```
 
+In the app, **Light > Atmosphere** turns the fog on or off and sets it: **Density**, **Color**,
+**Forward scatter** (the anisotropy), **Thins with height** with its height (the falloff), and
+**Clouds** with their size, coverage and detail (the noise). A scene without fog gets a light
+haze; turning it off and on again brings back the file's. The edits render at once, go into
+undo, and Save Scene writes them into the file's `fog`, its `bounds` kept. The outliner's
+**Fog** row opens these settings. `volume` objects are edited in the Object tab.
+
 - `density` is the chance per scene unit that light meets a particle: after `d` units, light
   keeps `exp(-density × d)`. Rooms look hazy from about 0.02 up; 1 is thick smoke.
 - `color` is the share of that light scattered rather than absorbed: white fog, gray smoke,

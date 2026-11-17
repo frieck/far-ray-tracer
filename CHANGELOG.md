@@ -107,6 +107,10 @@ are not used. The shader is compiled for what
 - A plane shows its rotation, width and depth in the Object tab, from its corners, and 3DS
   meshes take a `rotation`, so both turn with the gizmo and from their fields.
 
+- **Light > Atmosphere** edits the scene's fog: on or off, density, color, forward scatter,
+  thinning with height and clouds; Save Scene writes it into the file. The outliner's Fog row
+  opens it.
+
 - A more compact panel: Render, Render after each change, Open, Save and Export share one
   row, and the tab's title, which the rail already shows, no longer takes one.
 

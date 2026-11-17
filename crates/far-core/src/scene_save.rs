@@ -33,6 +33,11 @@ pub struct EntryEdits {
     pub removed_objects: Vec<usize>,
     #[serde(default)]
     pub removed_lights: Vec<usize>,
+    /// The scene's fog, as the file writes it, in place of the file's; `no_fog` takes it away.
+    #[serde(default)]
+    pub fog: Option<Map<String, Value>>,
+    #[serde(default)]
+    pub no_fog: bool,
 }
 
 /// Fields an edit cannot change.
@@ -43,7 +48,7 @@ impl EntryEdits {
     /// saved, as they are hidden.
     pub fn is_empty(&self) -> bool {
         self.objects.iter().all(|(_, f)| f.is_empty()) && self.lights.iter().all(|(_, f)| f.is_empty())
-            && self.added_objects.is_empty() && self.added_lights.is_empty()
+            && self.added_objects.is_empty() && self.added_lights.is_empty() && self.fog.is_none() && !self.no_fog
     }
 
     /// Whether saving changes which objects and lights the file has, so their indices.
@@ -54,6 +59,11 @@ impl EntryEdits {
     /// Writes the edits into a scene file's root object: the added entries after the file's,
     /// then each edit's fields. Deleted entries stay, so indices hold; see `remove_deleted`.
     pub fn apply(&self, root: &mut Map<String, Value>) {
+        if self.no_fog {
+            root.remove("fog");
+        } else if let Some(fog) = &self.fog {
+            root.insert("fog".into(), Value::Object(fog.clone()));
+        }
         for (list, added) in [("objects", &self.added_objects), ("lights", &self.added_lights)] {
             if added.is_empty() {
                 continue;

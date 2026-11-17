@@ -1104,6 +1104,16 @@ mod outliner_tests {
         assert_eq!(grown.scene_lights.last().map(|l| (l.name.as_str(), l.kind)), Some(("Lamp", "sphere")));
         let new_ball = (0..grown.prims.len()).find(|&p| grown.object_of(p) == Some(count)).unwrap();
         assert!(matches!(&grown.prims[new_ball], Primitive::Sphere(s) if s.radius == 0.25));
+        // Fog can come, change and go.
+        let foggy = EntryEdits { fog: Some(fields(serde_json::json!({"density": 0.05, "color": [0.9, 0.9, 0.9]}))), ..Default::default() };
+        let fogged = scene.edited(Path::new("test.far"), &foggy).unwrap();
+        assert_eq!(fogged.volumes.len(), scene.volumes.len() + 1);
+        assert_eq!(fogged.objects.last().map(|o| o.kind), Some("fog"));
+        let mut clear = foggy.clone();
+        clear.no_fog = true;
+        assert_eq!(scene.edited(Path::new("test.far"), &clear).unwrap().volumes.len(), scene.volumes.len());
+        let thick = EntryEdits { fog: Some(fields(serde_json::json!({"density": -1}))), ..Default::default() };
+        assert!(scene.edited(Path::new("test.far"), &thick).is_err());
         // A deletion alone reads as the file; it is hidden while editing.
         let deleted = EntryEdits { removed_objects: vec![1], ..Default::default() };
         assert!(deleted.is_empty() && deleted.changes_entries());
