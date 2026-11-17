@@ -82,11 +82,13 @@ noise of it.
 - [ ] **Split `trace.wgsl`** (about 2,400 lines, one kernel) into files by subject: sampling,
   BVH and shapes, materials, lights, volumes, caustics, joined before compiling, since WGSL has
   no includes. The compiled shader stays the same. Low.
-- [ ] **Divergence**: measure how much it costs in mixed scenes (glass, metal, volumes and
-  subsurface side by side, against the same scene with one material), and only if it costs
-  most, a wavefront path tracer with kernels per stage and paths sorted by material, as Cycles
-  does; it needs more than wgpu's 8 storage buffers per stage, or buffers merged. Low to
-  measure, high for the wavefront.
+- [ ] **A wide BVH on the GPU**: finding hits takes most of the card's time (see below), and
+  in a SIMD group of 32 only a quarter to a half of the lanes do useful work while it walks
+  the tree. A tree of 4 or 8 children with their boxes in the parent, compressed as in
+  Ylitalo et al.'s CWBVH, reads fewer nodes and runs fewer steps per ray. Medium to high.
+- [ ] **Shadow rays**: each hit casts one toward every light (up to four), one toward the
+  environment and one toward glowing surfaces; in the measures below they cost as much as
+  the path's own rays or more. Measure which of them pay for themselves. Low to measure.
 - [ ] **The displaced ground's march**: most of a showcase render on the GPU (5 s against
   1.2 s without it); a coarser first pass over a max-height mip chain would skip most steps.
   Medium.
@@ -98,6 +100,19 @@ The GPU now ends paths by Russian roulette as PBRT does, by what a path carries 
 roulette's corrections; the CPU weighs by the last surface alone. Both are exact on average; in
 the Window room the GPU keeps some 15% more noise than the CPU at the same passes, and the CPU's
 choice there would cost 40% more time for it.
+
+Divergence, measured on an M4 Max with the shader counting each pixel's segments and BVH
+steps, and with every ray traced twice to time the search for hits. In SIMD groups of 32
+(8 by 4 pixels), 40 to 75% of lanes are busy over a path's segments and 22 to 46% over its
+tree walk. Finding hits takes 66 to 100% of the time in most examples (40% in Christmas,
+15% in Fog clouds, where volumes take the rest), shadow rays alone 25 to 86%. Packing the
+rays still going into full groups, as a wavefront would, leaves tree-walk use where it was
+(28% against 28% in Christmas, 70% against 68% in the Window room): neighbors walk the tree
+differently, not just for different lengths. A wall of columns whose materials alternate
+every 4 pixels, against the same columns grouped by material: plastic and subsurface 20%
+slower with the same work, all four materials 30% slower with 13% more work; in the examples
+shading is 10 to 35% of the time. So a wavefront with paths sorted by material, high effort,
+would win little here; the tree walk is where the time is.
 
 Tried and measured without gain on an M4 Max: triangles split into what finding a hit reads
 and what shading reads (48 bytes against 96 per triangle), and their normals worked out only
