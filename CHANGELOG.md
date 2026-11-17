@@ -107,6 +107,13 @@ are not used. The shader is compiled for what
 - A plane shows its rotation, width and depth in the Object tab, from its corners, and 3DS
   meshes take a `rotation`, so both turn with the gizmo and from their fields.
 
+- A damaged glTF file whose embedded image lacks its type is reported as damaged instead of
+  crashing the app: the glTF library's panic while reading it becomes the file's error.
+
+- A Fog clouds example (Techniques): morning mist that billows in puffs among tree trunks, its
+  fog's clouds on; `tools/atmosphere.py` builds it. Volume objects show the fog's settings,
+  clouds and thinning with height included, in the Object tab.
+
 - **Light > Atmosphere** edits the scene's fog: on or off, density, color, forward scatter,
   thinning with height and clouds; Save Scene writes it into the file. The outliner's Fog row
   opens it.

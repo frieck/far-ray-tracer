@@ -27,7 +27,6 @@ const turned: Field = {
   hint: "Degrees around X, then Y, then Z.",
 };
 const length = (key: string, label: string): Field => ({ type: "number", key, label, default: 1, ...SIZE });
-const color: Field = { type: "color", key: "color", label: "Color", default: [1, 1, 1] };
 const glow: Field = { type: "lightColor", key: "color", label: "Color" };
 const intensity: Field = {
   type: "number", key: "intensity", label: "Intensity", default: 1, min: 0, max: 50, step: 0.05, hard: [0, 1e6],
@@ -49,13 +48,8 @@ export const OBJECT_FIELDS: Record<string, Field[]> = {
   plane: [{ type: "corners", key: "points", label: "Position" }],
   mesh: [at("position"), turned, length("size", "Size")],
   model: [at("position"), turned, { type: "number", key: "scale", label: "Scale", default: 1, min: 0.01, max: 10, step: 0.01, hard: [1e-4, 1e6], log: true }],
-  volume: [
-    at("center"), turned,
-    { type: "number", key: "density", label: "Density", default: 1, min: 0, max: 5, step: 0.01, hard: [0, 1e4] },
-    color,
-    { type: "number", key: "anisotropy", label: "Anisotropy", default: 0, min: -0.95, max: 0.95, step: 0.01, strict: true,
-      hint: "Above 0, light scatters forward, as in haze; below, back." },
-  ],
+  // What a volume is made of is edited as the fog is, below its place.
+  volume: [at("center"), turned],
 };
 
 export const LIGHT_FIELDS: Record<string, Field[]> = {

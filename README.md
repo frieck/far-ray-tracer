@@ -1221,7 +1221,16 @@ In the app, **Light > Atmosphere** turns the fog on or off and sets it: **Densit
 **Clouds** with their size, coverage and detail (the noise). A scene without fog gets a light
 haze; turning it off and on again brings back the file's. The edits render at once, go into
 undo, and Save Scene writes them into the file's `fog`, its `bounds` kept. The outliner's
-**Fog** row opens these settings. `volume` objects are edited in the Object tab.
+**Fog** row opens these settings. A `volume` object shows the same settings in the Object tab,
+below its place and size.
+
+**Clouds** makes the fog billow: fractal noise thins it to nothing in some places and leaves
+it whole in others, in puffs about **Cloud size** across that fill **Coverage** of the space,
+with **Detail** finer layers of puffs for ragged, smoky edges. Light through it comes and goes,
+so beams turn patchy. The gaps thin the fog overall, so it usually wants more density. **File >
+Open Example > Techniques > Fog clouds** shows it: morning mist in puffs among tree trunks, lit
+from the side by a low sun; **Smoke** uses the same noise in two volumes, a chimney's smoke
+and a cloud bank.
 
 - `density` is the chance per scene unit that light meets a particle: after `d` units, light
   keeps `exp(-density × d)`. Rooms look hazy from about 0.02 up; 1 is thick smoke.

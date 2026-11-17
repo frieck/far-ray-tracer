@@ -709,9 +709,53 @@ function ImageTab({ props, update, enhanced }: TabContext) {
 const NEW_FOG = { density: 0.03, color: [0.9, 0.9, 0.9], anisotropy: 0.3 };
 
 /**
- * Fog, smoke or haze filling the scene, as its file's `fog`: how dense it is, its color, how
- * it scatters, whether it thins with height and whether it billows in clouds.
+ * What fog, smoke or haze is made of, as the scene file writes it for the fog and for volume
+ * objects: how dense, its color, how it scatters, whether it thins with height and whether it
+ * billows in clouds. A null in a change takes that field away.
  */
+function MediumRows({ medium, onChange, disabled }: {
+  medium: Record<string, unknown>;
+  onChange: (patch: Record<string, unknown>) => void;
+  disabled?: boolean;
+}) {
+  const number = (key: string, fallback: number) => (typeof medium[key] === "number" ? (medium[key] as number) : fallback);
+  const noise = (medium.noise ?? null) as Record<string, number> | null;
+  const setNoise = (fields: Record<string, number>) => onChange({ noise: { scale: 1, coverage: 0.5, octaves: 4, ...noise, ...fields } });
+  return (
+    <>
+      <ScrubRow label="Density" keywords="fog haze smoke thick" value={number("density", 0.03)} min={0.001} max={10} hard={[0, 1000]}
+        step={0.001} log disabled={disabled}
+        hint="How much light it scatters per scene unit: 0.01 is a faint haze across a room, 0.1 a thick fog, and smoke or clouds take more."
+        onChange={(density) => onChange({ density })} />
+      <ColorRow label="Color" value={(medium.color as Vec3 | undefined) ?? [1, 1, 1]} disabled={disabled} onChange={(color) => onChange({ color })} />
+      <ScrubRow label="Forward scatter" keywords="anisotropy haze glow" value={number("anisotropy", 0)} min={-0.95} max={0.95} step={0.01}
+        strict disabled={disabled}
+        hint="Above 0, light carries on forward, so beams glow toward the sun or a lamp; below, it scatters back."
+        onChange={(anisotropy) => onChange({ anisotropy })} />
+      <CheckRow label="Thins with height" checked={typeof medium.falloff === "number"} disabled={disabled}
+        onChange={(on) => onChange({ falloff: on ? 2 : null })} />
+      {typeof medium.falloff === "number" && (
+        <ScrubRow label="Height" keywords="falloff fog ground" value={medium.falloff as number} min={0.1} max={20} hard={[0.001, 1e6]} step={0.01} log
+          disabled={disabled} hint="Every this many scene units above its bottom, it is about a third as dense: ground fog when small."
+          onChange={(falloff) => onChange({ falloff })} />
+      )}
+      <CheckRow label="Clouds" checked={noise !== null} disabled={disabled}
+        onChange={(on) => onChange({ noise: on ? { scale: 1, coverage: 0.5, octaves: 4 } : null })} />
+      {noise && (
+        <>
+          <ScrubRow label="Cloud size" keywords="noise scale smoke" value={noise.scale ?? 1} min={0.05} max={20} hard={[0.001, 1e6]} step={0.01} log
+            disabled={disabled} hint="How wide each puff is, in scene units." onChange={(scale) => setNoise({ scale })} />
+          <ScrubRow label="Coverage" keywords="noise clouds" value={noise.coverage ?? 0.5} min={0} max={1} step={0.01} strict disabled={disabled}
+            hint="How much of the space the puffs fill; the rest is clear." onChange={(coverage) => setNoise({ coverage })} />
+          <ScrubRow label="Detail" keywords="noise octaves" value={noise.octaves ?? 4} min={1} max={8} step={1} strict disabled={disabled}
+            hint="How many finer layers of puffs it has: more gives ragged, smoky edges." onChange={(octaves) => setNoise({ octaves })} />
+        </>
+      )}
+    </>
+  );
+}
+
+/** The scene's fog, as its file's `fog`. */
 function AtmosphereSection({ settings, scene, update, enhanced }: {
   settings: Settings;
   scene: import("../types").SceneInfo;
@@ -719,48 +763,19 @@ function AtmosphereSection({ settings, scene, update, enhanced }: {
   enhanced: boolean;
 }) {
   const fog = fogOf(scene, settings);
-  const set = (fields: Record<string, unknown>) => {
+  const change = (fields: Record<string, unknown>) => {
     const next: Record<string, unknown> = { ...(fog ?? NEW_FOG), ...fields };
-    for (const [key, value] of Object.entries(next)) if (value === undefined) delete next[key];
+    for (const [key, value] of Object.entries(next)) if (value === null || value === undefined) delete next[key];
     update({ fogEdit: next });
   };
-  const number = (key: string, fallback: number) => (typeof fog?.[key] === "number" ? (fog[key] as number) : fallback);
-  const noise = (fog?.noise ?? null) as Record<string, number> | null;
-  const setNoise = (fields: Record<string, number>) => set({ noise: { scale: 1, coverage: 0.5, octaves: 4, ...noise, ...fields } });
   return (
     <Section id="atmosphere" title="Atmosphere"
       enabled={{
         checked: fog !== null, disabled: !enhanced,
         onChange: (on) => update({ fogEdit: on ? (scene.fog && settings.fogEdit === false ? null : { ...NEW_FOG }) : false }),
       }}>
-      <ScrubRow label="Density" keywords="fog haze smoke thick" value={number("density", 0.03)} min={0.001} max={0.5} hard={[0, 100]}
-        step={0.001} log disabled={!enhanced}
-        hint="How much light it scatters per scene unit: 0.01 is a faint haze across a room, 0.1 a thick fog."
-        onChange={(density) => set({ density })} />
-      <ColorRow label="Color" value={(fog?.color as Vec3 | undefined) ?? [1, 1, 1]} onChange={(color) => set({ color })} />
-      <ScrubRow label="Forward scatter" keywords="anisotropy haze glow" value={number("anisotropy", 0)} min={-0.95} max={0.95} step={0.01}
-        strict disabled={!enhanced}
-        hint="Above 0, light carries on forward, so beams glow toward the sun or a lamp; below, it scatters back."
-        onChange={(anisotropy) => set({ anisotropy })} />
-      <CheckRow label="Thins with height" checked={typeof fog?.falloff === "number"} disabled={!enhanced}
-        onChange={(on) => set({ falloff: on ? 2 : undefined })} />
-      {typeof fog?.falloff === "number" && (
-        <ScrubRow label="Height" keywords="falloff fog ground" value={fog.falloff as number} min={0.1} max={20} hard={[0.001, 1e6]} step={0.01} log
-          hint="Every this many scene units above its bottom, it is a third as dense: ground fog when small."
-          onChange={(falloff) => set({ falloff })} />
-      )}
-      <CheckRow label="Clouds" checked={noise !== null} disabled={!enhanced} onChange={(on) => set({ noise: on ? { scale: 1, coverage: 0.5, octaves: 4 } : undefined })} />
-      {noise && (
-        <>
-          <ScrubRow label="Cloud size" keywords="noise scale smoke" value={noise.scale ?? 1} min={0.05} max={20} hard={[0.001, 1e6]} step={0.01} log
-            onChange={(scale) => setNoise({ scale })} />
-          <ScrubRow label="Coverage" keywords="noise clouds" value={noise.coverage ?? 0.5} min={0} max={1} step={0.01} strict
-            hint="How much of the space the clouds fill." onChange={(coverage) => setNoise({ coverage })} />
-          <ScrubRow label="Detail" keywords="noise octaves" value={noise.octaves ?? 4} min={1} max={8} step={1} strict
-            onChange={(octaves) => setNoise({ octaves })} />
-        </>
-      )}
-      <Hint>It fills the box around the objects, or the bounds the scene file gives it, and shows light shafts from lamps and the sun. Saved into the scene file with Save Scene.</Hint>
+      <MediumRows medium={fog ?? NEW_FOG} onChange={change} disabled={!enhanced} />
+      <Hint>It fills the box around the objects, or the bounds the scene file gives it, and shows light shafts from lamps and the sun. Saved into the scene file with Save Scene. Techniques &gt; Fog clouds shows clouds in it.</Hint>
     </Section>
   );
 }
@@ -794,11 +809,15 @@ function ObjectTab({ props, update }: TabContext) {
           Reset
         </button>
       }>
-      {fields.length === 0 && <Hint>Fog fills the scene; its density and color are in the scene file.</Hint>}
+      {fields.length === 0 && <Hint>Nothing to place here.</Hint>}
       {fields.map((field) => field.type === "lightColor" && light
         ? <LightColorRows key={field.key} light={entry} edits={edits}
             onChange={(patch) => update(withEntryEdit(settings, true, selection.id, patch))} />
         : <FieldRow key={field.key} field={field} source={entry.source} edits={edits} onChange={set} />)}
+      {!light && entry.kind === "volume" && (
+        // What the volume is made of, as the fog: the same settings.
+        <MediumRows medium={{ ...entry.source, ...edits }} onChange={(patch) => update(withEntryEdit(settings, false, selection.id, patch))} />
+      )}
       <Hint>Saved into the scene file with Save Scene.</Hint>
     </Section>
   );

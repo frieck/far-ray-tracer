@@ -99,7 +99,10 @@ pub(crate) fn load(path: &Path) -> Result<Model, String> {
             let text = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
             parse_obj(&String::from_utf8_lossy(&text), path.parent().unwrap_or(Path::new(".")))
         }
-        "gltf" | "glb" => load_gltf(path)?,
+        // The glTF library unwraps some fields a damaged file can lack, such as an embedded
+        // image's type: its panic becomes this file's error, not the program's crash.
+        "gltf" | "glb" => std::panic::catch_unwind(|| load_gltf(path))
+            .map_err(|_| format!("{}: the glTF file is damaged", path.display()))??,
         _ => return Err(format!("{}: models load from .obj, .gltf or .glb files", path.display())),
     };
     if model.triangles.is_empty() {

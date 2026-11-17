@@ -6,6 +6,8 @@
 - sun-and-sky.far: a courtyard lit only by the physical sky and sun, late in the afternoon.
 - smoke.far: a column of smoke and a low cloud bank from noise, and ground fog that thins with
   height, lit by a low sun.
+- fog-clouds.far: a grove in morning mist whose fog billows in clouds (the fog's `noise`, Light >
+  Atmosphere > Clouds in the app), so the low sun's shafts between the trunks come and go.
 
 The IES files are made up here, with the shapes of common fixtures, so no manufacturer's data
 is copied. They go in assets/scene-data/ies.
@@ -131,9 +133,36 @@ def smoke():
     }
 
 
+def fog_clouds():
+    # Trunks at fixed, scattered places, so the scene is the same each time it is built.
+    trunks = []
+    for i, (x, z, r) in enumerate([(-4.6, 3.0, 0.26), (-2.2, 5.5, 0.22), (0.6, 4.2, 0.3), (2.9, 6.8, 0.24), (4.8, 3.6, 0.28),
+                                   (-5.8, 9.5, 0.2), (-3.4, 12.0, 0.26), (-0.8, 9.0, 0.22), (1.9, 11.5, 0.27), (4.2, 10.2, 0.2),
+                                   (6.4, 13.5, 0.24), (-1.9, 16.0, 0.25), (0.9, 18.5, 0.2), (3.6, 16.8, 0.22)]):
+        trunks.append({"type": "cylinder", "center": [x, 4, z], "radius": r, "height": 8,
+                       "material": plastic([0.28 + 0.03 * (i % 3), 0.22, 0.17], 0.85)})
+    return {
+        "camera": {"position": [0, 1.7, -6], "target": [0, 2.6, 6], "zoom": 0.8},
+        # A morning sun from the side, so each puff has a lit side and a shaded one.
+        "environment": {"sky": {"elevation": 20, "azimuth": 110, "turbidity": 3}, "intensity": 1, "visible": True},
+        # Mist that billows in clouds about 2.5 units across, filling under two fifths of the
+        # space, so the sky shows between them; it begins behind the sphere.
+        "fog": {"density": 1.0, "color": [0.95, 0.95, 0.97], "anisotropy": 0.65,
+                "noise": {"scale": 2.5, "octaves": 5, "coverage": 0.38, "seed": 5},
+                "bounds": [[-14, 0, 2], [14, 8, 26]]},
+        "lights": [],
+        "objects": [
+            {"type": "ground", "position": [0, 0, 0], "material": plastic([0.26, 0.3, 0.2], 0.9)},
+            *trunks,
+            {"type": "sphere", "center": [-0.8, 0.55, 1.2], "radius": 0.55, "material": plastic([0.8, 0.78, 0.72], 0.5)},
+        ],
+    }
+
+
 def main():
     ies_files()
-    for name, scene in [("spotlights", spotlights()), ("sun-and-sky", sun_and_sky()), ("smoke", smoke())]:
+    for name, scene in [("spotlights", spotlights()), ("sun-and-sky", sun_and_sky()), ("smoke", smoke()),
+                        ("fog-clouds", fog_clouds())]:
         path = SCENES / f"{name}.far"
         path.write_text(json.dumps(scene, indent=1) + "\n", encoding="utf-8")
         print(f"{path}: {len(scene['objects'])} objects")
