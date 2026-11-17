@@ -16,6 +16,7 @@ export interface Entries {
 /** What kind of light an entry is, as the engine names it. */
 export function lightKind(entry: Entry): string {
   if (entry.type === "rectangle") return "rectangle";
+  if (entry.type === "portal") return "portal";
   if (entry.type !== "sphere") return "point";
   if (typeof entry.ies === "string") return "ies";
   return typeof entry.spot_angle === "number" ? "spot" : "sphere";
@@ -47,7 +48,7 @@ function freeName(base: string, taken: string[]): string {
 const round = (v: number) => Math.round(v * 1000) / 1000;
 const at = (p: Vec3, dx = 0, dy = 0, dz = 0): Vec3 => [round(p[0] + dx), round(p[1] + dy), round(p[2] + dz)];
 
-export type NewKind = "sphere" | "box" | "cylinder" | "cone" | "torus" | "plane" | "rectangle" | "bulb" | "spot";
+export type NewKind = "sphere" | "box" | "cylinder" | "cone" | "torus" | "plane" | "rectangle" | "bulb" | "spot" | "portal";
 
 export const NEW_OBJECTS: { kind: NewKind; label: string }[] = [
   { kind: "sphere", label: "Sphere" },
@@ -61,6 +62,7 @@ export const NEW_LIGHTS: { kind: NewKind; label: string }[] = [
   { kind: "rectangle", label: "Area light" },
   { kind: "bulb", label: "Sphere light" },
   { kind: "spot", label: "Spotlight" },
+  { kind: "portal", label: "Light portal" },
 ];
 
 /**
@@ -93,6 +95,10 @@ export function newEntry(kind: NewKind, pose: Pose, entries: Entries): { light: 
     // A panel facing down, as edge_u × edge_v gives its front.
     case "rectangle":
       return { light: true, entry: { type: "rectangle", name, position: above, edge_u: [2 * s, 0, 0], edge_v: [0, 0, 2 * s], intensity: 5 } };
+    // A window's opening facing the camera's target, its size; the environment's light is
+    // drawn through it, so put it in a window.
+    case "portal":
+      return { light: true, entry: { type: "portal", name, position: at(target, 0, s, 0), edge_u: [2 * s, 0, 0], edge_v: [0, 1.5 * s, 0] } };
     case "bulb": return { light: true, entry: { type: "sphere", name, position: above, radius: round(0.15 * s), intensity: 120 } };
     case "spot":
       return {

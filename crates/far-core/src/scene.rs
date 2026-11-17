@@ -299,7 +299,8 @@ pub struct SceneObject {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SceneLight {
     pub name: String,
-    /// point (`Scene::lights`), rectangle (`rect_lights`), or sphere, spot or ies (`bulbs`).
+    /// point (`Scene::lights`), rectangle (`rect_lights`), portal (`portals`), or sphere, spot
+    /// or ies (`bulbs`).
     pub kind: &'static str,
     /// Its index in that list.
     pub index: usize,
@@ -332,6 +333,8 @@ pub struct Scene {
     pub bulbs: Vec<Sphere>,
     /// For each bulb, its spotlight cone or IES distribution; None shines evenly all around.
     pub bulb_profiles: Vec<Option<crate::light_profile::Profile>>,
+    /// Openings the environment's light comes in through, as windows; see `portal`.
+    pub portals: Vec<crate::portal::Portal>,
     /// The scene file as read, which saving edits and writes back. None for `.3ds`-era scenes
     /// built another way.
     pub source: Option<std::sync::Arc<serde_json::Value>>,
@@ -505,14 +508,16 @@ impl Scene {
             let keep_points: Vec<bool> = (0..self.lights.len()).map(|i| !gone(&["point"], i)).collect();
             let keep_rects: Vec<bool> = (0..self.rect_lights.len()).map(|i| !gone(&["rectangle"], i)).collect();
             let keep_bulbs: Vec<bool> = (0..self.bulbs.len()).map(|i| !gone(&["sphere", "spot", "ies"], i)).collect();
+            let keep_portals: Vec<bool> = (0..self.portals.len()).map(|i| !gone(&["portal"], i)).collect();
+            scene.portals = filter(&self.portals, &keep_portals);
             scene.lights = filter(&self.lights, &keep_points);
             scene.rect_lights = filter(&self.rect_lights, &keep_rects);
             scene.bulbs = filter(&self.bulbs, &keep_bulbs);
             scene.bulb_profiles = filter(&self.bulb_profiles, &keep_bulbs);
             // The lights left keep their names, numbered anew in their lists.
-            let mut counts = [0usize; 3];
+            let mut counts = [0usize; 4];
             scene.scene_lights = self.scene_lights.iter().enumerate().filter(|(k, _)| !lights.contains(k)).map(|(_, l)| {
-                let list = match l.kind { "point" => 0, "rectangle" => 1, _ => 2 };
+                let list = match l.kind { "point" => 0, "rectangle" => 1, "portal" => 3, _ => 2 };
                 counts[list] += 1;
                 SceneLight { index: counts[list] - 1, ..l.clone() }
             }).collect();
@@ -549,6 +554,7 @@ impl Scene {
             rect_lights: Vec::new(),
             bulbs: Vec::new(),
             bulb_profiles: Vec::new(),
+            portals: Vec::new(),
             source: None,
             material_sources: Vec::new(),
             render_settings: None,

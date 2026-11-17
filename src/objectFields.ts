@@ -55,6 +55,8 @@ export const OBJECT_FIELDS: Record<string, Field[]> = {
 export const LIGHT_FIELDS: Record<string, Field[]> = {
   point: [at("position"), length("radius", "Radius"), glow],
   rectangle: [at("position"), glow, intensity, { type: "edge", key: "edge_u", label: "Width" }, { type: "edge", key: "edge_v", label: "Height" }],
+  // A window's opening the environment's light is drawn through: no light of its own.
+  portal: [at("position"), { type: "edge", key: "edge_u", label: "Width" }, { type: "edge", key: "edge_v", label: "Height" }],
   sphere: [at("position"), length("radius", "Radius"), glow, intensity],
   spot: [
     at("position"), length("radius", "Radius"), glow, intensity, aimed,

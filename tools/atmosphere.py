@@ -6,6 +6,8 @@
 - sun-and-sky.far: a courtyard lit only by the physical sky and sun, late in the afternoon.
 - smoke.far: a column of smoke and a low cloud bank from noise, and ground fog that thins with
   height, lit by a low sun.
+- window-room.far: a closed room lit only by the sky through one window, the hard case for
+  environment light indoors, with a light portal in the window that guides it.
 - fog-clouds.far: a grove in morning mist whose fog billows in clouds (the fog's `noise`, Light >
   Atmosphere > Clouds in the app), so the low sun's shafts between the trunks come and go.
 
@@ -159,10 +161,49 @@ def fog_clouds():
     }
 
 
+def window_room(portal=True):
+    # A room 6 wide, 3 high and 7 deep, inside x -3..3, y 0..3, z -3..4, walls 0.2 thick; the
+    # window in the left wall, 1.8 wide and 1.4 high, from z 0.4 to 2.2 and y 0.9 to 2.3.
+    wall = plastic([0.82, 0.8, 0.76], 0.9)
+    t = 0.2
+    left = [
+        {"type": "box", "center": [-3 - t / 2, 0.45, 0.5], "size": [t, 0.9, 7.4], "material": wall},
+        {"type": "box", "center": [-3 - t / 2, 2.65, 0.5], "size": [t, 0.7, 7.4], "material": wall},
+        {"type": "box", "center": [-3 - t / 2, 1.6, -1.4], "size": [t, 1.4, 3.6], "material": wall},
+        {"type": "box", "center": [-3 - t / 2, 1.6, 3.2], "size": [t, 1.4, 2.0], "material": wall},
+    ]
+    shell = [
+        {"type": "box", "center": [0, -t / 2, 0.5], "size": [6.4, t, 7.4], "material": plastic([0.55, 0.42, 0.3], 0.7)},
+        {"type": "box", "center": [0, 3 + t / 2, 0.5], "size": [6.4, t, 7.4], "material": wall},
+        {"type": "box", "center": [3 + t / 2, 1.5, 0.5], "size": [t, 3.4, 7.4], "material": wall},
+        {"type": "box", "center": [0, 1.5, 4 + t / 2], "size": [6.4, 3.4, t], "material": wall},
+        {"type": "box", "center": [0, 1.5, -3 - t / 2], "size": [6.4, 3.4, t], "material": wall},
+    ]
+    furniture = [
+        {"type": "box", "center": [1.6, 0.4, 2.6], "size": [2.2, 0.8, 1.0], "material": plastic([0.25, 0.4, 0.6], 0.8)},
+        {"type": "cylinder", "center": [-0.6, 0.35, 1.6], "radius": 0.6, "height": 0.7, "material": plastic([0.7, 0.55, 0.35], 0.5)},
+        {"type": "sphere", "center": [-0.6, 0.95, 1.6], "radius": 0.25,
+         "material": {"color": [0.95, 0.95, 0.97], "surface": {"preset": "metal", "roughness": 0.2}}},
+    ]
+    lights = []
+    if portal:
+        # The window's opening, as a portal: environment light is drawn through it.
+        lights.append({"type": "portal", "position": [-3 - t / 2, 1.6, 1.3], "edge_u": [0, 0, 1.8], "edge_v": [0, 1.4, 0]})
+    return {
+        "camera": {"position": [2.4, 1.5, -2.6], "target": [-1.0, 1.2, 2.0], "zoom": 0.75},
+        # A bright afternoon sky; the sun is behind the house, so only the sky comes in.
+        "environment": {"sky": {"elevation": 35, "azimuth": 20, "turbidity": 2.5}, "intensity": 1, "visible": True},
+        "lights": lights,
+        "objects": [*left, *shell, *furniture],
+        # Indoors, lit by a window: three stops brighter than the sky outside needs.
+        "render": {"app": 1, "exposureMode": "simple", "brightness": 3, "toneMapping": "agx", "denoise": True},
+    }
+
+
 def main():
     ies_files()
     for name, scene in [("spotlights", spotlights()), ("sun-and-sky", sun_and_sky()), ("smoke", smoke()),
-                        ("fog-clouds", fog_clouds())]:
+                        ("fog-clouds", fog_clouds()), ("window-room", window_room())]:
         path = SCENES / f"{name}.far"
         path.write_text(json.dumps(scene, indent=1) + "\n", encoding="utf-8")
         print(f"{path}: {len(scene['objects'])} objects")

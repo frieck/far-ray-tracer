@@ -539,6 +539,34 @@ Clicking a name selects the light, to move it with the gizmo or edit the rest in
 **Object** tab, where **Color by** switches between a color and a temperature, keeping the
 color as it looks. Solo leaves glowing objects and the environment on.
 
+#### Light portals
+
+Indoors, light from the environment comes in through windows, and most directions toward the
+sky meet a wall. Drawing them by the sky's brightness alone then wastes most shadow rays, and a
+room lit by a window stays noisy. A portal, as in V-Ray and Cycles, marks a window's opening:
+
+```json
+{ "type": "portal", "position": [-3.1, 1.6, 1.3], "edge_u": [0, 0, 1.8], "edge_v": [0, 1.4, 0] }
+```
+
+It lies among the lights but gives no light and blocks nothing; it is never seen. Half the
+environment's samples go through a portal and half follow the environment's brightness, which
+still finds the sun and light that comes in elsewhere; reflections that reach the sky are
+weighed by the same mixture (MIS), so nothing is counted twice and the image keeps its
+brightness. It works on the CPU and the GPU. **File > Open Example > Techniques > Window room**
+is a room lit only by the sky through one window, with a portal in it:
+
+| 320 × 200, error against 4096 passes | 16 passes | 64 passes | 1024 passes |
+| --- | --- | --- | --- |
+| CPU, no portal | 184% | 92% | 21% |
+| CPU, portal | 66% | 36% | 8% |
+| GPU, no portal / portal | | 114% / 55% | |
+
+About 2.6 times less noise on the CPU, so some 7 times fewer passes for the same image. In the
+app, **+ > Light portal** adds one where the camera looks; move and size it to fill the window's
+opening, from inside or out. Portals sit in the outliner with the lights, not in the Lights
+panel, and hiding one turns it off.
+
 #### Spotlights and IES profiles
 
 A spherical light becomes a spotlight with a cone, or a real fixture with an IES file:

@@ -133,7 +133,7 @@ export function transformOf(kind: string, source: Record<string, unknown>, edits
     canRotate = true;
     const normal = (value("normal") as Vec3 | undefined) ?? [0, 1, 0];
     turn = (m) => ({ normal: roundAll(times(m, normal)) });
-  } else if (light && kind === "rectangle") {
+  } else if (light && (kind === "rectangle" || kind === "portal")) {
     const [u, v] = [value("edge_u"), value("edge_v")] as (Vec3 | undefined)[];
     if (u && v) {
       canRotate = true;
@@ -159,7 +159,7 @@ export function transformOf(kind: string, source: Record<string, unknown>, edits
         points: points.map((p) => roundAll(p.map((c, k) => (axis === null || axis === k ? center[k] + (c - center[k]) * f : c)) as Vec3)),
       });
     }
-  } else if (light && kind === "rectangle") {
+  } else if (light && (kind === "rectangle" || kind === "portal")) {
     const [u, v] = [value("edge_u"), value("edge_v")] as (Vec3 | undefined)[];
     if (u && v) {
       canScale = true;

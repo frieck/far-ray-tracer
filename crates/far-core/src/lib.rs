@@ -20,6 +20,7 @@ pub mod kdtree;
 pub mod layers;
 pub mod lens;
 pub mod lut;
+pub mod portal;
 pub mod mesh_light;
 pub mod light_profile;
 pub mod mesh3ds;

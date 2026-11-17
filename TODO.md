@@ -82,8 +82,12 @@ Visual gain for the effort:
 - [ ] **Light cache for indirect light**: V-Ray's default; indirect light read from a
   precomputed map instead of long paths, removing most of its noise. Slightly approximate.
   High.
+- [x] **Light portals**: windows that guide the environment's light indoors, CPU and GPU.
 - [ ] **Path guiding**: learn where light comes from and send bounces there, as Cycles does.
-  High.
+  Measure first with Techniques > Window room whether portals leave enough noise to need it;
+  it would help the CPU only, as in Cycles. High.
+- [ ] **GPU noise in the Window room**: the GPU is noisier than the CPU there and some 2%
+  darker, with or without a portal; find which sampling differs. Medium.
 - [x] **AI denoiser (Intel Open Image Denoise)**: the one in Blender and V-Ray; a large jump
   in quality at few samples. Low to medium, but needs a native library.
 - [ ] **Bidirectional path tracing or progressive photon mapping**: hard caustics, such as

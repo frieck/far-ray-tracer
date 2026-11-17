@@ -42,6 +42,8 @@ struct Params {
     x0: u32, y0: u32, x1: u32, y1: u32,
     // Glowing triangles sampled as lights, in `lights` after the `light_count` lamps.
     mesh_lights: u32,
+    // Light portals, in `lights` after the glowing triangles: kind 5.
+    portals: u32,
 }
 
 struct Node { low: vec3<f32>, first: u32, high: vec3<f32>, count: u32 }
@@ -719,7 +721,10 @@ fn direct(pos: vec3<f32>, m: Material, albedo: vec3<f32>, spec: f32, n: vec3<f32
     }
     if (HAS_ENV && params.has_env != 0u && (m.kind == 1u || any(albedo > vec3<f32>(0.0)))) {
         let e = rand2();
-        let drawn = sample_environment(e.x, e.y);
+        // The portal's pick only when there are portals, so other scenes keep their samples.
+        var w = 0.0;
+        if (params.portals > 0u) { w = rand(); }
+        let drawn = draw_environment(pos, e, w);
         diffuse_only = photons_carry && params.photon_env != 0u;
         if (drawn.w > 0.0) {
             // No 2008 highlight from the sky, as on the CPU.
@@ -1684,6 +1689,53 @@ fn texture_tangent(prim: u32, m: Material, pos: vec3<f32>, normal: vec3<f32>) ->
     return normalize(along_u);
 }
 
+// Light portals, as far-core's portal: the share of environment samples drawn through them.
+const PORTAL_SHARE: f32 = 0.5;
+
+// The density portal `p` gives the direction `d` origin `origin`: 0 when it misses.
+fn portal_pdf(p: Light, origin: vec3<f32>, d: vec3<f32>) -> f32 {
+    let facing = dot(d, p.normal);
+    if (abs(facing) < 1e-6) { return 0.0; }
+    let t = dot(p.pos - origin, p.normal) / facing;
+    if (t <= 0.0) { return 0.0; }
+    let local = origin + d * t - p.pos;
+    let a = dot(local, p.u) / dot(p.u, p.u);
+    let b = dot(local, p.v) / dot(p.v, p.v);
+    if (abs(a) > 0.5 || abs(b) > 0.5) { return 0.0; }
+    return t * t / (p.area * abs(facing));
+}
+
+// The density of drawing the environment's direction `d` origin `origin`: through the portals and
+// by the environment's light, mixed as far-core's portal::pdf does.
+fn environment_light_pdf(origin: vec3<f32>, d: vec3<f32>) -> f32 {
+    if (params.portals == 0u) { return environment_pdf(d); }
+    let first = params.light_count + params.mesh_lights;
+    var through = 0.0;
+    for (var i = 0u; i < params.portals; i++) { through += portal_pdf(lights[first + i], origin, d); }
+    return PORTAL_SHARE * through / f32(params.portals) + (1.0 - PORTAL_SHARE) * environment_pdf(d);
+}
+
+// A direction toward the environment origin `origin`, and the mixture's density in w: through a
+// portal half the time when there are portals, as far-core's portal::sample.
+fn draw_environment(origin: vec3<f32>, e: vec2<f32>, w: f32) -> vec4<f32> {
+    if (params.portals == 0u) { return sample_environment(e.x, e.y); }
+    var d: vec3<f32>;
+    if (w < PORTAL_SHARE) {
+        let pick = min(u32(w / PORTAL_SHARE * f32(params.portals)), params.portals - 1u);
+        let p = lights[params.light_count + params.mesh_lights + pick];
+        let spot = p.pos + p.u * (e.x - 0.5) + p.v * (e.y - 0.5);
+        let delta = spot - origin;
+        let distance = length(delta);
+        if (distance <= 0.0) { return vec4<f32>(0.0); }
+        d = delta / distance;
+    } else {
+        let drawn = sample_environment(e.x, e.y);
+        if (drawn.w <= 0.0) { return vec4<f32>(0.0); }
+        d = drawn.xyz;
+    }
+    return vec4<f32>(d, environment_light_pdf(origin, d));
+}
+
 // The environment's density for direction `d`, as the CPU's EnvironmentMap::pdf.
 fn environment_pdf(d: vec3<f32>) -> f32 {
     let local = env_rotate(d, -1.0);
@@ -2003,7 +2055,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
             let carried = photons_carry && params.photon_env != 0u;
             if (sees_lights && !carried && params.caustics_only == 0u && (segment > 0u || params.env_visible != 0u)) {
                 var weight = 1.0;
-                if (HAS_GGX && mis_pdf > 0.0 && params.has_env != 0u) { weight = power_weight(mis_pdf, environment_pdf(d)); }
+                if (HAS_GGX && mis_pdf > 0.0 && params.has_env != 0u) { weight = power_weight(mis_pdf, environment_light_pdf(mis_from, d)); }
                 light += capped(through * environment(d) * weight, rebound);
             }
             break;

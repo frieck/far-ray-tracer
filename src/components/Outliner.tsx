@@ -1,6 +1,6 @@
 import {
   Box, Camera, ChevronRight, Circle, Cloud, CloudFog, Cone, Cylinder, Eye, EyeOff, Flashlight, Globe, Grid2x2, Lamp, Lightbulb,
-  Copy, Move3d, Package, Plus, RectangleHorizontal, ScanEye, Search, Sparkles, Square, Sun, Torus, Trash2, Triangle, X, type LucideIcon,
+  AppWindow, Copy, Move3d, Package, Plus, RectangleHorizontal, ScanEye, Search, Sparkles, Square, Sun, Torus, Trash2, Triangle, X, type LucideIcon,
 } from "lucide-react";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { NEW_LIGHTS, NEW_OBJECTS, type NewKind } from "../sceneEntries";
@@ -28,6 +28,7 @@ const LIGHT_KINDS: Record<string, { icon: LucideIcon; label: string }> = {
   sphere: { icon: Sun, label: "Sphere light" },
   spot: { icon: Flashlight, label: "Spotlight" },
   ies: { icon: Lamp, label: "IES light" },
+  portal: { icon: AppWindow, label: "Light portal" },
 };
 
 /** Groups of the list that can be folded, remembered between runs. */

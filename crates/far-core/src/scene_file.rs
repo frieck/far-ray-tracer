@@ -83,6 +83,13 @@ fn default_spot_blend() -> f32 { 0.15 }
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum AreaLightFile {
+    /// A window's opening the environment's light comes in through: it gives no light of its
+    /// own and blocks nothing; see `portal`.
+    Portal {
+        position: Point,
+        edge_u: Point,
+        edge_v: Point,
+    },
     Rectangle {
         position: Point,
         edge_u: Point,
@@ -422,6 +429,7 @@ impl LightFile {
         match self {
             LightFile::Sphere(_) => "point",
             LightFile::Area(AreaLightFile::Rectangle { .. }) => "rectangle",
+            LightFile::Area(AreaLightFile::Portal { .. }) => "portal",
             LightFile::Area(AreaLightFile::Sphere { ies: Some(_), .. }) => "ies",
             LightFile::Area(AreaLightFile::Sphere { spot_angle: Some(_), .. }) => "spot",
             LightFile::Area(AreaLightFile::Sphere { .. }) => "sphere",
@@ -593,7 +601,8 @@ impl Scene {
         }).collect();
         let light_kinds: Vec<&'static str> = file.lights.iter().map(LightFile::kind).collect();
         let light_defaults = default_names(&light_kinds, |kind| match kind {
-            "point" => "Point light", "rectangle" => "Area light", "spot" => "Spotlight", "ies" => "IES light", _ => "Sphere light",
+            "point" => "Point light", "rectangle" => "Area light", "spot" => "Spotlight", "ies" => "IES light", "portal" => "Portal",
+            _ => "Sphere light",
         });
 
         let (mut meshes, mut planes, mut others) = (Vec::new(), Vec::new(), Vec::new());
@@ -671,10 +680,18 @@ impl Scene {
         }
         for (number, light) in file.lights.into_iter().enumerate() {
             let kind = light_kinds[number];
-            let index = match kind { "point" => scene.lights.len(), "rectangle" => scene.rect_lights.len(), _ => scene.bulbs.len() };
+            let index = match kind {
+                "point" => scene.lights.len(), "rectangle" => scene.rect_lights.len(), "portal" => scene.portals.len(), _ => scene.bulbs.len(),
+            };
             let name = names.lights.get(number).cloned().flatten().unwrap_or_else(|| light_defaults[number].clone());
             scene.scene_lights.push(crate::scene::SceneLight { name, kind, index });
             match light {
+                LightFile::Area(AreaLightFile::Portal { position, edge_u, edge_v }) => {
+                    let portal = crate::portal::Portal::new(vector(position), vector(edge_u), vector(edge_v))
+                        .filter(|_| position.iter().all(|v| v.is_finite()))
+                        .ok_or("A portal needs a finite position and two edges that span an area")?;
+                    scene.portals.push(portal);
+                }
                 LightFile::Sphere(light) => {
                     if light.radius < 0.0 { return Err("A light radius must be nonnegative".into()); }
                     let color = warmed(light.color, light.temperature)?;

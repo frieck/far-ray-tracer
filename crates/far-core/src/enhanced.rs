@@ -809,7 +809,9 @@ impl<'a> Tracer<'a> {
         if !self.fixed {
             if let Some(environment) = scene.environment.as_ref().filter(|e| e.active()) {
                 let (u, v) = self.pair();
-                let (l, radiance, pdf) = environment.sample(u, v);
+                // The portal's pick only when there are portals, so other scenes keep their samples.
+                let w = if scene.portals.is_empty() { 0.0 } else { self.random() };
+                let (l, radiance, pdf) = crate::portal::sample(&scene.portals, environment, a.pos, u, v, w);
                 let cosine = l.dot(a.original);
                 if cosine > 0. && l.dot(a.geo) > 0. && pdf > 0. {
                     let transmitted = self.visibility(a.pos + a.geo * SURFACE_OFFSET, l, MAX_DISTANCE);
@@ -936,7 +938,8 @@ impl<'a> Tracer<'a> {
                 let mut mis = 1.0;
                 if distance == MAX_DISTANCE {
                     if let Some(environment) = self.ctx.scene.environment.as_ref().filter(|e| e.active()) {
-                        mis = crate::ggx::power_weight(chance * ggx.pdf(a.smooth, -d, dir, a.color, a.m.ior), environment.pdf(dir));
+                        let light_pdf = crate::portal::pdf(&self.ctx.scene.portals, environment, ray.o, dir);
+                        mis = crate::ggx::power_weight(chance * ggx.pdf(a.smooth, -d, dir, a.color, a.m.ior), light_pdf);
                     }
                 }
                 let scene = self.ctx.scene;
@@ -1375,7 +1378,8 @@ impl<'a> Tracer<'a> {
         }
         if let Some(environment) = scene.environment.as_ref().filter(|e| e.active()) {
             let (u, v) = self.pair();
-            let (l, radiance, pdf) = environment.sample(u, v);
+            let w = if scene.portals.is_empty() { 0.0 } else { self.random() };
+            let (l, radiance, pdf) = crate::portal::sample(&scene.portals, environment, pos, u, v, w);
             if pdf > 0.0 {
                 let transmitted = self.visibility(pos, l, MAX_DISTANCE);
                 acc += radiance * transmitted * (volume::phase(l.dot(d), g) / pdf);

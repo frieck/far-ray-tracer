@@ -28,7 +28,7 @@ fn every_scene_opens_without_warnings() {
         // Every primitive and volume belongs to one of the file's objects, for the outliner.
         assert!((0..scene.prims.len()).all(|p| scene.object_of(p).is_some()), "{}", path.display());
         assert_eq!(scene.volume_objects.len(), scene.volumes.len(), "{}", path.display());
-        let lights = scene.lights.len() + scene.rect_lights.len() + scene.bulbs.len();
+        let lights = scene.lights.len() + scene.rect_lights.len() + scene.bulbs.len() + scene.portals.len();
         assert_eq!(scene.scene_lights.len(), lights, "{}", path.display());
     }
 }

@@ -48,6 +48,10 @@ struct Params {
     x0: u32, y0: u32, x1: u32, y1: u32,
     /// Glowing triangles sampled as lights, in `lights` after the `light_count` lamps.
     mesh_lights: u32,
+    /// Light portals, in `lights` after the glowing triangles; see far-core's portal.
+    portals: u32,
+    /// The shader rounds a uniform's size up to 16 bytes.
+    pad: [u32; 3],
 }
 
 #[repr(C)]
@@ -131,8 +135,9 @@ struct Packed {
     texels: Vec<u32>,
     materials: Vec<Material>,
     lights: Vec<Light>,
-    /// How many of `lights`, at the end, are glowing triangles.
+    /// How many of `lights` are glowing triangles, after the lamps, and portals, after them.
     mesh_lights: u32,
+    portals: u32,
     /// What the scene uses that this renderer leaves out.
     notes: Vec<String>,
 }
@@ -361,7 +366,15 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
         texels.extend(table.iter().map(|v| v.to_bits()));
     }
     let mesh_lights = mesh.lights.len() as u32;
-    Packed { nodes, refs, tris, shapes, plane_count, volume_first, volume_count, texels, materials, lights, mesh_lights, notes }
+    // Portals last: kind 5, a window the environment is drawn through.
+    for portal in &scene.portals {
+        lights.push(Light {
+            pos: portal.center.array(), kind: 5, u: portal.edge_u.array(), v: portal.edge_v.array(),
+            normal: portal.normal.array(), area: portal.area, ..Zeroable::zeroed()
+        });
+    }
+    let portals = scene.portals.len() as u32;
+    Packed { nodes, refs, tris, shapes, plane_count, volume_first, volume_count, texels, materials, lights, mesh_lights, portals, notes }
 }
 
 /// What the scene uses that the GPU renderer leaves out, as `Rendered::notes` reports it.
@@ -577,7 +590,7 @@ impl Gpu {
             dx: (view.right * (2.0 * view.half_width / w as f32)).array(), pass_index: 0,
             dy: (view.up * (-2.0 * view.half_height / h as f32)).array(),
             max_bounces: if op.indirect && !caustics_only { bounces.max } else { 0 },
-            plane_count: packed.plane_count, light_count: packed.lights.len() as u32 - packed.mesh_lights,
+            plane_count: packed.plane_count, light_count: packed.lights.len() as u32 - packed.mesh_lights - packed.portals,
             has_env: environment.is_some() as u32,
             env_visible: environment.is_some_and(|e| e.config.visible) as u32,
             // The CPU's compensation for 2008 lights, which add up with no falloff.
@@ -603,7 +616,7 @@ impl Gpu {
             photon_buckets: 0, bucket_first: 0, photon_first: 0, photon_radius: op.caustic_radius.max(1e-3),
             caustic_strength: op.caustic_strength, caustics_only: caustics_only as u32,
             photon_env: photons.is_some_and(|map| map.carries_environment()) as u32,
-            x0: area.x0, y0: area.y0, x1: area.x1, y1: area.y1, mesh_lights: packed.mesh_lights,
+            x0: area.x0, y0: area.y0, x1: area.x1, y1: area.y1, mesh_lights: packed.mesh_lights, portals: packed.portals, pad: [0; 3],
         };
 
         // The environment's sampling tables go after the texels, as float bits.

@@ -80,7 +80,8 @@ export function LightsPanel({ lights, removed, edits, hidden, selection, onEdit,
       {lights.length === 0 && <Hint>This scene has no lights: glowing objects and the environment light it.</Hint>}
       <ul className="light-list" aria-label="Lights">
         {lights.map((light, id) => {
-          if (removed.includes(id)) return null;
+          // A portal gives no light of its own: it is in the outliner and the Object tab.
+          if (removed.includes(id) || light.kind === "portal") return null;
           const on = !hidden.includes(id);
           const { kelvin, rgb } = colorOf(light, edits[id]);
           const intensity = entryValue("intensity", light.source, edits[id]);

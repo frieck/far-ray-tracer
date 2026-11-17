@@ -1,0 +1,334 @@
+{
+ "camera": {
+  "position": [
+   2.4,
+   1.5,
+   -2.6
+  ],
+  "target": [
+   -1.0,
+   1.2,
+   2.0
+  ],
+  "zoom": 0.75
+ },
+ "environment": {
+  "sky": {
+   "elevation": 35,
+   "azimuth": 20,
+   "turbidity": 2.5
+  },
+  "intensity": 1,
+  "visible": true
+ },
+ "lights": [
+  {
+   "type": "portal",
+   "position": [
+    -3.1,
+    1.6,
+    1.3
+   ],
+   "edge_u": [
+    0,
+    0,
+    1.8
+   ],
+   "edge_v": [
+    0,
+    1.4,
+    0
+   ]
+  }
+ ],
+ "objects": [
+  {
+   "type": "box",
+   "center": [
+    -3.1,
+    0.45,
+    0.5
+   ],
+   "size": [
+    0.2,
+    0.9,
+    7.4
+   ],
+   "material": {
+    "color": [
+     0.82,
+     0.8,
+     0.76
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.9
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -3.1,
+    2.65,
+    0.5
+   ],
+   "size": [
+    0.2,
+    0.7,
+    7.4
+   ],
+   "material": {
+    "color": [
+     0.82,
+     0.8,
+     0.76
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.9
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -3.1,
+    1.6,
+    -1.4
+   ],
+   "size": [
+    0.2,
+    1.4,
+    3.6
+   ],
+   "material": {
+    "color": [
+     0.82,
+     0.8,
+     0.76
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.9
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    -3.1,
+    1.6,
+    3.2
+   ],
+   "size": [
+    0.2,
+    1.4,
+    2.0
+   ],
+   "material": {
+    "color": [
+     0.82,
+     0.8,
+     0.76
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.9
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    0,
+    -0.1,
+    0.5
+   ],
+   "size": [
+    6.4,
+    0.2,
+    7.4
+   ],
+   "material": {
+    "color": [
+     0.55,
+     0.42,
+     0.3
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.7
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    0,
+    3.1,
+    0.5
+   ],
+   "size": [
+    6.4,
+    0.2,
+    7.4
+   ],
+   "material": {
+    "color": [
+     0.82,
+     0.8,
+     0.76
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.9
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    3.1,
+    1.5,
+    0.5
+   ],
+   "size": [
+    0.2,
+    3.4,
+    7.4
+   ],
+   "material": {
+    "color": [
+     0.82,
+     0.8,
+     0.76
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.9
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    0,
+    1.5,
+    4.1
+   ],
+   "size": [
+    6.4,
+    3.4,
+    0.2
+   ],
+   "material": {
+    "color": [
+     0.82,
+     0.8,
+     0.76
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.9
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    0,
+    1.5,
+    -3.1
+   ],
+   "size": [
+    6.4,
+    3.4,
+    0.2
+   ],
+   "material": {
+    "color": [
+     0.82,
+     0.8,
+     0.76
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.9
+    }
+   }
+  },
+  {
+   "type": "box",
+   "center": [
+    1.6,
+    0.4,
+    2.6
+   ],
+   "size": [
+    2.2,
+    0.8,
+    1.0
+   ],
+   "material": {
+    "color": [
+     0.25,
+     0.4,
+     0.6
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.8
+    }
+   }
+  },
+  {
+   "type": "cylinder",
+   "center": [
+    -0.6,
+    0.35,
+    1.6
+   ],
+   "radius": 0.6,
+   "height": 0.7,
+   "material": {
+    "color": [
+     0.7,
+     0.55,
+     0.35
+    ],
+    "surface": {
+     "preset": "plastic",
+     "roughness": 0.5
+    }
+   }
+  },
+  {
+   "type": "sphere",
+   "center": [
+    -0.6,
+    0.95,
+    1.6
+   ],
+   "radius": 0.25,
+   "material": {
+    "color": [
+     0.95,
+     0.95,
+     0.97
+    ],
+    "surface": {
+     "preset": "metal",
+     "roughness": 0.2
+    }
+   }
+  }
+ ],
+ "render": {
+  "app": 1,
+  "exposureMode": "simple",
+  "brightness": 3,
+  "toneMapping": "agx",
+  "denoise": true
+ }
+}
