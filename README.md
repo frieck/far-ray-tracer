@@ -162,7 +162,7 @@ are restored when it opens again. Everything else in the file stays as it was. A
 to another folder keeps finding its images, models and IES files: the paths are rewritten, and
 a `data_folder` field points at the folder of images and meshes. The examples and models
 opened on their own are saved as new files. Edits to the materials inside an OBJ or glTF file
-are not saved, since they live in the model file; the status bar says so.
+are saved in the scene, in the model's `parts`; the model file stays as it is.
 
 ## Command line
 
@@ -428,6 +428,11 @@ a `model` object places one:
   then moved by `position`. With `size` instead, it is scaled so its largest side measures
   `size`, and its lowest point, centered, rests on `position`.
 - Without `material`, it keeps its own materials; a `material` replaces all of them.
+- `parts` changes some of its own materials, by name, as the app's material editor does:
+  `"parts": {"Glass": {"surface": {"preset": "glass", "roughness": 0.1}}}`. Each takes a
+  `surface`, an `emission` (`color` and `strength`) and a `bump_strength`. A model's parts
+  are its file's material names, a repeated name followed by a number ("Glass 2"), and
+  `default` for triangles without one; the outliner lists them.
 - Normals from the file shade the surface; without them, normals are smoothed up to a 60°
   crease. Polygons are split into triangles. Triangles with no area are skipped.
 
@@ -675,7 +680,8 @@ Objects groups, or find things by name with the magnifier.
 - **Select** an object or light from the list, or click it in the image (a click that does
   not move the camera). Its kind and materials show at the bottom of the outliner; a material
   opens in the Materials tab, which also follows the selection. `Esc` clears it. The camera
-  and environment rows open their settings.
+  and environment rows open their settings. A model with several materials unfolds to list
+  them as its parts; a part opens its material, and the model moves as one.
 - **See** the selection on the image: a blue outline and a light fill where it shows, and a
   fainter outline where something in front hides it, as Blender's X-ray does; a thin white
   outline marks what the pointer is over. The outline lies over the image, on the render as on
@@ -729,13 +735,15 @@ at once and renders wait; letting go writes it as an edit, and the scene is rend
 
 **Adding, duplicating and deleting.** The **+** at the top of the outliner adds a sphere, box,
 cylinder, cone, torus or plane where the camera looks, or an area light, sphere light or
-spotlight above it, sized to how far the camera is and selected at once. **Duplicate** at the
+spotlight above it, sized to how far the camera is and selected at once. **Model…** adds an OBJ
+or glTF file, resting where the camera looks; the scene keeps its path relative to itself
+once saved. **Duplicate** at the
 bottom of the outliner copies the selection as edited, beside it; **⇧D** copies it in place and
 moves the copy with the mouse until a click, as Blender does. **Delete** there, or the Delete
 key, deletes it. New entries go after the file's own, so no index the edits use changes, and
 deleted ones are hidden until Save Scene drops them from the file; then the app opens the saved
-file again. An added object's material can be edited once the scene is saved and open again.
-Undo covers all of it.
+file again. An added object's materials can be edited at once, and are saved with it. Undo
+covers all of it.
 
 **Undo.** **Edit > Undo** (⌘Z) and **Redo** (⇧⌘Z) step through edits: to objects and lights,
 what is hidden, materials, the environment and the render and camera settings. A change

@@ -131,6 +131,12 @@ are not used. The shader is compiled for what
 - A more compact panel: Render, Render after each change, Open, Save and Export share one
   row, and the tab's title, which the rail already shows, no longer takes one.
 
+- Models can be added to the open scene from the outliner's **+ > Model…**, an OBJ or glTF file
+  resting where the camera looks. A model with several materials lists them as parts under it
+  in the outliner, each opening its material; edits to them are saved in the scene, by part
+  name, in the model's new `parts` field, and the model file stays as it is. Added objects'
+  materials can be edited before the scene is saved.
+
 - Camera presets in **Camera > Camera**: Digital, 35 mm color film, Black-and-white film,
   Cinema camera, Phone and Vintage set the sensor, grain, halation, vignetting, chromatic
   aberration, tone mapping and look together, keeping the framing and the exposure. The
@@ -154,6 +160,9 @@ are not used. The shader is compiled for what
 
 ### Fixed
 
+- After adding a plane in the app, edits to other objects' materials could land on the wrong
+  material: the scene read with the added object numbered materials anew. Added objects are now
+  read after the file's own.
 - GPU renders of rooms lost light that rebounds many times: about 2% in Techniques > Window
   room and up to a quarter in a closed white room, with more noise than on the CPU. Russian
   roulette chose which paths go on by the light they carried before its own corrections, so

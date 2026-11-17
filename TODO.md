@@ -7,8 +7,8 @@ the end.
 ## Suggested order
 
 1. **More for lights** (Scene editing): finishes editing lights in the app. Medium.
-2. **Outliner, next** (Scene editing): a model's parts, renaming, and editing an added
-   object's material. Medium.
+2. **Outliner, next** (Scene editing): renaming, and a model's parts by its file's objects.
+   Medium.
 3. **Light groups** (Image): change each light's strength and color after rendering. High.
 4. Then measure before choosing between **path guiding** and a **light cache** (Quality).
 
@@ -32,8 +32,9 @@ the end.
 - [ ] **More for lights**: aiming a light at the selected object, changing a light's kind
   (sphere, spot, area), loading an IES file, and lights invisible to the camera, as in V-Ray.
   Medium.
-- [ ] **Outliner, next**: a model's parts as children; renaming; editing an added object's
-  material before the scene is saved and opened again. Medium.
+- [ ] **Outliner, next**: renaming; a model's parts by the objects and nodes its file names,
+  not only by material, each one hidden on its own; folders of the user's to group objects,
+  hidden and selected together. Medium.
 - [ ] **Displacement height in the material editor**: edits now read the scene again, so the
   rebuilt mesh and tree come with them; the editor needs the fields and a preview that waits
   for the rebuild. Low to medium.
@@ -162,7 +163,8 @@ experimental.
   and camera presets, EXR passes.
 - **Scene editing**: the outliner with selection, outline and hiding; editing objects and
   lights; move, rotate and scale gizmos with G, R and S; undo and redo; the Lights panel with
-  color temperature; adding, duplicating and deleting; fog in Light > Atmosphere.
+  color temperature; adding, duplicating and deleting; fog in Light > Atmosphere; adding
+  models, with their parts' materials edited and saved in the scene.
 - **Quality and speed**: Sobol sampling, adaptive sampling (command line), Open Image Denoise.
 - **GPU**: a WGSL path tracer on Metal, DirectX 12 and Vulkan, the scene in flat buffers with
   a BVH, parity with the CPU for every example, previews, the material ball and final renders

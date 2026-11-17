@@ -403,6 +403,10 @@ enum ObjectFile {
         size: Option<f32>,
         #[serde(default)]
         material: Option<MaterialFile>,
+        /// Edits to the materials inside the model file, by part name (see
+        /// `SceneObject::parts`), as the app's material editor makes them.
+        #[serde(default)]
+        parts: std::collections::BTreeMap<String, crate::surface::MaterialEdit>,
     },
 }
 
@@ -511,10 +515,16 @@ impl Scene {
     /// The scene a `.far` file's JSON describes, its paths relative to `path`: how a scene is
     /// read again with edits to its objects and lights; see `Scene::edited`.
     pub fn from_source(source: serde_json::Value, path: &Path) -> Result<Self, String> {
+        Self::from_source_adding(source, path, usize::MAX)
+    }
+
+    /// The same, with the objects from `added` on read after all of the others, so the
+    /// materials of those before keep the numbers they had without them.
+    pub(crate) fn from_source_adding(source: serde_json::Value, path: &Path, added: usize) -> Result<Self, String> {
         let mut read = source.clone();
         let names = take_names(&mut read);
         let file: SceneFile = serde_json::from_value(read).map_err(|e| format!("{}: {e}", path.display()))?;
-        let mut scene = Self::from_file(file, path, None, names)?;
+        let mut scene = Self::from_file(file, path, None, names, added)?;
         scene.source = Some(std::sync::Arc::new(source));
         Ok(scene)
     }
@@ -560,12 +570,15 @@ impl Scene {
             ],
         });
         let file: SceneFile = serde_json::from_value(json.clone()).map_err(|e| e.to_string())?;
-        let mut scene = Self::from_file(file, path, Some(model), Names::default())?;
+        let mut scene = Self::from_file(file, path, Some(model), Names::default(), usize::MAX)?;
         scene.source = Some(std::sync::Arc::new(json));
         Ok(scene)
     }
 
-    fn from_file(file: SceneFile, path: &Path, mut preloaded: Option<crate::model::Model>, names: Names) -> Result<Self, String> {
+    /// Reads `file`; objects from index `added` on, those the app added, are read after the
+    /// file's own, so adding one never renumbers the materials of the others.
+    fn from_file(file: SceneFile, path: &Path, mut preloaded: Option<crate::model::Model>, names: Names, added: usize)
+        -> Result<Self, String> {
         if let Some(format) = file.format.filter(|&f| f > FORMAT) {
             return Err(format!("{}: written by a newer Far Ray Tracer (scene format {format}; this version reads up to {FORMAT}). Update the app to open it.", path.display()));
         }
@@ -597,7 +610,7 @@ impl Scene {
                     .file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| defaults[i].clone()),
                 _ => defaults[i].clone(),
             });
-            crate::scene::SceneObject { name, kind: kinds[i], materials: 0..0 }
+            crate::scene::SceneObject { name, kind: kinds[i], materials: 0..0, parts: Vec::new() }
         }).collect();
         let light_kinds: Vec<&'static str> = file.lights.iter().map(LightFile::kind).collect();
         let light_defaults = default_names(&light_kinds, |kind| match kind {
@@ -605,78 +618,96 @@ impl Scene {
             _ => "Sphere light",
         });
 
-        let (mut meshes, mut planes, mut others) = (Vec::new(), Vec::new(), Vec::new());
+        // Meshes, planes, then the rest, as the original reads them; the app's added objects
+        // after all of those, the same way.
+        let mut passes = [(Vec::new(), Vec::new(), Vec::new()), (Vec::new(), Vec::new(), Vec::new())];
         for (index, object) in file.objects.into_iter().enumerate() {
+            let (meshes, planes, others) = &mut passes[usize::from(index >= added)];
             match object {
                 ObjectFile::Mesh { .. } | ObjectFile::Model { .. } => meshes.push((index, object)),
                 ObjectFile::Plane { .. } => planes.push((index, object)),
                 _ => others.push((index, object)),
             }
         }
+        for (meshes, planes, others) in passes {
 
-        for (index, object) in meshes {
-            let before = scene.materials.len();
-            let (prims, volumes) = (scene.prims.len(), scene.volumes.len());
-            let source = if matches!(object, ObjectFile::Model { .. }) {
-                crate::scene::MaterialSource::ModelPart(index)
-            } else {
-                crate::scene::MaterialSource::Object(index)
-            };
-            scene.note_sources(before, crate::scene::MaterialSource::None);
-            match object {
-                ObjectFile::Mesh { file, position, size, rotation, material } => {
-                    if rotation.iter().any(|v| !v.is_finite()) {
-                        return Err(format!("Mesh {file}: rotation must be finite"));
+            for (index, object) in meshes {
+                let before = scene.materials.len();
+                let (prims, volumes) = (scene.prims.len(), scene.volumes.len());
+                let source = if matches!(object, ObjectFile::Model { .. }) {
+                    crate::scene::MaterialSource::ModelPart(index)
+                } else {
+                    crate::scene::MaterialSource::Object(index)
+                };
+                scene.note_sources(before, crate::scene::MaterialSource::None);
+                match object {
+                    ObjectFile::Mesh { file, position, size, rotation, material } => {
+                        if rotation.iter().any(|v| !v.is_finite()) {
+                            return Err(format!("Mesh {file}: rotation must be finite"));
+                        }
+                        let material = scene.add_material(material.into(), dir.as_deref(), &mut cache);
+                        scene.add_mesh(&file, dir.as_deref(), material, vector(position), size, rotation);
                     }
-                    let material = scene.add_material(material.into(), dir.as_deref(), &mut cache);
-                    scene.add_mesh(&file, dir.as_deref(), material, vector(position), size, rotation);
-                }
-                ObjectFile::Model { file, position, rotation, scale, size, material } => {
-                    let valid = scale.is_finite() && scale > 0.0 && size.is_none_or(|s| s.is_finite() && s > 0.0)
-                        && rotation.iter().chain(&position).all(|v| v.is_finite());
-                    if !valid {
-                        return Err(format!("Model {file}: scale and size must be positive, and position and rotation finite"));
+                    ObjectFile::Model { file, position, rotation, scale, size, material, parts: edits } => {
+                        let valid = scale.is_finite() && scale > 0.0 && size.is_none_or(|s| s.is_finite() && s > 0.0)
+                            && rotation.iter().chain(&position).all(|v| v.is_finite());
+                        if !valid {
+                            return Err(format!("Model {file}: scale and size must be positive, and position and rotation finite"));
+                        }
+                        let found = model_path(path, dir.as_deref(), &file);
+                        let model = match preloaded.take().map(Ok).or_else(|| found.as_deref().map(crate::model::load)) {
+                            Some(Ok(model)) => model,
+                            Some(Err(e)) => { scene.warnings.push(format!("Skipped model {e}")); continue; }
+                            None => { scene.warnings.push(format!("Skipped model {file}: file not found")); continue; }
+                        };
+                        // A material set on the model itself is the object's; the model's own are parts.
+                        let material = material.map(|m| scene.add_material(m.into(), dir.as_deref(), &mut cache));
+                        scene.note_sources(before, crate::scene::MaterialSource::Object(index));
+                        let place = crate::model::Placement { position: vector(position), rotation, scale, size };
+                        let first = scene.materials.len();
+                        let names = material.is_none().then(|| crate::model::part_names(&model));
+                        scene.add_model(model, place, material, dir.as_deref(), &mut cache, &file);
+                        scene.note_sources(first, source);
+                        if let Some(names) = names {
+                            for (name, edit) in &edits {
+                                let Some(part) = names.iter().position(|n| n == name) else {
+                                    scene.warnings.push(format!("Model {file}: no part named {name}"));
+                                    continue;
+                                };
+                                if let Err(e) = edit.apply(&mut scene.materials[first + part]) {
+                                    scene.warnings.push(format!("Model {file}, part {name}: {e}"));
+                                }
+                            }
+                            scene.objects[index].parts = names;
+                        }
                     }
-                    let found = model_path(path, dir.as_deref(), &file);
-                    let model = match preloaded.take().map(Ok).or_else(|| found.as_deref().map(crate::model::load)) {
-                        Some(Ok(model)) => model,
-                        Some(Err(e)) => { scene.warnings.push(format!("Skipped model {e}")); continue; }
-                        None => { scene.warnings.push(format!("Skipped model {file}: file not found")); continue; }
-                    };
-                    // A material set on the model itself is the object's; the model's own are parts.
-                    let material = material.map(|m| scene.add_material(m.into(), dir.as_deref(), &mut cache));
-                    scene.note_sources(before, crate::scene::MaterialSource::Object(index));
-                    let place = crate::model::Placement { position: vector(position), rotation, scale, size };
-                    let parts = scene.materials.len();
-                    scene.add_model(model, place, material, dir.as_deref(), &mut cache, &file);
-                    scene.note_sources(parts, source);
+                    _ => {}
                 }
-                _ => {}
+                scene.note_sources(before, source);
+                scene.claim(index, prims, volumes, before);
             }
-            scene.note_sources(before, source);
-            scene.claim(index, prims, volumes, before);
-        }
-        for (index, object) in planes {
-            let ObjectFile::Plane { points, material } = object else { continue };
-            let before = scene.materials.len();
-            let (prims, volumes) = (scene.prims.len(), scene.volumes.len());
-            let material = scene.add_material(material.into(), dir.as_deref(), &mut cache);
-            scene.note_sources(before, crate::scene::MaterialSource::Object(index));
-            let base = scene.vertices.len() as u32;
-            scene.vertices.extend(points.map(|p| Vertex::new(vector(p))));
-            for ids in [[base, base + 1, base + 3], [base + 1, base + 2, base + 3]] {
-                let t = Triangle::new(&mut scene.vertices, ids, material);
-                scene.corner_normals.push([t.n; 3]);
-                scene.prims.push(Primitive::Triangle(t));
+            for (index, object) in planes {
+                let ObjectFile::Plane { points, material } = object else { continue };
+                let before = scene.materials.len();
+                let (prims, volumes) = (scene.prims.len(), scene.volumes.len());
+                let material = scene.add_material(material.into(), dir.as_deref(), &mut cache);
+                scene.note_sources(before, crate::scene::MaterialSource::Object(index));
+                let base = scene.vertices.len() as u32;
+                scene.vertices.extend(points.map(|p| Vertex::new(vector(p))));
+                for ids in [[base, base + 1, base + 3], [base + 1, base + 2, base + 3]] {
+                    let t = Triangle::new(&mut scene.vertices, ids, material);
+                    scene.corner_normals.push([t.n; 3]);
+                    scene.prims.push(Primitive::Triangle(t));
+                }
+                scene.claim(index, prims, volumes, before);
             }
-            scene.claim(index, prims, volumes, before);
-        }
-        for (index, object) in others {
-            let before = scene.materials.len();
-            let (prims, volumes) = (scene.prims.len(), scene.volumes.len());
-            scene.add_analytic(object, dir.as_deref(), &mut cache)?;
-            scene.note_sources(before, crate::scene::MaterialSource::Object(index));
-            scene.claim(index, prims, volumes, before);
+            for (index, object) in others {
+                let before = scene.materials.len();
+                let (prims, volumes) = (scene.prims.len(), scene.volumes.len());
+                scene.add_analytic(object, dir.as_deref(), &mut cache)?;
+                scene.note_sources(before, crate::scene::MaterialSource::Object(index));
+                scene.claim(index, prims, volumes, before);
+            }
         }
         for (number, light) in file.lights.into_iter().enumerate() {
             let kind = light_kinds[number];
@@ -764,7 +795,7 @@ impl Scene {
             let axes = [Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)];
             let (prims, volumes, materials) = (scene.prims.len(), scene.volumes.len(), scene.materials.len());
             scene.volumes.push(fog.volume(crate::volume::Shape::Box { center: low + half, axes, half })?);
-            scene.objects.push(crate::scene::SceneObject { name: "Fog".into(), kind: "fog", materials: 0..0 });
+            scene.objects.push(crate::scene::SceneObject { name: "Fog".into(), kind: "fog", materials: 0..0, parts: Vec::new() });
             scene.claim(scene.objects.len() - 1, prims, volumes, materials);
         }
         Ok(scene)

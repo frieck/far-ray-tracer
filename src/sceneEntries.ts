@@ -3,7 +3,7 @@
  * here, each at a fixed index; deleted ones are marked, hidden until Save Scene drops them.
  * New entries are made here, sized to the view, and duplicates copy an entry as edited.
  */
-import type { Pose, SceneInfo, SceneLightInfo, SceneObjectInfo, Settings } from "./types";
+import type { AddedObjects, Pose, SceneInfo, SceneLightInfo, SceneObjectInfo, Settings } from "./types";
 
 type Vec3 = [number, number, number];
 type Entry = Record<string, unknown>;
@@ -22,15 +22,22 @@ export function lightKind(entry: Entry): string {
   return typeof entry.spot_angle === "number" ? "spot" : "sphere";
 }
 
-/** The file's objects and lights, then the added ones. */
-export function sceneEntries(scene: SceneInfo, settings: Settings): Entries {
+/**
+ * The file's objects and lights, then the added ones; `added` gives the materials and parts
+ * of those, as the scene read with them has them, once it is read.
+ */
+export function sceneEntries(scene: SceneInfo, settings: Settings, added?: AddedObjects): Entries {
   // The fog fills the scene: it is edited in Light > Atmosphere, not as an object, and as the
   // engine puts it after every object, the added ones included, it is left out here.
   const objects: SceneObjectInfo[] = [
     ...scene.objects.filter((object) => object.kind !== "fog"),
-    ...settings.addedObjects.map((entry) => ({
-      name: String(entry.name ?? "Object"), kind: String(entry.type ?? "object"), materials: [], source: entry,
-    })),
+    ...settings.addedObjects.map((entry, k) => {
+      const read = added?.objects[k];
+      return {
+        name: String(entry.name ?? "Object"), kind: String(entry.type ?? "object"),
+        materials: read?.materials ?? [], parts: read?.parts ?? [], source: entry,
+      };
+    }),
   ];
   const lights: SceneLightInfo[] = [
     ...scene.light_list,
@@ -106,6 +113,18 @@ export function newEntry(kind: NewKind, pose: Pose, entries: Entries): { light: 
         entry: { type: "sphere", name, position: above, radius: round(0.15 * s), intensity: 120, direction: [0, -1, 0], spot_angle: 40 },
       };
   }
+}
+
+/**
+ * A model from the file at `path`, resting where the camera looks and sized, as new objects
+ * are, to how far away that is.
+ */
+export function newModel(path: string, pose: Pose, entries: Entries): Entry {
+  const target = pose.target as Vec3;
+  const distance = Math.hypot(...pose.target.map((v, k) => v - pose.position[k]));
+  const stem = path.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, "") || "Model";
+  const names = [...entries.objects, ...entries.lights].map((e) => e.name);
+  return { type: "model", name: freeName(stem, names), file: path, position: at(target), size: round(Math.max(0.01, distance * 0.36)) };
 }
 
 /** An entry with its edits written in, a null taking a field away. */

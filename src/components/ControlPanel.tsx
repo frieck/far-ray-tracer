@@ -41,6 +41,7 @@ import {
   fogOf,
   LOOKS,
   lutLabel,
+  entryEdits,
 } from "../settings";
 import type {
   Bounces, DofPreset, CausticPreset, CausticReport, Comparison, Device, ExposureMode, Mode, Quality, Resolution, Settings, SkyConfig, SunTime, ToneMapping,
@@ -883,7 +884,8 @@ function MaterialsTab({ props, update }: TabContext) {
   if (!scene) return <Hint>Open a scene to edit its materials.</Hint>;
   return (
     <MaterialEditor key={scene.path} materials={scene.materials} overrides={settings.materialOverrides}
-      scenePath={scene.path} device={settings.device} selected={props.selectedMaterial} onSelect={props.onSelectMaterial}
+      scenePath={scene.path} device={settings.device} entries={settings.addedObjects.length > 0 ? entryEdits(settings) : null}
+      selected={props.selectedMaterial} onSelect={props.onSelectMaterial}
       onExpand={props.onExpandMaterial} onChange={(materialOverrides) => update({ materialOverrides })} />
   );
 }

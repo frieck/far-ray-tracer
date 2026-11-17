@@ -51,6 +51,8 @@ interface OutlinerProps {
   removedObjects: number[];
   removedLights: number[];
   onAdd: (kind: NewKind) => void;
+  /** Picks an OBJ or glTF file and adds it as a model. */
+  onAddModel: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
   hiddenObjects: number[];
@@ -115,6 +117,13 @@ export function Outliner(props: OutlinerProps) {
   const objects = props.objects.map((object, id) => ({ object, id }))
     .filter(({ object, id }) => !props.removedObjects.includes(id) && shows(object.name));
   const [adding, setAdding] = useState(false);
+  // Models whose parts are listed under them, by index; folded at first.
+  const [unfolded, setUnfolded] = useState<number[]>([]);
+  /** A model's parts that something in it is made of, with their materials. */
+  const partsOf = (object: SceneObjectInfo) => object.kind !== "model" ? [] : object.parts.flatMap((name, k) => {
+    const material = scene.materials.find((m) => m.id === object.materials[k]);
+    return material ? [{ name, material }] : [];
+  });
   const open = (group: string) => query !== "" || !folded.includes(group);
   const fold = (group: string) => setFolded(folded.includes(group) ? folded.filter((g) => g !== group) : [...folded, group]);
 
@@ -151,6 +160,14 @@ export function Outliner(props: OutlinerProps) {
                         {label}
                       </button>
                     ))}
+                    {title === "Objects" && (
+                      <button type="button" role="menuitem" title="An OBJ or glTF file, with its materials" onClick={() => {
+                        setAdding(false);
+                        props.onAddModel();
+                      }}>
+                        Model…
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -205,14 +222,32 @@ export function Outliner(props: OutlinerProps) {
                 onToggle={() => props.onHiddenChange(hiddenObjects, toggle(hiddenLights, id))} />
             ))}
             <Group name="Objects" count={objects.length} open={open("objects")} onFold={() => fold("objects")} />
-            {open("objects") && objects.map(({ object, id }) => (
-              <Item key={`o${id}`} icon={OBJECT_KINDS[object.kind]?.icon ?? Triangle} name={object.name}
-                glow={glows(object.materials)}
-                selected={selection?.kind === "object" && selection.id === id}
-                hidden={hiddenObjects.includes(id)}
-                onSelect={() => props.onSelect({ kind: "object", id })}
-                onToggle={() => props.onHiddenChange(toggle(hiddenObjects, id), hiddenLights)} />
-            ))}
+            {open("objects") && objects.map(({ object, id }) => {
+              const parts = partsOf(object);
+              const showParts = parts.length > 1 && unfolded.includes(id);
+              return [
+                <Item key={`o${id}`} icon={OBJECT_KINDS[object.kind]?.icon ?? Triangle} name={object.name}
+                  glow={glows(object.materials)}
+                  selected={selection?.kind === "object" && selection.id === id}
+                  hidden={hiddenObjects.includes(id)}
+                  unfolded={parts.length > 1 ? showParts : undefined}
+                  onUnfold={() => setUnfolded(toggle(unfolded, id))}
+                  onSelect={() => props.onSelect({ kind: "object", id })}
+                  onToggle={() => props.onHiddenChange(toggle(hiddenObjects, id), hiddenLights)} />,
+                ...(showParts ? parts.map(({ name, material }) => (
+                  <li key={`o${id}-${material.id}`} className="outliner-row outliner-part" data-hidden={hiddenObjects.includes(id) || undefined}>
+                    <button type="button" className="outliner-pick" title={`Edit ${name} in Materials`} onClick={() => {
+                      props.onSelect({ kind: "object", id });
+                      props.onEditMaterial(material.id);
+                    }}>
+                      <span className="swatch" style={{ background: swatch(material.color) }} aria-hidden="true" />
+                      <span className="outliner-name">{name}</span>
+                      {material.emission && <Sparkles size={11} className="outliner-glow" aria-label="glows" />}
+                    </button>
+                  </li>
+                )) : []),
+              ];
+            })}
           </ul>
           {selection && (selected || selectedLight) ? (
             <div className="outliner-selected">
@@ -248,11 +283,10 @@ export function Outliner(props: OutlinerProps) {
                   {selected.materials.map((id) => {
                     const material = scene.materials.find((m) => m.id === id);
                     if (!material) return null;
-                    const [r, g, b] = material.color.map((c) => Math.round(Math.min(1, Math.max(0, c)) ** (1 / 2.2) * 255));
                     return (
                       <button key={id} type="button" className="outliner-material" onClick={() => props.onEditMaterial(id)}
                         title={`Edit ${material.label} in Materials`}>
-                        <span className="swatch" style={{ background: `rgb(${r}, ${g}, ${b})` }} aria-hidden="true" />
+                        <span className="swatch" style={{ background: swatch(material.color) }} aria-hidden="true" />
                         <span className="outliner-name">{material.label}</span>
                       </button>
                     );
@@ -267,6 +301,12 @@ export function Outliner(props: OutlinerProps) {
       )}
     </GlassPanel>
   );
+}
+
+/** A material's color as a swatch shows it, gamma encoded. */
+function swatch(color: [number, number, number]): string {
+  const [r, g, b] = color.map((c) => Math.round(Math.min(1, Math.max(0, c)) ** (1 / 2.2) * 255));
+  return `rgb(${r}, ${g}, ${b})`;
 }
 
 function Group(props: { name: string; count: number; open: boolean; onFold: () => void }) {
@@ -287,12 +327,21 @@ function Item(props: {
   selected?: boolean;
   hidden?: boolean;
   glow?: boolean;
+  /** Whether its parts are listed under it; undefined when it has none to list. */
+  unfolded?: boolean;
+  onUnfold?: () => void;
   onSelect: () => void;
   onToggle?: () => void;
 }) {
   const Icon = props.icon;
   return (
     <li className="outliner-row" data-selected={props.selected || undefined} data-hidden={props.hidden || undefined}>
+      {props.unfolded !== undefined && (
+        <button type="button" className="outliner-unfold" aria-expanded={props.unfolded}
+          aria-label={props.unfolded ? `Hide the parts of ${props.name}` : `Show the parts of ${props.name}`} onClick={props.onUnfold}>
+          <ChevronRight size={11} aria-hidden="true" />
+        </button>
+      )}
       <button type="button" className="outliner-pick" aria-current={props.selected || undefined} onClick={props.onSelect}>
         <Icon size={13} aria-hidden="true" />
         <span className="outliner-name">{props.name}</span>

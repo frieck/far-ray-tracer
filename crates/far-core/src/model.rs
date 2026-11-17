@@ -515,6 +515,23 @@ impl Placement {
     }
 }
 
+/// The names of a model's parts as `Scene::add_model` makes them, one for each scene material:
+/// its materials' names, then "default" for triangles without one. A name used twice, as
+/// glTF files that leave materials unnamed do, is told apart by a number: "Glass", "Glass 2".
+pub(crate) fn part_names(model: &Model) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for base in model.materials.iter().map(|m| m.name.as_str()).chain(["default"]) {
+        let mut name = base.to_string();
+        let mut n = 2;
+        while names.contains(&name) {
+            name = format!("{base} {n}");
+            n += 1;
+        }
+        names.push(name);
+    }
+    names
+}
+
 pub(crate) fn bounds(points: &[Vec3]) -> (Vec3, Vec3) {
     let mut min = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
     let mut max = -min;

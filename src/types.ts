@@ -116,8 +116,16 @@ export interface SceneObjectInfo {
   kind: string;
   /** Its materials' ids, as in `SceneInfo.materials`. */
   materials: number[];
+  /** A model's parts, one name for each of `materials`; empty for anything else. */
+  parts: string[];
   /** Its entry in the file: what the Object tab edits, and what a duplicate copies. */
   source: Record<string, unknown>;
+}
+
+/** The objects added in the app as the scene read with them has them, and their materials. */
+export interface AddedObjects {
+  objects: SceneObjectInfo[];
+  materials: SceneMaterial[];
 }
 
 export interface SceneLightInfo {

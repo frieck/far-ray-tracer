@@ -106,6 +106,7 @@ impl EntryEdits {
 }
 
 /// What the app changed.
+#[derive(Default)]
 pub struct SceneEdits {
     pub camera: crate::camera::Camera,
     /// None removes the environment.
@@ -120,7 +121,7 @@ pub struct SceneEdits {
 }
 
 /// Writes `scene`, read from `original`, with `edits` to `target`. Returns the edits that
-/// could not be saved, such as changes to the materials inside a model file.
+/// could not be saved.
 pub fn save(scene: &Scene, original: &Path, target: &Path, edits: &SceneEdits) -> Result<Vec<String>, String> {
     let mut file = scene.source.as_deref().cloned()
         .ok_or("This scene was not read from a .far file, so it cannot be saved as one")?;
@@ -128,10 +129,25 @@ pub fn save(scene: &Scene, original: &Path, target: &Path, edits: &SceneEdits) -
     let from = original.parent().unwrap_or(Path::new(".")).to_path_buf();
     let to = absolute(target.parent().unwrap_or(Path::new(".")));
     let mut warnings = Vec::new();
+    // Added objects have materials of their own, numbered as in the scene read with them;
+    // those of the file's objects keep their numbers there.
+    let with_added = (!edits.entries.added_objects.is_empty()).then(|| scene.edited(original, &edits.entries).ok()).flatten();
+    let scene = with_added.as_ref().unwrap_or(scene);
     edits.entries.apply(root);
 
     if from != to {
         relocate_paths(root, &from, &to, original, target);
+    }
+    // A model added in the app names its file by its full path; the scene keeps it relative.
+    for object in root.get_mut("objects").and_then(Value::as_array_mut).into_iter().flatten() {
+        if object.get("type").and_then(Value::as_str) != Some("model") {
+            continue;
+        }
+        if let Some(file) = object.get_mut("file") {
+            if let Some(path) = file.as_str().map(PathBuf::from).filter(|p| p.is_absolute() && p.exists()) {
+                *file = json!(relative_to(&path, &to));
+            }
+        }
     }
     root.insert("format".into(), json!(crate::scene_file::FORMAT));
     root.insert("camera".into(), serde_json::to_value(edits.camera).map_err(|e| e.to_string())?);
@@ -170,10 +186,32 @@ pub fn save(scene: &Scene, original: &Path, target: &Path, edits: &SceneEdits) -
                     }
                 }
             }
+            // Kept in the scene by the part's name, as `parts`; the model file stays as it is.
             MaterialSource::ModelPart(index) => {
-                let file = root.get("objects").and_then(|o| o.get(index)).and_then(|o| o.get("file"))
-                    .and_then(Value::as_str).unwrap_or("a model");
-                warnings.push(format!("Edits to the materials inside {file} are not saved: they live in the model file"));
+                let part = scene.objects.get(index)
+                    .and_then(|o| id.checked_sub(o.materials.start).and_then(|k| o.parts.get(k)));
+                let object = root.get_mut("objects").and_then(|o| o.get_mut(index)).and_then(Value::as_object_mut);
+                let (Some(part), Some(object)) = (part, object) else {
+                    warnings.push(format!("Edits to material {id} are not saved"));
+                    continue;
+                };
+                let parts = object.entry("parts").or_insert_with(|| json!({}));
+                if !parts.is_object() {
+                    *parts = json!({});
+                }
+                let Some(entry) = parts.as_object_mut().map(|p| p.entry(part.clone()).or_insert_with(|| json!({}))) else { continue };
+                if !entry.is_object() {
+                    *entry = json!({});
+                }
+                if let Some(surface) = surface {
+                    entry["surface"] = serde_json::to_value(surface).map_err(|e| e.to_string())?;
+                }
+                if let Some(strength) = bump {
+                    entry["bump_strength"] = json!(strength);
+                }
+                if let Some(glow) = edit.emission {
+                    entry["emission"] = json!({"color": glow.color, "strength": glow.strength});
+                }
             }
             MaterialSource::None => warnings.push(format!("Edits to material {id} are not saved")),
         }
@@ -375,5 +413,81 @@ mod tests {
         assert!(reopened.is_err_and(|e| e.contains("IES")) , "the stub IES file is read, so the scene's paths resolve");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&elsewhere);
+    }
+
+    /// A folder with a model of two materials, Red and Glass, and a triangle without one.
+    fn model_folder(name: &str) -> PathBuf {
+        let dir = folder(name);
+        std::fs::write(dir.join("parts.mtl"), "newmtl Red\nKd 1 0 0\nnewmtl Glass\nKd 1 1 1\n").unwrap();
+        std::fs::write(dir.join("parts.obj"), "mtllib parts.mtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nf 1 3 4\n\
+            usemtl Red\nf 1 2 3\nusemtl Glass\nf 1 2 4\n").unwrap();
+        dir
+    }
+
+    fn metal() -> crate::surface::MaterialEdit {
+        crate::surface::MaterialEdit { surface: serde_json::from_str(r#"{"preset": "metal", "roughness": 0.3}"#).unwrap(), ..Default::default() }
+    }
+
+    #[test]
+    fn edits_to_a_models_parts_are_saved_by_part_name_and_read_back() {
+        let dir = model_folder("parts");
+        let original = dir.join("a.far");
+        std::fs::write(&original, r#"{"lights": [], "objects": [{"type": "sphere", "center": [0, 0, 5], "radius": 1},
+            {"type": "model", "file": "parts.obj", "position": [0, 0, 3]}]}"#).unwrap();
+        let scene = Scene::open(&original).unwrap();
+        let model = &scene.objects[1];
+        assert_eq!(model.parts, ["Red", "Glass", "default"]);
+        assert_eq!(model.materials.len(), 3);
+        let glass = model.materials.start + 1;
+        assert_eq!(scene.material_sources[glass], MaterialSource::ModelPart(1));
+        let edits = SceneEdits { materials: vec![(glass, metal())], ..Default::default() };
+        let warnings = save(&scene, &original, &original, &edits).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&original).unwrap()).unwrap();
+        assert_eq!(saved["objects"][1]["parts"]["Glass"]["surface"]["preset"], "metal");
+        assert!(saved["objects"][1]["parts"].get("Red").is_none());
+        let reopened = Scene::open(&original).unwrap();
+        let read = |id: usize| reopened.materials[id].surface.as_ref().map(|s| s.metallic);
+        assert_eq!(read(glass), Some(1.0), "the part reads as metal");
+        assert_eq!(read(glass - 1), Some(0.0), "the other part is as the file has it");
+        assert!(reopened.warnings.is_empty(), "{:?}", reopened.warnings);
+        // A name the model does not have is reported, not an error.
+        std::fs::write(&original, r#"{"lights": [], "objects": [{"type": "model", "file": "parts.obj", "parts": {"Gold": {"bump_strength": 1}}}]}"#).unwrap();
+        assert!(Scene::open(&original).unwrap().warnings.iter().any(|w| w.contains("no part named Gold")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn objects_added_in_the_app_leave_the_others_materials_where_they_were() {
+        let dir = model_folder("added");
+        let original = dir.join("a.far");
+        std::fs::write(&original, r#"{"lights": [], "objects": [{"type": "sphere", "center": [0, 0, 5], "radius": 1, "material": {"color": [1, 0, 0]}},
+            {"type": "box", "center": [2, 0, 5], "size": [1, 1, 1], "material": {"color": [0, 1, 0]}}]}"#).unwrap();
+        let scene = Scene::open(&original).unwrap();
+        // A plane and a model, which are read before spheres and boxes in a file.
+        let entries = EntryEdits {
+            added_objects: vec![
+                json!({"type": "plane", "points": [[-1, 0, -1], [1, 0, -1], [1, 0, 1], [-1, 0, 1]], "material": {"color": [0, 0, 1]}}),
+                json!({"type": "model", "file": dir.join("parts.obj").to_string_lossy(), "size": 1}),
+            ],
+            ..Default::default()
+        };
+        let edited = scene.edited(&original, &entries).unwrap();
+        for object in 0..2 {
+            let id = scene.objects[object].materials.start;
+            assert_eq!(edited.objects[object].materials.start, id);
+            assert_eq!(edited.materials[id].color, scene.materials[id].color);
+        }
+        // The added model's parts are edited and saved with it, its path made relative.
+        let model = &edited.objects[3];
+        assert_eq!(model.parts, ["Red", "Glass", "default"]);
+        let red = model.materials.start;
+        let edits = SceneEdits { materials: vec![(red, metal())], entries, ..Default::default() };
+        let warnings = save(&scene, &original, &original, &edits).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&original).unwrap()).unwrap();
+        assert_eq!(saved["objects"][3]["file"], "parts.obj");
+        assert_eq!(saved["objects"][3]["parts"]["Red"]["surface"]["preset"], "metal");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

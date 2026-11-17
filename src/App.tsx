@@ -9,7 +9,7 @@ import { LIGHT_ID, SelectionOverlay, type IdMap } from "./components/SelectionOv
 import { TransformGizmo, type GizmoMode } from "./components/TransformGizmo";
 import type { Vec3 } from "./objectFields";
 import { changeMatrix, transformOf, type Change } from "./transforms";
-import { duplicate, newEntry, sceneEntries, withAdded, withRemoved, type NewKind } from "./sceneEntries";
+import { duplicate, newEntry, newModel, sceneEntries, withAdded, withRemoved, type NewKind } from "./sceneEntries";
 import * as history from "./history";
 import { MaterialStage } from "./components/MaterialStage";
 import { Viewport } from "./components/Viewport";
@@ -18,9 +18,13 @@ import { alignView, dolly, orbit, pan, retarget } from "./orbit";
 import { SceneView, type PreviewScene } from "./sceneView";
 import {
   activeComparison, activeMode, buildPreview, buildRequest, defaultSettings, DOF_PRESETS, fNumberFor, focalLength, imageSize,
-  sceneSaveRequest, sceneView, withSavedRenderSettings, fogOf,
+  sceneSaveRequest, sceneView, withSavedRenderSettings, fogOf, entryEdits,
 } from "./settings";
-import type { Area, EnvironmentConfig, MenuAction, Pose, RenderRequest, SceneInfo, Selection, Settings, Startup } from "./types";
+import type {
+  AddedObjects, Area, EnvironmentConfig, MenuAction, Pose, RenderRequest, SceneInfo, Selection, Settings, Startup,
+} from "./types";
+
+const NOTHING_ADDED: AddedObjects = { objects: [], materials: [] };
 
 /** Waits for a pause in slider drags before starting a new render. */
 const SETTINGS_DELAY_MS = 180;
@@ -243,8 +247,28 @@ export function App() {
     [settings, movingCamera, liveReady, region]);
   const [imageWidth, imageHeight] = settings ? imageSize(settings) : [4, 3];
   const jobKey = JSON.stringify(job);
+  // What the objects added here bring, a model's parts and materials among them, as the scene
+  // read with them has them: asked for again whenever one is added or taken back.
+  const [added, setAdded] = useState<AddedObjects>(NOTHING_ADDED);
+  const addedKey = settings ? JSON.stringify(settings.addedObjects) : "";
+  useEffect(() => {
+    if (!settings || settings.addedObjects.length === 0) {
+      setAdded(NOTHING_ADDED);
+      return;
+    }
+    let current = true;
+    invoke<AddedObjects>("added_objects", { entries: entryEdits(settings) })
+      .then((info) => { if (current) setAdded(info); })
+      .catch(() => { if (current) setAdded(NOTHING_ADDED); });
+    return () => { current = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addedKey, scene?.path]);
   // The file's objects and lights, then those added here.
-  const entries = scene && settings ? sceneEntries(scene, settings) : null;
+  const entries = scene && settings ? sceneEntries(scene, settings, added) : null;
+  // The scene with the added objects' materials, which the outliner and the Materials tab list.
+  const shownScene = useMemo(
+    () => (scene && added.materials.length > 0 ? { ...scene, materials: [...scene.materials, ...added.materials] } : scene),
+    [scene, added]);
   const onDeleteKey = useRef(() => {});
   const onDuplicateKey = useRef(() => {});
   const openRef = useRef(open);
@@ -380,6 +404,19 @@ export function App() {
     change(patch);
     setSelection({ kind: light ? "light" : "object", id });
   };
+  const addModel = async () => {
+    let path: string | null;
+    try {
+      path = await invoke<string | null>("choose_model");
+    } catch (error) {
+      publish({ status: `Error: ${String(error)}` });
+      return;
+    }
+    if (!path || !settings || !entries) return;
+    const { patch, id } = withAdded(settings, entries, false, newModel(path, settings.pose, entries));
+    change(patch);
+    setSelection({ kind: "object", id });
+  };
   const duplicateSelection = (follow: boolean) => {
     if (!settings || !entries || !selection) return;
     const light = selection.kind === "light";
@@ -494,7 +531,7 @@ export function App() {
   const select = (picked: Selection) => {
     setSelection(picked);
     const first = picked?.kind === "object" ? entries?.objects[picked.id]?.materials[0] : undefined;
-    if (first !== undefined && scene?.materials.some((m) => m.id === first)) setSelectedMaterial(first);
+    if (first !== undefined && shownScene?.materials.some((m) => m.id === first)) setSelectedMaterial(first);
   };
 
   const pickFocus = async (x: number, y: number) => {
@@ -624,8 +661,8 @@ export function App() {
   }, []);
 
   // The ball needs Enhanced mode: its materials, environment and look only exist there.
-  const canShowMaterial = scene !== null && scene.materials.length > 0 && settings !== null && activeMode(settings) === "enhanced";
-  const ballMaterial = canShowMaterial ? scene.materials.find((m) => m.id === selectedMaterial) ?? scene.materials[0] : null;
+  const canShowMaterial = shownScene !== null && shownScene.materials.length > 0 && settings !== null && activeMode(settings) === "enhanced";
+  const ballMaterial = canShowMaterial ? shownScene.materials.find((m) => m.id === selectedMaterial) ?? shownScene.materials[0] : null;
   const materialStage = showMaterial && ballMaterial && settings ? (
     <MaterialStage
       key={scene?.path}
@@ -633,6 +670,7 @@ export function App() {
       label={ballMaterial.label}
       device={settings.device}
       edit={settings.materialOverrides.find((m) => m.id === ballMaterial.id) ?? null}
+      entries={settings.addedObjects.length > 0 ? entryEdits(settings) : null}
       onClose={() => setShowMaterial(false)}
     />
   ) : null;
@@ -830,10 +868,10 @@ export function App() {
         <aside className="sidebar" ref={sidebarRef}>
         {settings && scene && (
           <>
-            <Outliner scene={scene} hiddenObjects={settings.hiddenObjects} hiddenLights={settings.hiddenLights}
+            <Outliner scene={shownScene!} hiddenObjects={settings.hiddenObjects} hiddenLights={settings.hiddenLights}
               objects={entries!.objects} lights={entries!.lights}
               removedObjects={settings.removedObjects} removedLights={settings.removedLights}
-              onAdd={addEntry} onDuplicate={() => duplicateSelection(false)} onDelete={deleteSelection}
+              onAdd={addEntry} onAddModel={() => void addModel()} onDuplicate={() => duplicateSelection(false)} onDelete={deleteSelection}
               onHiddenChange={(hiddenObjects, hiddenLights) => {
                 // As any edit: what hides changes the light, and the photons with it.
                 publish({ caustics: null, hasPhotonMap: false });
@@ -886,7 +924,7 @@ export function App() {
             loadingEnvironment={loadingEnvironment}
             onImportEnvironment={() => void importEnvironment()}
             onChooseLut={() => void chooseLut()}
-            scene={scene}
+            scene={shownScene}
             onResetCamera={resetCamera}
             cores={cores}
             rendering={view.rendering}

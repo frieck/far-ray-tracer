@@ -1,7 +1,7 @@
 import { Maximize2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { drawPreview, renderMaterialBall } from "../materialPreview";
-import type { BumpInfo, Device, Glow, MaterialOverride, MaterialPreset, SceneMaterial, SurfaceMaterial } from "../types";
+import type { BumpInfo, Device, EntryEdits, Glow, MaterialOverride, MaterialPreset, SceneMaterial, SurfaceMaterial } from "../types";
 import { Choice, ColorRow, Hint, Row, ScrubRow, Section } from "./props";
 
 const PRESETS: Record<Exclude<MaterialPreset, "custom">, { roughness: number; metallic: number; ior: number }> = {
@@ -42,17 +42,19 @@ function matchingPreset(surface: SurfaceMaterial): MaterialPreset {
 }
 
 /** Renders the material on a shader ball with the engine, again after each edit. */
-function MaterialPreview({ id, edit, scenePath, device, onExpand }: {
+function MaterialPreview({ id, edit, scenePath, device, entries, onExpand }: {
   id: number;
   edit: MaterialOverride | null;
   scenePath: string;
   device: Device;
+  entries: EntryEdits | null;
   onExpand: () => void;
 }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const request = useRef(0);
   const [busy, setBusy] = useState(true);
-  const key = `${scenePath}|${id}|${JSON.stringify(edit)}`;
+  // Added objects number their materials after the file's, so they tell the same id apart.
+  const key = `${scenePath}|${id}|${JSON.stringify(edit)}|${JSON.stringify(entries?.added_objects ?? [])}`;
 
   useEffect(() => {
     const current = ++request.current;
@@ -67,7 +69,7 @@ function MaterialPreview({ id, edit, scenePath, device, onExpand }: {
       for (const { size, samples } of PREVIEW_PASSES) {
         let pixels: ImageData;
         try {
-          pixels = await renderMaterialBall({ id, edit, width: size, height: size, samples, pose: null, view: "thumbnail", device });
+          pixels = await renderMaterialBall({ id, edit, width: size, height: size, samples, pose: null, view: "thumbnail", device, entries });
         } catch {
           // A newer edit replaced this preview, or the scene closed.
           if (current === request.current) setBusy(false);
@@ -96,12 +98,14 @@ function MaterialPreview({ id, edit, scenePath, device, onExpand }: {
   );
 }
 
-export function MaterialEditor({ materials, overrides, scenePath, device, selected, onSelect, onExpand, onChange }: {
+export function MaterialEditor({ materials, overrides, scenePath, device, entries, selected, onSelect, onExpand, onChange }: {
   materials: SceneMaterial[];
   overrides: MaterialOverride[];
   scenePath: string;
   /** Where previews render, as the Device setting. */
   device: Device;
+  /** The objects added in the app, for the materials they bring; null without. */
+  entries: EntryEdits | null;
   /** The material being edited; null picks the first. */
   selected: number | null;
   onSelect: (id: number) => void;
@@ -143,7 +147,7 @@ export function MaterialEditor({ materials, overrides, scenePath, device, select
             {materials.map((m) => <option key={m.id} value={String(m.id)}>{m.label}</option>)}
           </Choice>
         </Row>
-        <MaterialPreview id={material.id} edit={edit ?? null} scenePath={scenePath} device={device} onExpand={onExpand} />
+        <MaterialPreview id={material.id} edit={edit ?? null} scenePath={scenePath} device={device} entries={entries} onExpand={onExpand} />
       </Section>
       <Section id="material-surface" title="Surface" extra={
         <Choice<MaterialPreset | "original"> small label="Material preset" value={edit?.surface ? current.preset : "original"}

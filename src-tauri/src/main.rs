@@ -187,8 +187,18 @@ struct ObjectInfo {
     kind: &'static str,
     /// Its materials' ids, as in `SceneInfo::materials`.
     materials: Vec<usize>,
+    /// A model's parts, one name for each of `materials`; empty for anything else.
+    parts: Vec<String>,
     /// Its entry in the file: the values the Object tab edits, and what a duplicate copies.
     source: serde_json::Value,
+}
+
+/// What the scene read with the app's added objects says about them: each one's materials and
+/// parts, and the materials they bring, numbered after the file's.
+#[derive(Serialize)]
+struct AddedObjects {
+    objects: Vec<ObjectInfo>,
+    materials: Vec<SceneMaterial>,
 }
 
 /// A light of the scene file.
@@ -478,12 +488,13 @@ fn entry(scene: &Scene, list: &str, index: usize) -> serde_json::Value {
     scene.source.as_deref().and_then(|s| s.get(list)).and_then(|l| l.get(index)).cloned().unwrap_or_default()
 }
 
-fn open_scene(path: &Path, state: &AppState) -> Result<SceneInfo, String> {
-    let scene = Scene::open(path)?;
+/// The materials the scene's objects use, those numbered from `from` on, each named by its
+/// object: "Ball", or "teapot · Glass" for a model's part.
+fn scene_materials(scene: &Scene, from: usize) -> Vec<SceneMaterial> {
     let mut seen = std::collections::HashSet::new();
-    let materials = scene.prims.iter().filter_map(|primitive| {
+    scene.prims.iter().filter_map(|primitive| {
         let id = primitive.material();
-        if !seen.insert(id) { return None; }
+        if id < from || !seen.insert(id) { return None; }
         let kind = match primitive {
             far_core::scene::Primitive::Sphere(_) => "sphere",
             far_core::scene::Primitive::Triangle(_) => "surface / mesh",
@@ -491,15 +502,25 @@ fn open_scene(path: &Path, state: &AppState) -> Result<SceneInfo, String> {
             far_core::scene::Primitive::Ground(_) => "ground",
         };
         let m = &scene.materials[id];
-        // Named by its object: "Ball", or "teapot part 2" for a model's.
-        let label = scene.objects.iter().find(|o| o.materials.contains(&id)).map(|o| match o.materials.len() {
-            1 => o.name.clone(),
-            _ => format!("{} part {}", o.name, id - o.materials.start + 1),
+        let label = scene.objects.iter().find(|o| o.materials.contains(&id)).map(|o| match o.parts.get(id - o.materials.start) {
+            Some(part) => format!("{} · {part}", o.name),
+            None => o.name.clone(),
         }).unwrap_or_else(|| format!("Material {} ({kind})", seen.len()));
         Some(SceneMaterial { id, label, color: m.color.array(), ior: m.ior, surface: m.surface.clone(),
             bump: m.bump.map(|b| BumpInfo { kind: b.kind, strength: b.strength }),
             emission: far_core::surface::EmissionEdit::of(m) })
-    }).collect();
+    }).collect()
+}
+
+fn object_info(scene: &Scene, index: usize) -> ObjectInfo {
+    let o = &scene.objects[index];
+    ObjectInfo { name: o.name.clone(), kind: o.kind, materials: o.materials.clone().collect(), parts: o.parts.clone(),
+        source: entry(scene, "objects", index) }
+}
+
+fn open_scene(path: &Path, state: &AppState) -> Result<SceneInfo, String> {
+    let scene = Scene::open(path)?;
+    let materials = scene_materials(&scene, 0);
     let info = SceneInfo {
         environment: scene.environment.as_ref().map(|e| e.config.clone()),
         materials,
@@ -509,9 +530,7 @@ fn open_scene(path: &Path, state: &AppState) -> Result<SceneInfo, String> {
         path: path.to_string_lossy().into_owned(),
         primitives: scene.prims.len(),
         lights: scene.lights.len() + scene.rect_lights.len() + scene.bulbs.len(),
-        objects: scene.objects.iter().enumerate().map(|(i, o)| ObjectInfo {
-            name: o.name.clone(), kind: o.kind, materials: o.materials.clone().collect(), source: entry(&scene, "objects", i),
-        }).collect(),
+        objects: (0..scene.objects.len()).map(|i| object_info(&scene, i)).collect(),
         fog: scene.source.as_deref().and_then(|s| s.get("fog")).cloned(),
         light_list: scene.scene_lights.iter().enumerate().map(|(i, l)| LightInfo {
             name: l.name.clone(), kind: l.kind, source: entry(&scene, "lights", i),
@@ -749,6 +768,31 @@ fn choose_environment(app: AppHandle, state: State<'_, AppState>) -> Result<Opti
     Ok(Some(config))
 }
 
+/// Picks an OBJ or glTF model to add to the scene; gives its full path.
+#[tauri::command(async)]
+fn choose_model(app: AppHandle) -> Result<Option<String>, String> {
+    let Some(file) = app.dialog().file().add_filter("Model", &["obj", "gltf", "glb"]).blocking_pick_file() else {
+        return Ok(None);
+    };
+    Ok(Some(file.into_path().map_err(|e| e.to_string())?.to_string_lossy().into_owned()))
+}
+
+/// The objects the app added to the open scene, as the scene read with them has them.
+#[tauri::command(async)]
+fn added_objects(entries: far_core::scene_save::EntryEdits, state: State<'_, AppState>) -> Result<AddedObjects, String> {
+    let open = state.scene.lock().unwrap().clone().ok_or("No scene is open")?;
+    let in_file = open.scene.objects.iter().filter(|o| o.kind != "fog").count();
+    if entries.added_objects.is_empty() {
+        return Ok(AddedObjects { objects: Vec::new(), materials: Vec::new() });
+    }
+    let view = SceneView { hidden_objects: Vec::new(), hidden_lights: Vec::new(), entries };
+    let prepared = open.view(&view)?.ok_or("The added objects could not be read")?;
+    let scene = &prepared.scene;
+    let added: Vec<usize> = (in_file..scene.objects.len()).filter(|&i| scene.objects[i].kind != "fog").collect();
+    let from = added.iter().map(|&i| scene.objects[i].materials.start).min().unwrap_or(scene.materials.len());
+    Ok(AddedObjects { objects: added.iter().map(|&i| object_info(scene, i)).collect(), materials: scene_materials(scene, from) })
+}
+
 /// Picks a .cube LUT and reads it, so a broken file is reported at once; gives its path.
 #[tauri::command(async)]
 fn choose_lut(app: AppHandle, state: State<'_, AppState>) -> Result<Option<String>, String> {
@@ -827,6 +871,7 @@ fn material_preview(
     pose: Option<far_core::Pose>,
     view: String,
     device: Option<Device>,
+    entries: Option<far_core::scene_save::EntryEdits>,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Response, String> {
@@ -839,7 +884,14 @@ fn material_preview(
     let environment = state.studio.get_or_init(|| studio_environment(&app)).clone();
     let data = scenes_folder(&app).unwrap_or_default();
     let edit = far_core::surface::MaterialEdit { surface, bump_strength, emission };
-    let ball = far_core::preview::material_ball(&open.scene, id, Some(&edit), environment, &data)?;
+    // An added object's material is numbered after the file's, in the scene read with it.
+    let added = match entries {
+        Some(entries) if id >= open.scene.materials.len() && !entries.added_objects.is_empty() =>
+            open.view(&SceneView { hidden_objects: Vec::new(), hidden_lights: Vec::new(), entries })?,
+        _ => None,
+    };
+    let scene = added.as_ref().map_or(&open.scene, |prepared| &prepared.scene);
+    let ball = far_core::preview::material_ball(scene, id, Some(&edit), environment, &data)?;
     if let Some(pose) = &pose {
         pose.validate()?;
     }
@@ -1306,8 +1358,9 @@ fn render_scene(
         copy.environment = request.environment.as_ref()
             .map(|config| render_environment(config, Some(base), &state)).transpose()?;
         for edit in &request.material_overrides {
-            // Checked on the whole scene: a hidden object's material can still be edited.
-            if !open.scene.prims.iter().any(|p| p.material() == edit.id) {
+            // An object's or a model part's: hiding an object keeps its material, so it can
+            // still be edited.
+            if !matches!(copy.material_sources.get(edit.id), Some(far_core::scene::MaterialSource::Object(_) | far_core::scene::MaterialSource::ModelPart(_))) {
                 return Err("Unknown object material".into());
             }
             edit.edit().apply(&mut copy.materials[edit.id])?;
@@ -1596,6 +1649,8 @@ fn main() {
             choose_scene,
             choose_environment,
             choose_lut,
+            choose_model,
+            added_objects,
             pick_object,
             object_ids,
             object_xray,

@@ -293,6 +293,9 @@ pub struct SceneObject {
     pub kind: &'static str,
     /// Its materials in `Scene::materials`: one, or a model's parts; none for a volume.
     pub materials: std::ops::Range<usize>,
+    /// A model's parts, one for each of `materials`: the names its file gives its materials,
+    /// made unique, and "default" for triangles without one. Empty for anything else.
+    pub parts: Vec<String>,
 }
 
 /// One entry of the scene file's `lights`.
@@ -458,10 +461,11 @@ impl Scene {
     pub fn edited(&self, path: &Path, edits: &crate::scene_save::EntryEdits) -> Result<Scene, String> {
         let mut source = self.source.as_deref().cloned()
             .ok_or("This scene was not read from a .far file, so its objects cannot be edited")?;
+        let in_file = source.get("objects").and_then(serde_json::Value::as_array).map_or(0, Vec::len);
         if let Some(root) = source.as_object_mut() {
             edits.apply(root);
         }
-        Scene::from_source(source, path)
+        Scene::from_source_adding(source, path, in_file)
     }
 
     /// The object primitive `prim` belongs to, as an index in `objects`.
