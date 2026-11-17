@@ -17,7 +17,20 @@ pub enum Shape {
     Torus { major_radius: f32, minor_radius: f32 },
 }
 
-#[derive(Clone)]
+/// A piece of a solid's surface, for drawing points on it.
+#[derive(Clone, Copy, Debug)]
+enum Part {
+    /// A box's face across an axis, on its positive or negative side.
+    Face(usize, f32),
+    /// A cylinder's wall of this radius, its normal outward (1) or inward (-1).
+    Side(f32, f32),
+    /// A flat ring at this height, between two radii.
+    Cap(f32, f32, f32),
+    ConeSide,
+    Ring,
+}
+
+#[derive(Clone, Debug)]
 pub struct Solid {
     pub shape: Shape,
     pub center: Vec3,
@@ -243,6 +256,107 @@ impl Solid {
         self.local_direction(p - self.center)
     }
 
+    /// The area of its surface: what a glowing solid sends its light from.
+    pub fn area(&self) -> f32 {
+        self.parts().iter().map(|p| p.0).sum()
+    }
+
+    /// The pieces of its surface and their areas, in the order `sample_surface` draws them.
+    fn parts(&self) -> Vec<(f32, Part)> {
+        match self.shape {
+            Shape::Box { half } => vec![
+                (4.0 * half.y * half.z, Part::Face(0, 1.0)), (4.0 * half.y * half.z, Part::Face(0, -1.0)),
+                (4.0 * half.x * half.z, Part::Face(1, 1.0)), (4.0 * half.x * half.z, Part::Face(1, -1.0)),
+                (4.0 * half.x * half.y, Part::Face(2, 1.0)), (4.0 * half.x * half.y, Part::Face(2, -1.0)),
+            ],
+            Shape::Cylinder { radius, half_height } => vec![
+                (4.0 * PI * radius * half_height, Part::Side(radius, 1.0)),
+                (PI * radius * radius, Part::Cap(half_height, 0.0, radius)),
+                (PI * radius * radius, Part::Cap(-half_height, 0.0, radius)),
+            ],
+            Shape::Tube { radius, inner_radius, half_height } => vec![
+                (4.0 * PI * radius * half_height, Part::Side(radius, 1.0)),
+                (4.0 * PI * inner_radius * half_height, Part::Side(inner_radius, -1.0)),
+                (PI * (radius * radius - inner_radius * inner_radius), Part::Cap(half_height, inner_radius, radius)),
+                (PI * (radius * radius - inner_radius * inner_radius), Part::Cap(-half_height, inner_radius, radius)),
+            ],
+            Shape::Cone { radius, half_height } => vec![
+                (PI * radius * (radius * radius + 4.0 * half_height * half_height).sqrt(), Part::ConeSide),
+                (PI * radius * radius, Part::Cap(-half_height, 0.0, radius)),
+            ],
+            Shape::Torus { major_radius, minor_radius } => {
+                vec![(4.0 * PI * PI * major_radius * minor_radius, Part::Ring)]
+            }
+        }
+    }
+
+    /// A point of its surface drawn evenly over the area by `u` and `v` in [0, 1), and the
+    /// outward normal there, in the world: `u` picks the piece and then, stretched, and `v`
+    /// place the point on it.
+    pub fn sample_surface(&self, u: f32, v: f32) -> (Vec3, Vec3) {
+        let parts = self.parts();
+        let total: f32 = parts.iter().map(|p| p.0).sum();
+        let mut pick = u.clamp(0.0, 0.999_999) * total;
+        let mut chosen = parts[parts.len() - 1];
+        for part in &parts {
+            if pick < part.0 {
+                chosen = *part;
+                break;
+            }
+            pick -= part.0;
+        }
+        let u = if chosen.0 > 0.0 { (pick / chosen.0).clamp(0.0, 0.999_999) } else { 0.5 };
+        let angle = 2.0 * PI * v;
+        let (local, normal) = match (chosen.1, self.shape) {
+            (Part::Face(axis, sign), Shape::Box { half }) => {
+                // The face across `axis`, the other two axes spread by u and v.
+                let (a, b) = ((axis + 1) % 3, (axis + 2) % 3);
+                let mut p = Vec3::default();
+                p.set_cell(axis, sign * half.cell(axis));
+                p.set_cell(a, (2.0 * u - 1.0) * half.cell(a));
+                p.set_cell(b, (2.0 * v - 1.0) * half.cell(b));
+                let mut n = Vec3::default();
+                n.set_cell(axis, sign);
+                (p, n)
+            }
+            (Part::Side(r, outward), Shape::Cylinder { half_height, .. } | Shape::Tube { half_height, .. }) => {
+                let radial = Vec3::new(angle.cos(), 0.0, angle.sin());
+                (radial * r + Vec3::new(0.0, (2.0 * u - 1.0) * half_height, 0.0), radial * outward)
+            }
+            (Part::Cap(y, inner, outer), _) => {
+                // Even over the ring between the radii: the square of the radius is even.
+                let r = (inner * inner + u * (outer * outer - inner * inner)).sqrt();
+                (Vec3::new(r * angle.cos(), y, r * angle.sin()), Vec3::new(0.0, 1.0f32.copysign(y), 0.0))
+            }
+            (Part::ConeSide, Shape::Cone { radius, half_height }) => {
+                // The apex is on top; the area grows with the distance from it, so its square
+                // root is even.
+                let t = u.sqrt();
+                let height = 2.0 * half_height;
+                let radial = Vec3::new(angle.cos(), 0.0, angle.sin());
+                let mut n = radial * height + Vec3::new(0.0, radius, 0.0);
+                n.normalize();
+                (radial * (radius * t) + Vec3::new(0.0, half_height - height * t, 0.0), n)
+            }
+            (Part::Ring, Shape::Torus { major_radius, minor_radius }) => {
+                // Around the tube, the area grows with the distance from the axis: the angle
+                // whose share of R θ + r sin θ is u, found by Newton's method.
+                let (big, small) = (major_radius, minor_radius);
+                let goal = 2.0 * PI * big * u;
+                let mut theta = 2.0 * PI * u;
+                for _ in 0..8 {
+                    let error = big * theta + small * theta.sin() - goal;
+                    theta -= error / (big + small * theta.cos()).max(1e-6);
+                }
+                let radial = Vec3::new(angle.cos(), 0.0, angle.sin());
+                let n = radial * theta.cos() + Vec3::new(0.0, theta.sin(), 0.0);
+                (radial * big + n * small, n)
+            }
+            _ => (Vec3::default(), Vec3::new(0.0, 1.0, 0.0)),
+        };
+        (self.to_world(local), self.direction_to_world(normal))
+    }
+
     /// Closest hit before `dist`: 1 from outside, -1 from inside, 0 for a miss.
     #[inline]
     pub fn intersect(&self, o: Vec3, d: Vec3, dist: &mut f32) -> i32 {
@@ -354,6 +468,47 @@ impl Solid {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn surface_points_lie_on_the_surface_evenly_with_its_normal() {
+        let shapes = [
+            Shape::Box { half: Vec3::new(0.5, 1.0, 1.5) },
+            Shape::Cylinder { radius: 0.8, half_height: 1.2 },
+            Shape::Tube { radius: 1.2, inner_radius: 0.7, half_height: 1.0 },
+            Shape::Cone { radius: 1.0, half_height: 1.5 },
+            Shape::Torus { major_radius: 1.5, minor_radius: 0.4 },
+        ];
+        for shape in shapes {
+            let solid = Solid::new(shape, Vec3::new(1.0, 2.0, -3.0), [20.0, 35.0, -10.0], 0);
+            let mut state = 7u64;
+            let mut random = || {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                (state >> 40) as f32 / (1u64 << 24) as f32
+            };
+            for _ in 0..2000 {
+                let (p, n) = solid.sample_surface(random(), random());
+                // On the surface: a ray from just outside along the inward normal meets it at once.
+                let mut dist = 1.0;
+                let hit = solid.intersect(p + n * 1e-2, -n, &mut dist);
+                assert!(hit != 0 && (dist - 1e-2).abs() < 2e-3, "{shape:?}: {p:?} {n:?} {dist}");
+                assert!((n.length() - 1.0).abs() < 1e-4);
+                let normal = solid.normal(p);
+                assert!(normal.dot(n) > 0.99, "{shape:?}: {normal:?} {n:?}");
+            }
+        }
+        // Even over the area: a torus's outer half, farther from its axis, gets more points.
+        let torus = Solid::new(Shape::Torus { major_radius: 1.0, minor_radius: 0.5 }, Vec3::default(), [0.0; 3], 0);
+        let n = 100_000;
+        let mut outer = 0;
+        for i in 0..n {
+            let (p, _) = torus.sample_surface((i as f32 + 0.5) / n as f32, ((i * 7919) % n) as f32 / n as f32);
+            if (p.x * p.x + p.z * p.z).sqrt() > 1.0 { outer += 1; }
+        }
+        // The outer half's share: (π R + 2 r) / (2 π R).
+        let expected = (PI + 1.0) / (2.0 * PI);
+        assert!((outer as f32 / n as f32 - expected).abs() < 0.01, "{outer}");
+        assert!((torus.area() - 2.0 * PI * PI).abs() < 1e-4);
+    }
     use crate::twister::Twister;
 
     /// Signed distance of each shape, written independently of the intersection code.

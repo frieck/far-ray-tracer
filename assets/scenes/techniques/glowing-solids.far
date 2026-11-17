@@ -1,0 +1,25 @@
+{
+ "camera": {"position": [0, 1.2, -1.5], "target": [0, 0.4, 9], "zoom": 1.0},
+ "lights": [],
+ "objects": [
+  {"type": "plane", "name": "Floor", "points": [[-20, -2, -6], [20, -2, -6], [20, -2, 30], [-20, -2, 30]],
+   "material": {"color": [0.55, 0.55, 0.58], "surface": {"preset": "plastic", "roughness": 0.35}}},
+  {"type": "plane", "name": "Back wall", "points": [[-20, -2, 14], [20, -2, 14], [20, 12, 14], [-20, 12, 14]],
+   "material": {"color": [0.5, 0.5, 0.52], "surface": {"preset": "plastic", "roughness": 0.8}}},
+  {"type": "torus", "name": "Neon ring", "center": [0, 3.2, 12.6], "major_radius": 1.6, "minor_radius": 0.09, "rotation": [90, 0, 0],
+   "material": {"color": [0, 0, 0], "emission": {"color": [1, 0.2, 0.65], "strength": 14}}},
+  {"type": "cylinder", "name": "Tube left", "center": [-4.6, 1.2, 11], "radius": 0.08, "height": 6,
+   "material": {"color": [0, 0, 0], "emission": {"color": [0.2, 0.75, 1], "strength": 14}}},
+  {"type": "cylinder", "name": "Tube right", "center": [4.6, 1.2, 11], "radius": 0.08, "height": 6,
+   "material": {"color": [0, 0, 0], "emission": {"color": [0.2, 0.75, 1], "strength": 14}}},
+  {"type": "box", "name": "Cube lamp", "center": [-2.4, -1.55, 7.2], "size": [0.9, 0.9, 0.9], "rotation": [0, 35, 0],
+   "material": {"color": [0, 0, 0], "emission": {"color": [1, 0.62, 0.3], "strength": 6}}},
+  {"type": "cone", "name": "Cone lamp", "center": [2.8, -1.4, 7.8], "radius": 0.45, "height": 1.2,
+   "material": {"color": [0, 0, 0], "emission": {"color": [0.6, 1, 0.45], "strength": 6}}},
+  {"type": "sphere", "name": "Chrome ball", "center": [0, -0.8, 9], "radius": 1.2,
+   "material": {"color": [0.92, 0.92, 0.95], "surface": {"preset": "metal", "roughness": 0.12}}},
+  {"type": "box", "name": "Pedestal", "center": [-0.4, -1.5, 11.6], "size": [5, 1, 1.2],
+   "material": {"color": [0.75, 0.74, 0.72], "surface": {"preset": "plastic", "roughness": 0.5}}}
+ ],
+ "render": {"app": 1, "toneMapping": "agx", "denoise": true, "bloom": true}
+}

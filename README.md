@@ -138,7 +138,7 @@ Example scenes are in **File > Open Example**, in `assets/scenes`:
 | --- | --- | --- |
 | (top) | `assets/scenes` | Showcase, Cornell box, Christmas, Still life |
 | Materials | `materials` | Glass, Coatings, Subsurface, Maps, GGX materials, Bump maps, Displacement |
-| Techniques | `techniques` | Infinite ground, HDRI studio (also as EXR, PNG and JPEG), Glowing surfaces, Sun and sky, Depth of field, Bokeh, Rectangular lights, Spotlights, Light shafts, Smoke, Models, Primitives |
+| Techniques | `techniques` | Infinite ground, HDRI studio (also as EXR, PNG and JPEG), Glowing surfaces, Glowing solids, Fog clouds, Window room, Sun and sky, Depth of field, Bokeh, Rectangular lights, Spotlights, Light shafts, Smoke, Models, Primitives |
 | From 2008 | `2008` | The final project's own scenes, including Rhino, Knot show and the thesis test scenes A and B |
 
 `2008/validation` and `debug` hold the simplest 2008 scenes, kept for the tests and the
@@ -897,7 +897,8 @@ light, colored by its map; `alpha_map` cuts the surface away where the map is da
 gray, and rays and shadows pass through the holes.
 
 **Mesh lights.** In Enhanced mode, triangles that glow (planes, meshes and models with
-`emission`) and glowing spheres are lights: each shading point aims a shadow ray at one of them,
+`emission`), glowing spheres and glowing solids (boxes, cylinders, tubes, cones and tori) are
+lights: each shading point aims a shadow ray at one of them,
 drawn by the light it gives off (its mean radiance, map included, times its area), so even a
 small bright one,
 such as a candle flame, lights the scene with clean shadows. Before, a glowing surface lit
@@ -906,10 +907,14 @@ of light. A GGX reflection that meets one weighs it against that sampling (multi
 importance sampling), as for panels. On a floor lit by a small glowing panel, the error at the
 same samples is about a tenth. A point on a triangle is drawn evenly over it; on a sphere, a
 direction is drawn within the cone the sphere fills as seen from the point, so no sample goes
-to its far side. The units are those of panels: a strength of 1 is as bright as a panel of
-intensity 1, from both sides of a triangle and all around a sphere. Glowing solids (boxes,
-cylinders, tubes, cones and tori) and displaced triangles still light the scene only through
-bounces, and glowing surfaces send no photons for caustics. Open **File → Open Example →
+to its far side; on a solid, a point is drawn evenly over its whole surface, a piece (a face,
+a wall, a cap) by its area, so points on its far side are hidden by its near side and those
+samples are lost: a glowing box has about a fifth of the noise it had, a cylinder far less, a
+torus, whose ring hides its inner side, about half. The units are those of panels: a
+strength of 1 is as bright as a panel of intensity 1, from both sides of a triangle and all
+around a sphere or a solid. Displaced triangles still light the scene only through bounces,
+and glowing surfaces send no photons for caustics. **Techniques → Glowing solids** is lit only by
+glowing solids: a neon ring (a torus), two tubes (cylinders), a cube and a cone. Open **File → Open Example →
 Techniques → Glowing surfaces** for a scene lit only by three glowing strips and a glowing orb.
 
 How it works: the clear coat is a second GGX lobe whose reflection takes light from the base,

@@ -2743,7 +2743,16 @@ mod tests {
             {{"type": "plane", "points": [[-0.6, 1, 7.4], [0.6, 1, 7.4], [0.6, 1, 8.6], [-0.6, 1, 8.6]], {glow}}}]}}"#);
         let ball = format!(r#"{{"lights": [], "objects": [{room},
             {{"type": "sphere", "center": [-0.8, 0.6, 8], "radius": 0.45, {glow}}}]}}"#);
-        for (text, lights) in [(panel, 2), (ball, 1)] {
+        // Glowing solids: a turned box, a cylinder and a torus, whose inner side its own ring
+        // partly hides.
+        let solid = |shape: &str| format!(r#"{{"lights": [], "objects": [{room}, {{{shape}, {glow}}}]}}"#);
+        let boxed = solid(r#""type": "box", "center": [-0.8, 0.6, 8], "size": [0.8, 0.5, 0.6], "rotation": [10, 30, 0]"#);
+        let cylinder = solid(r#""type": "cylinder", "center": [-0.8, 0.6, 8], "radius": 0.3, "height": 0.8"#);
+        let torus = solid(r#""type": "torus", "center": [-0.8, 0.6, 8], "major_radius": 0.45, "minor_radius": 0.12, "rotation": [70, 0, 0]"#);
+        // A solid is drawn over all its surface, its far side too, which its near side hides from
+        // the point, so it gains less than a panel or a sphere, drawn within the cone it fills.
+        for (name, text, lights, gain) in [("panel", panel, 2, 4.0), ("ball", ball, 1, 4.0), ("box", boxed, 1, 2.0),
+            ("cylinder", cylinder, 1, 2.0), ("torus", torus, 1, 2.0)] {
             let sampled = test_scene(&text);
             assert_eq!(sampled.mesh_lights().lights.len(), lights);
             let chances: f32 = sampled.mesh_lights().lights.iter().map(|l| l.chance).sum();
@@ -2758,13 +2767,14 @@ mod tests {
             let (with, without) = (light(&sampled, 64), light(&found, 1024));
             let total = |l: &[[f32; 3]]| l.iter().map(|c| (c[0] + c[1] + c[2]) as f64).sum::<f64>();
             let (a, b) = (total(&with), total(&without));
-            assert!((a / b - 1.0).abs() < 0.04, "{lights} lights, the same light: {a} against {b}");
+            assert!((a / b - 1.0).abs() < 0.04, "{name}, the same light: {a} against {b}");
             // Noise: the error against many samples, at the same number of samples each way.
             let reference = light(&sampled, 1024);
             let error = |l: &[[f32; 3]]| l.iter().zip(&reference)
                 .map(|(c, r)| (0..3).map(|k| ((c[k] - r[k]) as f64).powi(2)).sum::<f64>()).sum::<f64>();
             let (sampled_error, found_error) = (error(&with), error(&light(&found, 64)));
-            assert!(sampled_error * 4.0 < found_error, "{lights} lights: {sampled_error} against {found_error}");
+            assert!(sampled_error * gain < found_error, "{name}: {sampled_error} against {found_error}");
+            eprintln!("{name}: {:.1} times less noise", found_error / sampled_error);
         }
     }
 

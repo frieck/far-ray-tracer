@@ -11,16 +11,16 @@ the end.
 2. **More for lights** (Scene editing): finishes editing lights in the app. Medium.
 3. **Outliner, next** (Scene editing): a model's parts, renaming, and editing an added
    object's material. Medium.
-4. **Glowing solids as lights** (Light): less noise from glowing boxes, cylinders and tori,
-   as glowing triangles and spheres already have. Low to medium.
-5. **Light groups** (Image): change each light's strength and color after rendering. High.
-6. Then measure before choosing between **path guiding** and a **light cache** (Quality).
+4. **Light groups** (Image): change each light's strength and color after rendering. High.
+5. Then measure before choosing between **path guiding** and a **light cache** (Quality).
 
 ## Light and atmosphere
 
-- [ ] **Glowing solids as lights, and photons from mesh lights**: boxes, cylinders, tubes, cones
-  and tori that glow are not sampled as lights yet, and caustics take no light from glowing
-  surfaces. Low to medium.
+- [ ] **Photons from mesh lights**: caustics take no light from glowing triangles, spheres and
+  solids. Low to medium.
+- [ ] **Glowing solids drawn by the part that faces the point**: a solid is drawn over all its
+  surface, so about half its samples land on the far side its near side hides; drawing by the
+  solid angle each piece fills would help a torus most. Medium.
 - [ ] **A light tree**: mesh lights are drawn by their power alone, wherever the point is; in a
   scene with many glowing surfaces far apart, drawing by distance too would cut noise. Medium.
 - [ ] **Portals chosen by how big they look**: each portal now gets the same share of samples;
@@ -129,7 +129,7 @@ experimental.
   coat, anisotropic GGX, sheen, full PBR maps with alpha cutouts.
 - **Light and atmosphere**: fog, smoke and light shafts, uneven volumes with clouds and height
   falloff, the physical sun and sky, spotlights and IES profiles, EXR and LDR environments,
-  mesh lights with MIS, environment caustics, light portals.
+  mesh lights with MIS (triangles, spheres and solids), environment caustics, light portals.
 - **Camera and image**: shaped bokeh, vignetting and chromatic aberration, ACES and AgX, white
   balance, physical exposure, grain and halation, focal length, sensor and f-number, LUT looks
   and camera presets, EXR passes.

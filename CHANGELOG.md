@@ -107,6 +107,11 @@ are not used. The shader is compiled for what
 - A plane shows its rotation, width and depth in the Object tab, from its corners, and 3DS
   meshes take a `rotation`, so both turn with the gizmo and from their fields.
 
+- Glowing solids (boxes, cylinders, tubes, cones and tori) are mesh lights, on the CPU and the
+  GPU: a point is drawn evenly over the solid's surface, and reflections that meet one are
+  weighed against that sampling. A glowing box has about a fifth of the noise it had.
+  Techniques > Glowing solids shows them: a neon ring, two tubes, a cube and a cone.
+
 - Light portals, as in V-Ray and Cycles: a `portal` in a window draws the environment's light
   through it, on the CPU and the GPU, with about 2.6 times less noise indoors (Techniques >
   Window room, a room lit by the sky through one window). The app adds, moves, turns and sizes

@@ -289,19 +289,22 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
     // kind 3, a triangle, with a corner in pos, the edges in u and v, the plane's normal and the
     // area; kind 4, a sphere, with its center in pos and its radius in u.x; for both, the chance
     // it is drawn in radius and the chances up to it in pad1, as float bits, and where it went
-    // in pad2. Each points back with one more than its index among them: a triangle in its
-    // pad[1], a sphere in its pad1.
+    // in pad2; kind 7, a solid, read from its shape, with its surface's area. Each points back
+    // with one more than its index among them: a triangle in its pad[1], a sphere or a solid in
+    // its pad1.
     let mesh = scene.mesh_lights();
     for (k, l) in mesh.lights.iter().enumerate() {
         let at = slot[l.prim];
         let sphere = l.radius > 0.0;
-        if sphere {
+        let solid = l.solid.is_some();
+        if sphere || solid {
             shapes[(at & !SHAPE) as usize].pad1 = k as u32 + 1;
         } else {
             tris[at as usize].pad[1] = k as u32 + 1;
         }
+        let kind = if solid { 7 } else if sphere { 4 } else { 3 };
         lights.push(Light {
-            pos: l.p0.array(), kind: if sphere { 4 } else { 3 }, color: l.radiance.array(), radius: l.chance,
+            pos: l.p0.array(), kind, color: l.radiance.array(), radius: l.chance,
             u: if sphere { [l.radius, 0.0, 0.0] } else { l.e1.array() }, area: l.area, v: l.e2.array(),
             pad1: l.cumulative.to_bits(), normal: l.normal.array(), pad2: at,
         });

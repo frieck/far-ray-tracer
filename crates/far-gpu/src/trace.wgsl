@@ -773,6 +773,88 @@ fn sphere_cone(distance: f32, radius: f32) -> f32 {
     return max(sin2 / (1.0 + sqrt(max(1.0 - sin2, 0.0))), 1e-12);
 }
 
+// A solid's point in its own frame.
+fn solid_local(s: Shape, p: vec3<f32>) -> vec3<f32> {
+    let q = p - s.center;
+    return vec3<f32>(dot(q, s.ax), dot(q, s.ay), dot(q, s.az));
+}
+
+// A point of solid `s`'s surface drawn evenly over its area by `u` and `v`, in the world, as
+// far-core's Solid::sample_surface: `u` picks the piece, by area, then places the point with `v`.
+fn solid_sample(s: Shape, u_in: f32, v: f32) -> vec3<f32> {
+    var areas = array<f32, 6>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    var count = 1u;
+    let h = s.half.y;
+    if (s.kind == 1u) {
+        let b = s.half;
+        areas = array<f32, 6>(4.0 * b.y * b.z, 4.0 * b.y * b.z, 4.0 * b.x * b.z, 4.0 * b.x * b.z, 4.0 * b.x * b.y, 4.0 * b.x * b.y);
+        count = 6u;
+    } else if (s.kind == 2u) {
+        areas = array<f32, 6>(4.0 * PI * s.radius * h, PI * s.radius * s.radius, PI * s.radius * s.radius, 0.0, 0.0, 0.0);
+        count = 3u;
+    } else if (s.kind == 3u) {
+        let ring_area = PI * (s.radius * s.radius - s.half.x * s.half.x);
+        areas = array<f32, 6>(4.0 * PI * s.radius * h, 4.0 * PI * s.half.x * h, ring_area, ring_area, 0.0, 0.0);
+        count = 4u;
+    } else if (s.kind == 4u) {
+        areas = array<f32, 6>(PI * s.radius * sqrt(s.radius * s.radius + 4.0 * h * h), PI * s.radius * s.radius, 0.0, 0.0, 0.0, 0.0);
+        count = 2u;
+    }
+    var total = 0.0;
+    for (var i = 0u; i < count; i++) { total += areas[i]; }
+    var pick = clamp(u_in, 0.0, 0.999999) * total;
+    var part = count - 1u;
+    for (var i = 0u; i < count; i++) {
+        if (pick < areas[i]) { part = i; break; }
+        pick -= areas[i];
+    }
+    var u = 0.5;
+    if (areas[part] > 0.0) { u = clamp(pick / areas[part], 0.0, 0.999999); }
+    let angle = 2.0 * PI * v;
+    let radial = vec3<f32>(cos(angle), 0.0, sin(angle));
+    var p = vec3<f32>(0.0);
+    if (s.kind == 1u) {
+        // A face across one axis, on its positive or negative side.
+        let axis = part / 2u;
+        let side = select(-1.0, 1.0, part % 2u == 0u);
+        let a = (2.0 * u - 1.0);
+        let b = (2.0 * v - 1.0);
+        if (axis == 0u) { p = vec3<f32>(side * s.half.x, a * s.half.y, b * s.half.z); }
+        else if (axis == 1u) { p = vec3<f32>(b * s.half.x, side * s.half.y, a * s.half.z); }
+        else { p = vec3<f32>(a * s.half.x, b * s.half.y, side * s.half.z); }
+    } else if (s.kind == 2u || s.kind == 3u) {
+        let walls = select(1u, 2u, s.kind == 3u);
+        if (part < walls) {
+            let r = select(s.radius, s.half.x, part == 1u);
+            p = radial * r + vec3<f32>(0.0, (2.0 * u - 1.0) * h, 0.0);
+        } else {
+            let inner = select(0.0, s.half.x, s.kind == 3u);
+            let r = sqrt(inner * inner + u * (s.radius * s.radius - inner * inner));
+            let y = select(-h, h, part == walls);
+            p = vec3<f32>(r * cos(angle), y, r * sin(angle));
+        }
+    } else if (s.kind == 4u) {
+        if (part == 0u) {
+            let t = sqrt(u);
+            p = radial * (s.radius * t) + vec3<f32>(0.0, h - 2.0 * h * t, 0.0);
+        } else {
+            let r = s.radius * sqrt(u);
+            p = vec3<f32>(r * cos(angle), -h, r * sin(angle));
+        }
+    } else {
+        // A torus: the angle round the tube whose share of R θ + r sin θ is u, by Newton's method.
+        let big = s.radius;
+        let small = s.half.x;
+        let goal = 2.0 * PI * big * u;
+        var theta = 2.0 * PI * u;
+        for (var i = 0; i < 8; i++) {
+            theta -= (big * theta + small * sin(theta) - goal) / max(big + small * cos(theta), 1e-6);
+        }
+        p = radial * big + (radial * cos(theta) + vec3<f32>(0.0, sin(theta), 0.0)) * small;
+    }
+    return s.center + s.ax * p.x + s.ay * p.y + s.az * p.z;
+}
+
 // The density from_mesh_light gives the direction `d` from `o` to mesh light `k`, which it meets
 // at `distance`; 0 where it never draws it.
 fn mesh_light_pdf(k: u32, o: vec3<f32>, d: vec3<f32>, distance: f32) -> f32 {
@@ -782,7 +864,14 @@ fn mesh_light_pdf(k: u32, o: vec3<f32>, d: vec3<f32>, distance: f32) -> f32 {
         if (cone <= 0.0) { return 0.0; }
         return light.radius / (2.0 * PI * cone);
     }
-    let c = abs(dot(light.normal, d));
+    var normal = light.normal;
+    if (light.kind == 7u) {
+        // A solid's normal where `d` meets it.
+        let s = shapes[light.pad2 & 0x7fffffffu];
+        let local = solid_normal(s, solid_local(s, o + d * distance));
+        normal = s.ax * local.x + s.ay * local.y + s.az * local.z;
+    }
+    let c = abs(dot(normal, d));
     if (c <= 0.0) { return 0.0; }
     return light.radius * distance * distance / (light.area * c);
 }
@@ -817,6 +906,10 @@ fn from_mesh_light(pos: vec3<f32>, m: Material, albedo: vec3<f32>, spec: f32, n:
             - sqrt(max(light.u.x * light.u.x - center_distance * center_distance * sin_t * sin_t, 0.0));
         target_point = pos + dir * max(along, 0.0);
         material_index = shapes[light.pad2 & 0x7fffffffu].material;
+    } else if (light.kind == 7u) {
+        let shape = shapes[light.pad2 & 0x7fffffffu];
+        target_point = solid_sample(shape, s.x, s.y);
+        material_index = shape.material;
     } else {
         let root = sqrt(s.x);
         target_point = light.pos + light.u * ((1.0 - s.y) * root) + light.v * (s.y * root);

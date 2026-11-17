@@ -1,4 +1,5 @@
-//! Mesh lights: triangles and spheres whose material glows, sampled as lights in Enhanced mode.
+//! Mesh lights: triangles, spheres and solids whose material glows, sampled as lights in
+//! Enhanced mode.
 //! Without them a glowing surface lights the scene only when a bounced ray happens to meet it,
 //! so a small bright one, such as a candle flame, shows as scattered dots of light; sampled,
 //! each shading point aims a shadow ray at one of them, drawn by the light it gives off.
@@ -7,7 +8,8 @@
 //! both of its sides, as a glowing surface always has in this program, and a sphere from all
 //! around. A point on a triangle is drawn evenly over its area; on a sphere, by drawing a
 //! direction evenly within the cone the sphere fills as seen from the shaded point, which wastes
-//! no sample on its far side.
+//! no sample on its far side. A solid (box, cylinder, tube, cone or torus) sends it from all of
+//! its surface, and a point is drawn evenly over that area, as on a triangle.
 
 use crate::scene::{Primitive, Scene};
 use crate::vector::{Color, Vec3};
@@ -17,8 +19,10 @@ use crate::vector::{Color, Vec3};
 pub struct MeshLight {
     /// Its index in `Scene::prims`.
     pub prim: usize,
-    /// A sphere's radius; 0 for a triangle.
+    /// A sphere's radius; 0 for a triangle or a solid.
     pub radius: f32,
+    /// The solid it is, when it is one.
+    pub solid: Option<crate::solid::Solid>,
     /// A triangle's corner and the two edges from it; a sphere's center.
     pub p0: Vec3,
     pub e1: Vec3,
@@ -57,6 +61,7 @@ impl MeshLights {
                 // A displaced triangle lies off the shape its maps are read from.
                 Primitive::Triangle(t) if scene.displaced_face(index).is_none() => t.material,
                 Primitive::Sphere(s) if s.radius > 0.0 && s.radius.is_finite() => s.material,
+                Primitive::Solid(s) if scene.displaced_face(index).is_none() => s.material,
                 _ => continue,
             };
             let Some(emission) = scene.materials[material].maps.emission else { continue };
@@ -75,10 +80,20 @@ impl MeshLights {
             let t = match prim {
                 Primitive::Sphere(s) => {
                     lights.push(MeshLight {
-                        prim: index, radius: s.radius, p0: s.center, e1: Vec3::default(), e2: Vec3::default(),
+                        prim: index, radius: s.radius, solid: None, p0: s.center, e1: Vec3::default(), e2: Vec3::default(),
                         normal: Vec3::default(), area: 2.0 * std::f32::consts::PI * s.radius * s.radius, radiance,
                         chance: 0.0, cumulative: 0.0,
                     });
+                    continue;
+                }
+                Primitive::Solid(s) => {
+                    let area = s.area();
+                    if area > 0.0 && area.is_finite() {
+                        lights.push(MeshLight {
+                            prim: index, radius: 0.0, solid: Some(s.clone()), p0: s.center, e1: Vec3::default(),
+                            e2: Vec3::default(), normal: Vec3::default(), area, radiance, chance: 0.0, cumulative: 0.0,
+                        });
+                    }
                     continue;
                 }
                 Primitive::Triangle(t) => t,
@@ -93,7 +108,8 @@ impl MeshLights {
             }
             normal *= 1.0 / twice_area;
             lights.push(MeshLight {
-                prim: index, radius: 0.0, p0: a, e1, e2, normal, area: 0.5 * twice_area, radiance, chance: 0.0, cumulative: 0.0,
+                prim: index, radius: 0.0, solid: None, p0: a, e1, e2, normal, area: 0.5 * twice_area, radiance, chance: 0.0,
+                cumulative: 0.0,
             });
         }
         let power = |l: &MeshLight| luminance(l.radiance) * l.area;
@@ -158,8 +174,13 @@ impl MeshLight {
             let along = distance * cos - (self.radius * self.radius - distance * distance * sin * sin).max(0.0).sqrt();
             return Some((from + dir * along.max(0.0), self.chance / (2.0 * std::f32::consts::PI * cone)));
         }
-        let root = u.sqrt();
-        let target = self.p0 + self.e1 * (1.0 - v) * root + self.e2 * (v * root);
+        let target = match &self.solid {
+            Some(solid) => solid.sample_surface(u, v).0,
+            None => {
+                let root = u.sqrt();
+                self.p0 + self.e1 * (1.0 - v) * root + self.e2 * (v * root)
+            }
+        };
         let delta = target - from;
         let distance = delta.length();
         if distance <= 0.0 {
@@ -178,7 +199,12 @@ impl MeshLight {
                 None => 0.0,
             };
         }
-        let cosine = self.normal.dot(d).abs();
+        // A solid's normal where `d` meets it; a triangle's is its plane's.
+        let normal = match &self.solid {
+            Some(solid) => solid.normal(from + d * distance),
+            None => self.normal,
+        };
+        let cosine = normal.dot(d).abs();
         if cosine <= 0.0 { 0.0 } else { self.chance * distance * distance / (self.area * cosine) }
     }
 }
