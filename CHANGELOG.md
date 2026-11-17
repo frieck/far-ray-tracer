@@ -154,6 +154,12 @@ are not used. The shader is compiled for what
 
 ### Fixed
 
+- GPU renders of rooms lost light that rebounds many times: about 2% in Techniques > Window
+  room and up to a quarter in a closed white room, with more noise than on the CPU. Russian
+  roulette chose which paths go on by the light they carried before its own corrections, so
+  the few that survived came back with weights the average needed thousands of passes to
+  include. It now chooses by the light after them, as PBRT does; the GPU matches the CPU
+  within 0.5% there, with 25% less noise in the Window room.
 - The material ball read a material's roughness, metallic, emission and alpha maps from the
   wrong images.
 - The Photon map panel now reports photons actually traced instead of the requested count,

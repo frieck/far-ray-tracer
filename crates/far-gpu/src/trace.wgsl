@@ -2069,8 +2069,6 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
     // sampling there; negative otherwise.
     var mis_pdf = -1.0;
     var mis_from = vec3<f32>(0.0);
-    // The product of the chances Russian roulette let the path go on with.
-    var luck = 1.0;
     // The wavelength the path follows once it crosses glass that disperses, 0 before.
     var wavelength = 0.0;
     // A path ends at its depth limits, by Russian roulette or at this guard.
@@ -2115,7 +2113,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
                         let s = rand2();
                         d = sample_phase(d, medium.ax.y, s.x, s.y);
                         o = pos;
-                        through = survived(through * medium.center * params.strength, &luck, diffuse_bounces);
+                        through = survived(through * medium.center * params.strength, diffuse_bounces);
                         if (all(through <= vec3<f32>(0.0))) { break; }
                         rebound = through;
                         sees_lights = false;
@@ -2266,7 +2264,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
                 if (diffuse_bounces >= params.max_bounces) { break; }
                 d = cosine_direction(out);
                 o = exit + out * OFFSET;
-                through = survived(through * params.strength, &luck, diffuse_bounces);
+                through = survived(through * params.strength, diffuse_bounces);
                 if (all(through <= vec3<f32>(0.0))) { break; }
                 rebound = through;
                 sees_lights = false;
@@ -2295,7 +2293,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
             let ni = dot(ns, d);
             if (ni <= 0.0) { break; }
             let weight = ggx_diffuse(m, ns, wo, d, normalize(wo + d), ni) * (PI / ni);
-            through = survived(through * weight * (params.strength / chances.x), &luck, diffuse_bounces);
+            through = survived(through * weight * (params.strength / chances.x), diffuse_bounces);
             if (all(through <= vec3<f32>(0.0))) { break; }
             rebound = through;
             sees_lights = false;
@@ -2392,7 +2390,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
         d = cosine_direction(ns);
         if (dot(d, ng) <= 0.0) { break; }
         o = pos + ng * OFFSET;
-        through = survived(through * m.color * (strengths * params.strength), &luck, diffuse_bounces);
+        through = survived(through * m.color * (strengths * params.strength), diffuse_bounces);
         if (all(through <= vec3<f32>(0.0))) { break; }
         rebound = through;
         sees_lights = false;
@@ -2403,16 +2401,14 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
 
 // Russian roulette from the third diffuse rebound on, as the CPU's ROULETTE_AFTER: a path
 // survives by what it still carries, and one that survives is divided by its chance, so the
-// average stays exact. The chance comes from what the path carries before those divisions,
-// `luck` being their product: the CPU weighs by the last surface alone, which in a white room
-// keeps paths going for dozens of rebounds, and on the GPU the longest path holds up its whole
-// group. A path that ends comes back black.
-fn survived(through: vec3<f32>, luck: ptr<function, f32>, diffuse_bounces: u32) -> vec3<f32> {
+// average stays exact. The chance comes from what it carries after those divisions, as in PBRT,
+// which keeps that within about 1: a path that grew faint is cut early, and the few that go on
+// do not come back with huge weights that the average would wait thousands of passes for. A
+// path that ends comes back black.
+fn survived(through: vec3<f32>, diffuse_bounces: u32) -> vec3<f32> {
     if (diffuse_bounces < 3u) { return through; }
-    let carried = through * *luck;
-    let survive = clamp(max(max(carried.x, carried.y), carried.z), 0.05, 0.95);
+    let survive = clamp(max(max(through.x, through.y), through.z), 0.05, 0.95);
     if (rand() >= survive) { return vec3<f32>(0.0); }
-    *luck *= survive;
     return through / survive;
 }
 

@@ -840,6 +840,34 @@ mod tests {
     }
 
     #[test]
+    fn light_that_rebounds_many_times_in_a_white_room_adds_up_as_on_the_cpu() {
+        // A closed white room lit by a small panel: most of its light comes after the third
+        // rebound, where Russian roulette starts.
+        let wall = |center: &str, size: &str| format!(r#"{{"type": "box", "center": {center}, "size": {size},
+            "material": {{"color": [0.9, 0.9, 0.9], "specular": 0}}}}"#);
+        let text = format!(r#"{{"camera": {{"position": [0, 0, -2.5], "target": [0, 0, 1], "zoom": 1}},
+            "lights": [{{"type": "rectangle", "position": [0, 1.9, 0], "edge_u": [0.4, 0, 0], "edge_v": [0, 0, 0.4], "intensity": 4}}],
+            "objects": [{}, {}, {}, {}, {}, {}]}}"#,
+            wall("[0, -2.1, 0]", "[4.4, 0.2, 6.4]"), wall("[0, 2.1, 0]", "[4.4, 0.2, 6.4]"),
+            wall("[-2.1, 0, 0]", "[0.2, 4.4, 6.4]"), wall("[2.1, 0, 0]", "[0.2, 4.4, 6.4]"),
+            wall("[0, 0, 3.1]", "[4.4, 4.4, 0.2]"), wall("[0, 0, -3.1]", "[4.4, 4.4, 0.2]"));
+        let path = std::env::temp_dir().join(format!("far-gpu-white-room-{}.far", std::process::id()));
+        std::fs::write(&path, &text).unwrap();
+        let scene = Scene::open(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let op = Options { mode: Mode::Enhanced, width: 64, height: 48, samples: 256, ..Options::default() };
+        let gpu = match render(&scene, &Bvh::build(&scene), &op, &|| false) {
+            Ok(rendered) => rendered.sums.mean(),
+            Err(e) if e.contains("no graphics card") => return eprintln!("skipped: {e}"),
+            Err(e) => panic!("{e}"),
+        };
+        let cpu = far_core::enhanced::render_continuing(&scene, Some(&KdTree::build_corrected(&scene)), &op,
+            &Image::new(64, 48), &Progress::default(), None).unwrap().layers(&op).light;
+        let total = |l: &[[f32; 3]]| l.iter().map(|c| (c[0] + c[1] + c[2]) as f64).sum::<f64>();
+        assert!((total(&gpu) / total(&cpu) - 1.0).abs() < 0.02, "GPU {} against CPU {}", total(&gpu), total(&cpu));
+    }
+
+    #[test]
     fn glowing_triangles_and_spheres_light_the_scene_on_the_gpu_as_on_the_cpu() {
         // A floor, a glossy metal ball and a small glowing panel made of two triangles, or a
         // small glowing sphere.
@@ -946,3 +974,4 @@ mod tests {
         assert!(notes.iter().any(|n| n.contains("volumes")), "{notes:?}");
     }
 }
+

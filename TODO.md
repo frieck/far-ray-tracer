@@ -6,13 +6,11 @@ the end.
 
 ## Suggested order
 
-1. **GPU noise in the Window room** (GPU): the GPU disagrees with the CPU there, so first make
-   sure the two renderers still give the same image. Medium.
-2. **More for lights** (Scene editing): finishes editing lights in the app. Medium.
-3. **Outliner, next** (Scene editing): a model's parts, renaming, and editing an added
+1. **More for lights** (Scene editing): finishes editing lights in the app. Medium.
+2. **Outliner, next** (Scene editing): a model's parts, renaming, and editing an added
    object's material. Medium.
-4. **Light groups** (Image): change each light's strength and color after rendering. High.
-5. Then measure before choosing between **path guiding** and a **light cache** (Quality).
+3. **Light groups** (Image): change each light's strength and color after rendering. High.
+4. Then measure before choosing between **path guiding** and a **light cache** (Quality).
 
 ## Light and atmosphere
 
@@ -77,8 +75,6 @@ the end.
 The CPU engine stays the reference and the fallback; the GPU renders every example within
 noise of it.
 
-- [ ] **GPU noise in the Window room**: there the GPU is noisier than the CPU and some 2%
-  darker, with or without a portal; find which sampling differs. Medium.
 - [ ] **Adaptive sampling on the GPU**. Medium.
 - [ ] **What is left on the CPU**: more than eight volumes, and tracing caustic photons, quick
   there; after a GPU render the Photon map panel does not report lookups, which the card does
@@ -97,6 +93,16 @@ noise of it.
 - [ ] **Gathering caustics where glass focuses light**: thousands of photons in one cell keep
   a group of pixels waiting, so the GPU gains 7 to 9 times there against 15 to 35 without
   caustics; a coarser map for dense cells, or photons sorted by cell, could help. Medium.
+
+The GPU now ends paths by Russian roulette as PBRT does, by what a path carries after the
+roulette's corrections; the CPU weighs by the last surface alone. Both are exact on average; in
+the Window room the GPU keeps some 15% more noise than the CPU at the same passes, and the CPU's
+choice there would cost 40% more time for it.
+
+Tried and measured without gain on an M4 Max: triangles split into what finding a hit reads
+and what shading reads (48 bytes against 96 per triangle), and their normals worked out only
+for the triangle a ray stops at. Render times stayed within noise in six scenes; the card's
+caches seem to hold the 96-byte records well enough.
 
 Risks: two renderers to keep equal; no recursion in shaders; Windows stops a GPU command
 after 2 seconds, so work goes in small slices; CI has no GPU, only a software renderer; GPU and
