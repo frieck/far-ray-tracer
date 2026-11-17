@@ -86,9 +86,6 @@ noise of it.
   in a SIMD group of 32 only a quarter to a half of the lanes do useful work while it walks
   the tree. A tree of 4 or 8 children with their boxes in the parent, compressed as in
   Ylitalo et al.'s CWBVH, reads fewer nodes and runs fewer steps per ray. Medium to high.
-- [ ] **Shadow rays**: each hit casts one toward every light (up to four), one toward the
-  environment and one toward glowing surfaces; in the measures below they cost as much as
-  the path's own rays or more. Measure which of them pay for themselves. Low to measure.
 - [ ] **The displaced ground's march**: most of a showcase render on the GPU (5 s against
   1.2 s without it); a coarser first pass over a max-height mip chain would skip most steps.
   Medium.
@@ -113,6 +110,15 @@ every 4 pixels, against the same columns grouped by material: plastic and subsur
 slower with the same work, all four materials 30% slower with 13% more work; in the examples
 shading is 10 to 35% of the time. So a wavefront with paths sorted by material, high effort,
 would win little here; the tree walk is where the time is.
+
+Shadow rays, measured the same way: each hit casts one toward every light (up to four), one
+toward the environment and one toward glowing surfaces, and each of those kinds takes 4 to
+48% of the time depending on the scene. They pay for themselves: one shadow ray per hit, to
+lamps, environment or glowing surfaces picked by chance, saves up to 28% of the time but
+leaves 1.6 to 7 times the noise per unit of time where a scene has more than one kind.
+Through glass, a first walk that stops at any opaque surface, with the ordered walk only
+when glass is in the way, gives the same image but moves render times from -6% to +17%,
+since rays that do cross glass walk twice.
 
 Tried and measured without gain on an M4 Max: triangles split into what finding a hit reads
 and what shading reads (48 bytes against 96 per triangle), and their normals worked out only
