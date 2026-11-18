@@ -76,7 +76,16 @@ enum LightFile {
 /// read raises it; they then refuse such scenes with a clear message instead of misreading them.
 pub const FORMAT: u32 = 3;
 
-fn default_intensity() -> f32 { 1.0 }
+/// A lamp's glow from its `intensity` or its `power` in watts over `extent`: π times its area
+/// for a panel, 4π² r² for a sphere, the exitance of a surface that glows evenly, in square
+/// metres, a scene unit being the camera's `scene_unit` metres.
+fn glow(intensity: Option<f32>, power: Option<f32>, extent: f32) -> Result<f32, String> {
+    match (intensity, power) {
+        (Some(_), Some(_)) => Err("A light takes intensity or power, not both".into()),
+        (_, Some(power)) => Ok(power / extent),
+        (intensity, None) => Ok(intensity.unwrap_or(1.0)),
+    }
+}
 
 fn default_spot_blend() -> f32 { 0.15 }
 
@@ -98,8 +107,16 @@ enum AreaLightFile {
         color: Point,
         #[serde(default)]
         temperature: Option<f32>,
-        #[serde(default = "default_intensity")]
-        intensity: f32,
+        /// Its surface's glow times its color: what it looks like, whatever its size.
+        #[serde(default)]
+        intensity: Option<f32>,
+        /// Or the light it gives in all, in watts, as Blender's: its glow is then the power over
+        /// π times its area, so resizing it keeps its light. 1 by intensity without either.
+        #[serde(default)]
+        power: Option<f32>,
+        /// The camera does not see it; its light and its reflections stay.
+        #[serde(default)]
+        invisible: bool,
     },
     Sphere {
         position: Point,
@@ -108,8 +125,12 @@ enum AreaLightFile {
         color: Point,
         #[serde(default)]
         temperature: Option<f32>,
-        #[serde(default = "default_intensity")]
-        intensity: f32,
+        #[serde(default)]
+        intensity: Option<f32>,
+        /// Or its light in watts: its glow is the power over 4π² r², as Blender's point light;
+        /// a spotlight's or fixture's power is the one it would give shining all around.
+        #[serde(default)]
+        power: Option<f32>,
         /// Where a spotlight or an IES fixture points; straight down by default.
         #[serde(default)]
         direction: Option<Point>,
@@ -122,6 +143,9 @@ enum AreaLightFile {
         /// An IES file, relative to the scene, with the fixture's measured light distribution.
         #[serde(default)]
         ies: Option<String>,
+        /// The camera does not see it; its light and its reflections stay.
+        #[serde(default)]
+        invisible: bool,
     },
 }
 
@@ -587,6 +611,8 @@ impl Scene {
             None => find_data_folder(path),
         };
         file.camera.validate()?;
+        // Lamps give their power in watts over metres: a scene unit is this many.
+        let unit = file.camera.scene_unit;
         let mut scene = Scene::empty();
         scene.camera = file.camera;
         scene.render_settings = file.render.clone();
@@ -730,7 +756,7 @@ impl Scene {
                     let material = scene.add_material(material.into(), dir.as_deref(), &mut cache);
                     scene.lights.push(Sphere::new(vector(light.position), light.radius, material));
                 }
-                LightFile::Area(AreaLightFile::Rectangle { position, edge_u, edge_v, color, temperature, intensity }) => {
+                LightFile::Area(AreaLightFile::Rectangle { position, edge_u, edge_v, color, temperature, intensity, power, invisible }) => {
                     let color = warmed(color, temperature)?;
                     let (u, v) = (vector(edge_u), vector(edge_v));
                     let (width, height) = (u.length(), v.length());
@@ -738,6 +764,7 @@ impl Scene {
                     if !width.is_finite() || !height.is_finite() || u.dot(v).abs() > 1e-5 * width * height {
                         return Err("A rectangular light needs finite, perpendicular edge_u and edge_v vectors".into());
                     }
+                    let intensity = glow(intensity, power, std::f32::consts::PI * width * height * unit * unit)?;
                     if !intensity.is_finite() || intensity < 0.0 || color.iter().any(|c| *c < 0.0) {
                         return Err("Light intensity and color must be nonnegative".into());
                     }
@@ -747,18 +774,21 @@ impl Scene {
                     normal.normalize();
                     scene.rect_lights.push(RectLight {
                         proxy: Sphere::new(vector(position), 0.5 * (u + v).length(), material),
-                        edge_u: u, edge_v: v, normal, area: width * height,
+                        edge_u: u, edge_v: v, normal, area: width * height, unseen: invisible,
                     });
                 }
-                LightFile::Area(AreaLightFile::Sphere { position, radius, color, temperature, intensity, direction, spot_angle, spot_blend, ies }) => {
+                LightFile::Area(AreaLightFile::Sphere { position, radius, color, temperature, intensity, power, direction, spot_angle, spot_blend, ies, invisible }) => {
                     let color = warmed(color, temperature)?;
                     require_positive(&[radius], "A spherical light")?;
+                    let metres = radius * unit;
+                    let intensity = glow(intensity, power, 4.0 * std::f32::consts::PI * std::f32::consts::PI * metres * metres)?;
                     if !radius.is_finite() || !intensity.is_finite() || intensity < 0.0 || color.iter().any(|c| *c < 0.0) {
                         return Err("Light intensity and color must be nonnegative".into());
                     }
                     let material = MaterialFile { color: (vector(color) * intensity).array(), ..MaterialFile::default() };
                     let material = scene.add_material(material.into(), dir.as_deref(), &mut cache);
                     scene.bulbs.push(Sphere::new(vector(position), radius, material));
+                    scene.bulb_unseen.push(invisible);
                     let ies = match ies {
                         Some(file) => {
                             let at = path.parent().unwrap_or(Path::new(".")).join(&file);
@@ -922,6 +952,45 @@ impl Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lamps_take_their_light_in_watts_as_blender() {
+        use std::f32::consts::PI;
+        // In a scene measured in metres; see below for another unit.
+        let read = |light: &str| Scene::from_far(format!(r#"{{"camera": {{"scene_unit": 1}}, "lights": [{light}], "objects": []}}"#).as_bytes(),
+            Path::new("test.far"));
+        // A sphere of radius 0.5 giving 100 W glows 100 / (4π² · 0.25); a 2 by 1 panel
+        // giving 100 W glows 100 / (π · 2).
+        let sphere = read(r#"{"type": "sphere", "position": [0, 2, 0], "radius": 0.5, "power": 100}"#).unwrap();
+        let glow = sphere.materials[sphere.bulbs[0].material].color.x;
+        assert!((glow - 100.0 / (4.0 * PI * PI * 0.25)).abs() < 1e-3, "{glow}");
+        let panel = read(r#"{"type": "rectangle", "position": [0, 2, 0], "edge_u": [2, 0, 0], "edge_v": [0, 0, 1], "power": 100}"#).unwrap();
+        let glow = panel.materials[panel.rect_lights[0].proxy.material].color.x;
+        assert!((glow - 100.0 / (PI * 2.0)).abs() < 1e-3, "{glow}");
+        // Twice the radius, the same power: a quarter of the glow, the same light.
+        let bigger = read(r#"{"type": "sphere", "position": [0, 2, 0], "radius": 1, "power": 100}"#).unwrap();
+        let wide = bigger.materials[bigger.bulbs[0].material].color.x;
+        assert!((wide * 4.0 - sphere.materials[sphere.bulbs[0].material].color.x).abs() < 1e-4);
+        // An intensity still reads as before, and a light takes one or the other.
+        let old = read(r#"{"type": "sphere", "position": [0, 2, 0], "radius": 0.5, "intensity": 7}"#).unwrap();
+        assert_eq!(old.materials[old.bulbs[0].material].color.x, 7.0);
+        assert!(read(r#"{"type": "sphere", "position": [0, 2, 0], "radius": 0.5, "intensity": 7, "power": 100}"#).is_err());
+        assert!(read(r#"{"type": "sphere", "position": [0, 2, 0], "radius": 0.5, "power": -1}"#).is_err());
+        // With a scene unit of 10 cm, the same sphere is 5 cm across in metres: a hundred times
+        // the glow, the light 100 W gives a tenth as far away.
+        let small = Scene::from_far(br#"{"lights": [{"type": "sphere", "position": [0, 2, 0], "radius": 0.5, "power": 100}], "objects": []}"#,
+            Path::new("test.far")).unwrap();
+        assert_eq!(small.camera.scene_unit, 0.1);
+        let glow = small.materials[small.bulbs[0].material].color.x;
+        assert!((glow / sphere.materials[sphere.bulbs[0].material].color.x - 100.0).abs() < 1e-2, "{glow}");
+        // An edit of the unit reads the lamps again.
+        let edits = crate::scene_save::EntryEdits { scene_unit: Some(1.0), ..Default::default() };
+        let mut source = small.clone();
+        source.source = Some(std::sync::Arc::new(serde_json::from_str(
+            r#"{"lights": [{"type": "sphere", "position": [0, 2, 0], "radius": 0.5, "power": 100}], "objects": []}"#).unwrap()));
+        let metres = source.edited(Path::new("test.far"), &edits).unwrap();
+        assert_eq!(metres.materials[metres.bulbs[0].material].color.x, sphere.materials[sphere.bulbs[0].material].color.x);
+    }
 
     #[test]
     fn scenes_from_a_newer_format_are_refused_clearly() {

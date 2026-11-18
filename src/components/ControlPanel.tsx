@@ -52,9 +52,10 @@ import { GlassPanel } from "./GlassPanel";
 import { NumberField } from "./NumberField";
 import { Segmented } from "./Segmented";
 import { ButtonRow, CheckRow, Choice, ChoiceRow, ColorRow, Hint, Row, ScrubRow, SearchContext, Section, VectorRow } from "./props";
-import { fieldsFor, resizedEdge, valueOf, type Field, type Vec3 } from "../objectFields";
+import { anchorOf, fieldsFor, LIGHT_LOOK_KEYS, resizedEdge, valueOf, type Field, type Vec3 } from "../objectFields";
 import { planePoints, planeState, type PlaneState } from "../transforms";
-import { LightColorRows, LightsPanel } from "./LightControls";
+import { LightAimRow, LightCameraRow, LightColorRows, LightIesRow, LightKindRow, LightsPanel, PowerRow } from "./LightControls";
+import { editedEntry, inWatts, switchable } from "../lightKinds";
 import { sceneEntries } from "../sceneEntries";
 
 interface ControlPanelProps {
@@ -62,6 +63,8 @@ interface ControlPanelProps {
   onImportEnvironment: () => void;
   /** Picks a .cube file for the LUT. */
   onChooseLut: () => void;
+  /** Picks an IES file for a light; null when none was chosen. */
+  onChooseIes: () => Promise<string | null>;
   scene: import("../types").SceneInfo | null;
   pickingFocus: boolean;
   onPickFocus: () => void;
@@ -354,12 +357,13 @@ function LightTab({ props, update, enhanced }: TabContext) {
   return (
     <>
       {scene && (
-        <LightsPanel lights={sceneEntries(scene, settings).lights} removed={settings.removedLights} edits={settings.lightEdits}
+        <LightsPanel lights={sceneEntries(scene, settings).lights} unit={settings.sceneUnit} removed={settings.removedLights} edits={settings.lightEdits}
           hidden={settings.hiddenLights}
           selection={props.selection} onSelect={props.onSelect}
           onEdit={(id, patch) => update(withEntryEdit(settings, true, id, patch))}
           onHiddenChange={(hiddenLights) => update({ hiddenLights })} />
       )}
+      <SelectedLight props={props} update={update} enhanced={enhanced} />
       <Section id="indirect" title="Indirect light"
         enabled={{ checked: settings.indirect, onChange: (indirect) => update({ indirect }) }}
         extra={auto && (
@@ -540,7 +544,7 @@ function CameraTab({ props, update, enhanced }: TabContext) {
             <ScrubRow label="Scene unit" keywords="scale size metres meters centimetres" value={settings.sceneUnit * 100}
               min={1} max={100} hard={[0.001, 1e8]} step={0.001} log disabled={!enhanced}
               format={(value) => (value >= 100 ? `${Number((value / 100).toFixed(2))} m` : `${Number(value.toFixed(2))} cm`)}
-              hint="How long one scene unit is, which sets how much an f-number blurs: a small scene blurs more, as close-ups do. The examples use 10 cm."
+              hint="How long one scene unit is, which sets how much an f-number blurs, a small scene blurring more, as close-ups do, and how far a lamp's watts reach. The examples use 10 cm."
               onChange={(centimetres) => update({ sceneUnit: centimetres / 100 })} />
           </>
         }>
@@ -656,7 +660,7 @@ function CameraTab({ props, update, enhanced }: TabContext) {
           hint="A reddish glow around very bright light, as cinema film shows. Applied when the render finishes."
           onChange={(halation) => update({ halation })} />
         <ChoiceRow<string> label="LUT" keywords="look grade color grading cube film" value={settings.lut ?? "none"} disabled={!enhanced}
-          hint="A color look graded over the finished picture, as in DaVinci Resolve or V-Ray's frame buffer: one of the program's own, or a .cube file made for sRGB or Rec. 709 images. Saved EXR files keep the light without it."
+          hint="A color look graded over the finished picture: one of the program's own, or a .cube file made for sRGB or Rec. 709 images. Saved EXR files keep the light without it."
           onChange={(value) => {
             if (value === "load") props.onChooseLut();
             else update({ lut: value === "none" ? null : value });
@@ -793,9 +797,13 @@ function ObjectTab({ props, update }: TabContext) {
   const key = light ? "lightEdits" : "objectEdits";
   const allEdits = settings[key];
   const edits = allEdits[selection.id];
-  const fields = fieldsFor(entry.kind, entry.source, light);
-  const set = (field: string, value: unknown) =>
-    update({ [key]: { ...allEdits, [selection.id]: { ...edits, [field]: value } } } as Partial<Settings>);
+  // A light's color, intensity and cone are in the Light tab.
+  const fields = fieldsFor(entry.kind, entry.source, light).filter((f) => !light || !LIGHT_LOOK_KEYS.includes(f.key));
+  // Resizing a lamp keeps the light it gives: it is given by power from then on.
+  const set = (field: string, value: unknown) => {
+    const patch = light ? inWatts(editedEntry(entry.source, edits), { [field]: value }, settings.sceneUnit) : { [field]: value };
+    update({ [key]: { ...allEdits, [selection.id]: { ...edits, ...patch } } } as Partial<Settings>);
+  };
   const reset = () => {
     const rest = { ...allEdits };
     delete rest[selection.id];
@@ -811,15 +819,68 @@ function ObjectTab({ props, update }: TabContext) {
         </button>
       }>
       {fields.length === 0 && <Hint>Nothing to place here.</Hint>}
-      {fields.map((field) => field.type === "lightColor" && light
-        ? <LightColorRows key={field.key} light={entry} edits={edits}
-            onChange={(patch) => update(withEntryEdit(settings, true, selection.id, patch))} />
-        : <FieldRow key={field.key} field={field} source={entry.source} edits={edits} onChange={set} />)}
+      {fields.map((field) => <FieldRow key={field.key} field={field} source={entry.source} edits={edits} onChange={set} />)}
+      {light && (
+        <LightAimRow light={entry} edits={edits}
+          objects={all.objects.flatMap((object, id) => {
+            if (settings.removedObjects.includes(id) || object.kind === "ground") return [];
+            const anchor = anchorOf(object.kind, object.source, settings.objectEdits[id], false);
+            return anchor ? [{ name: object.name, point: anchor.point }] : [];
+          })}
+          onChange={(patch) => update(withEntryEdit(settings, true, selection.id, patch))} />
+      )}
       {!light && entry.kind === "volume" && (
         // What the volume is made of, as the fog: the same settings.
         <MediumRows medium={{ ...entry.source, ...edits }} onChange={(patch) => update(withEntryEdit(settings, false, selection.id, patch))} />
       )}
-      <Hint>Saved into the scene file with Save Scene.</Hint>
+      <Hint>{light && entry.kind !== "portal"
+        ? "Saved into the scene file with Save Scene. Its kind, color and intensity are in the Light tab."
+        : "Saved into the scene file with Save Scene."}</Hint>
+    </Section>
+  );
+}
+
+/**
+ * The selected light in the Light tab, as Blender's light properties: what light it gives, its
+ * kind, color, intensity, cone or IES file, and whether the camera sees it. Where it is, its
+ * size and aim are in the Object tab.
+ */
+function SelectedLight({ props, update }: TabContext) {
+  const { settings, scene, selection } = props;
+  if (!scene || selection?.kind !== "light") return null;
+  const entry = sceneEntries(scene, settings).lights[selection.id];
+  if (!entry || entry.kind === "portal" || settings.removedLights.includes(selection.id)) return null;
+  const edits = settings.lightEdits[selection.id];
+  // A lamp edited here gives its light by power from then on; see inWatts.
+  const change = (patch: Record<string, unknown>) =>
+    update(withEntryEdit(settings, true, selection.id, inWatts(editedEntry(entry.source, edits), patch, settings.sceneUnit)));
+  const set = (key: string, value: unknown) => change({ [key]: value });
+  const reset = () => {
+    const rest = { ...settings.lightEdits };
+    delete rest[selection.id];
+    update({ lightEdits: rest });
+  };
+  const changed = edits !== undefined && Object.keys(edits).length > 0;
+  const fields = fieldsFor(entry.kind, entry.source, true).filter((f) => LIGHT_LOOK_KEYS.includes(f.key));
+  return (
+    <Section id="selected-light" title={entry.name}
+      extra={
+        <button type="button" className="prop-mini" disabled={!changed} onClick={reset} title="Back to the scene file's values">
+          <RotateCcw size={11} aria-hidden="true" />
+          Reset
+        </button>
+      }>
+      {switchable(entry.kind) && (
+        <LightKindRow light={entry} edits={edits} center={scene.center} unit={settings.sceneUnit} onChooseIes={props.onChooseIes} onChange={change} />
+      )}
+      {fields.map((field) => field.type === "lightColor"
+        ? <LightColorRows key={field.key} light={entry} edits={edits} onChange={change} />
+        : field.type === "power"
+          ? <PowerRow key={field.key} light={entry} edits={edits} unit={settings.sceneUnit} onChange={change} />
+          : <FieldRow key={field.key} field={field} source={entry.source} edits={edits} onChange={set} />)}
+      <LightIesRow light={entry} edits={edits} onChooseIes={props.onChooseIes} onChange={change} />
+      <LightCameraRow light={entry} edits={edits} onChange={change} />
+      <Hint>Saved into the scene file with Save Scene. Move it, size it and aim it in the Object tab.</Hint>
     </Section>
   );
 }

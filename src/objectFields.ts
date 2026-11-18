@@ -15,7 +15,9 @@ export type Field =
   /** One of a rectangular light's edges, by its length; its direction stays. */
   | { type: "edge"; key: string; label: string }
   /** A light's color, as RGB or as a color temperature. */
-  | { type: "lightColor"; key: string; label: string };
+  | { type: "lightColor"; key: string; label: string }
+  /** A lamp's light in watts, its `power`, or worked out from its `intensity`. */
+  | { type: "power"; key: string; label: string };
 
 /** The usual reach of a drag; typing goes past it. */
 const PLACE = { min: -20, max: 20, step: 0.01, hard: [-1e6, 1e6] as [number, number] };
@@ -28,10 +30,7 @@ const turned: Field = {
 };
 const length = (key: string, label: string): Field => ({ type: "number", key, label, default: 1, ...SIZE });
 const glow: Field = { type: "lightColor", key: "color", label: "Color" };
-const intensity: Field = {
-  type: "number", key: "intensity", label: "Intensity", default: 1, min: 0, max: 50, step: 0.05, hard: [0, 1e6],
-  hint: "The light's strength, times its color.",
-};
+const intensity: Field = { type: "power", key: "power", label: "Power" };
 const aimed: Field = {
   type: "vector", key: "direction", label: "Direction", default: [0, -1, 0], min: -1, max: 1, step: 0.01, hard: [-1e3, 1e3],
   hint: "Where it points; straight down by default.",
@@ -67,6 +66,12 @@ export const LIGHT_FIELDS: Record<string, Field[]> = {
   ],
   ies: [at("position"), length("radius", "Radius"), glow, intensity, aimed],
 };
+
+/**
+ * A light's fields that say what light it gives, edited in the Light tab as Blender's light
+ * properties; the rest place it, in the Object tab.
+ */
+export const LIGHT_LOOK_KEYS = ["color", "power", "spot_angle", "spot_blend"];
 
 /**
  * The fields an entry shows: a model sized by `size` shows that instead of its scale; a

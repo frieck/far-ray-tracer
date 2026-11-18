@@ -14,7 +14,8 @@ use std::path::{Component, Path, PathBuf};
 /// Changes to the scene file's objects and lights, by index: each one's fields replace those
 /// of the entry, and a null removes the field, as when a light goes back from a temperature to
 /// a plain color. Fields that say what an entry is or where its data lives (`type`, `file`,
-/// `material`, `ies`, `name`) are left alone.
+/// `material`, `ies`, `name`) are left alone, but for a light's `type`, `ies` and `material`,
+/// which switch its kind.
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct EntryEdits {
     #[serde(default)]
@@ -38,10 +39,19 @@ pub struct EntryEdits {
     pub fog: Option<Map<String, Value>>,
     #[serde(default)]
     pub no_fog: bool,
+    /// The camera's scene unit, in metres, in place of the file's: lamps given in watts light
+    /// as far as that many metres.
+    #[serde(default)]
+    pub scene_unit: Option<f32>,
 }
 
 /// Fields an edit cannot change.
 const FIXED_FIELDS: [&str; 5] = ["type", "file", "material", "ies", "name"];
+
+/// Of those, the ones a light's edit may change: switching its kind, as from a sphere to a
+/// panel, loading an IES profile, and dropping a 2008 light's material when it becomes a
+/// physical one.
+const LIGHT_KINDS: [&str; 3] = ["type", "ies", "material"];
 
 impl EntryEdits {
     /// Whether the scene reads the same with these edits: deletions alone change nothing until
@@ -49,6 +59,7 @@ impl EntryEdits {
     pub fn is_empty(&self) -> bool {
         self.objects.iter().all(|(_, f)| f.is_empty()) && self.lights.iter().all(|(_, f)| f.is_empty())
             && self.added_objects.is_empty() && self.added_lights.is_empty() && self.fog.is_none() && !self.no_fog
+            && self.scene_unit.is_none()
     }
 
     /// Whether saving changes which objects and lights the file has, so their indices.
@@ -59,6 +70,12 @@ impl EntryEdits {
     /// Writes the edits into a scene file's root object: the added entries after the file's,
     /// then each edit's fields. Deleted entries stay, so indices hold; see `remove_deleted`.
     pub fn apply(&self, root: &mut Map<String, Value>) {
+        if let Some(unit) = self.scene_unit {
+            let camera = root.entry("camera").or_insert_with(|| json!({}));
+            if let Some(camera) = camera.as_object_mut() {
+                camera.insert("scene_unit".into(), json!(unit));
+            }
+        }
         if self.no_fog {
             root.remove("fog");
         } else if let Some(fog) = &self.fog {
@@ -78,7 +95,7 @@ impl EntryEdits {
             for (index, fields) in edits {
                 let Some(entry) = entries.get_mut(*index).and_then(Value::as_object_mut) else { continue };
                 for (key, value) in fields {
-                    if FIXED_FIELDS.contains(&key.as_str()) {
+                    if FIXED_FIELDS.contains(&key.as_str()) && !(list == "lights" && LIGHT_KINDS.contains(&key.as_str())) {
                         continue;
                     }
                     if value.is_null() {
@@ -138,16 +155,20 @@ pub fn save(scene: &Scene, original: &Path, target: &Path, edits: &SceneEdits) -
     if from != to {
         relocate_paths(root, &from, &to, original, target);
     }
-    // A model added in the app names its file by its full path; the scene keeps it relative.
+    // A model or an IES profile chosen in the app is named by its full path; the scene keeps
+    // it relative.
+    let relative = |value: &mut Value| {
+        if let Some(path) = value.as_str().map(PathBuf::from).filter(|p| p.is_absolute() && p.exists()) {
+            *value = json!(relative_to(&path, &to));
+        }
+    };
     for object in root.get_mut("objects").and_then(Value::as_array_mut).into_iter().flatten() {
-        if object.get("type").and_then(Value::as_str) != Some("model") {
-            continue;
+        if object.get("type").and_then(Value::as_str) == Some("model") {
+            if let Some(file) = object.get_mut("file") { relative(file); }
         }
-        if let Some(file) = object.get_mut("file") {
-            if let Some(path) = file.as_str().map(PathBuf::from).filter(|p| p.is_absolute() && p.exists()) {
-                *file = json!(relative_to(&path, &to));
-            }
-        }
+    }
+    for light in root.get_mut("lights").and_then(Value::as_array_mut).into_iter().flatten() {
+        if let Some(ies) = light.get_mut("ies") { relative(ies); }
     }
     root.insert("format".into(), json!(crate::scene_file::FORMAT));
     root.insert("camera".into(), serde_json::to_value(edits.camera).map_err(|e| e.to_string())?);
@@ -426,6 +447,43 @@ mod tests {
 
     fn metal() -> crate::surface::MaterialEdit {
         crate::surface::MaterialEdit { surface: serde_json::from_str(r#"{"preset": "metal", "roughness": 0.3}"#).unwrap(), ..Default::default() }
+    }
+
+    #[test]
+    fn a_lights_kind_and_ies_file_can_be_switched_and_saved() {
+        let dir = folder("kinds");
+        let ies = dir.join("lamp.ies");
+        std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/scene-data/ies/narrow-downlight.ies"), &ies).unwrap();
+        let original = dir.join("a.far");
+        std::fs::write(&original, r#"{"lights": [
+            {"type": "sphere", "position": [0, 3, 0], "radius": 0.2, "intensity": 5},
+            {"type": "sphere", "position": [2, 3, 0], "radius": 0.2, "spot_angle": 40}],
+            "objects": [{"type": "sphere", "center": [0, 0, 5], "radius": 1}]}"#).unwrap();
+        let scene = Scene::open(&original).unwrap();
+        let fields = |value: Value| value.as_object().unwrap().clone();
+        // The first becomes a panel facing down, the second an IES fixture chosen by full path,
+        // hidden from the camera.
+        let entries = EntryEdits {
+            lights: vec![
+                (0, fields(json!({"type": "rectangle", "radius": null, "edge_u": [0, 0, -0.4], "edge_v": [0.4, 0, 0]}))),
+                (1, fields(json!({"ies": ies.to_string_lossy(), "spot_angle": null, "invisible": true}))),
+            ],
+            ..Default::default()
+        };
+        let edited = scene.edited(&original, &entries).unwrap();
+        let kinds: Vec<&str> = edited.scene_lights.iter().map(|l| l.kind).collect();
+        assert_eq!(kinds, ["rectangle", "ies"]);
+        assert!(edited.rect_lights[0].normal.y < -0.99, "it faces down");
+        assert_eq!(edited.bulb_unseen, [true]);
+        let edits = SceneEdits { entries, ..Default::default() };
+        save(&scene, &original, &original, &edits).unwrap();
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(&original).unwrap()).unwrap();
+        assert_eq!(saved["lights"][0]["type"], "rectangle");
+        assert!(saved["lights"][0].get("radius").is_none());
+        assert_eq!(saved["lights"][1]["ies"], "lamp.ies");
+        assert_eq!(saved["lights"][1]["invisible"], true);
+        let reopened = Scene::open(&original).unwrap();
+        assert_eq!(reopened.scene_lights.iter().map(|l| l.kind).collect::<Vec<_>>(), ["rectangle", "ies"]);
     }
 
     #[test]

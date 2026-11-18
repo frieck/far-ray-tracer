@@ -34,6 +34,8 @@ interface TransformGizmoProps {
   canScale: boolean;
   /** Its own axes it can be scaled along alone, as 0, 1 and 2 for X, Y and Z. */
   scaleAxes: (0 | 1 | 2)[];
+  /** Its own X, Y and Z in the world, unit vectors, where the scale handles point. */
+  ownAxes?: [Vec3, Vec3, Vec3];
   /** While dragging: the change so far, for the 3D view; null once it ends. */
   onPreview: (change: Change | null) => void;
   /** The change it ended with. */
@@ -75,8 +77,8 @@ function typing(target: EventTarget | null): boolean {
 /**
  * The gizmo of the selected object or light, as in Blender, in three modes: arrows to move it
  * along X, Y or Z and a ring to move it across the view; rings to turn it about each axis and
- * one about the view; and handles to scale it along its own axes, or as a whole from the
- * middle. G, R and S begin moving, turning or scaling from the keyboard, X, Y or Z the
+ * one about the view; and handles along its own axes, turned with it, to scale it along them,
+ * or as a whole from the middle. G, R and S begin moving, turning or scaling from the keyboard, X, Y or Z the
  * current mode along that axis; while one goes on, X, Y or Z locks it to that axis and the
  * same key frees it. A keyboard change follows the mouse until a click or Enter, and Esc
  * calls it off. Shift moves in tenths, turns in 5 degree steps and scales in tenths.
@@ -448,8 +450,8 @@ export function TransformGizmo(props: TransformGizmoProps) {
   } else {
     handles = (
       <>
-        {AXES.filter((a) => props.scaleAxes.includes(a.index)).map(({ name, direction, color }) => {
-          const tip = at(add(point, direction, reach));
+        {AXES.filter((a) => props.scaleAxes.includes(a.index)).map(({ name, index, direction, color }) => {
+          const tip = at(add(point, props.ownAxes?.[index] ?? direction, reach));
           if (!tip) return null;
           const [tx, ty] = tip;
           if (Math.hypot(tx - cx, ty - cy) < SHORTEST) return null;

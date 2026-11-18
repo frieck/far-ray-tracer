@@ -53,6 +53,12 @@ pub struct PreviewLight {
     pub corners: Vec<[f32; 3]>,
     /// Its index in `Scene::scene_lights`.
     pub light: Option<usize>,
+    /// Where a spotlight or IES fixture points, a unit vector; None for the rest.
+    pub aim: Option<[f32; 3]>,
+    /// A spotlight's cone, as the angle from its axis to its edge, in radians.
+    pub cone: Option<f32>,
+    /// How long the 3D view draws its aim and cone: a share of the scene's size.
+    pub reach: f32,
 }
 
 #[derive(Serialize)]
@@ -144,24 +150,30 @@ pub fn describe(scene: &Scene) -> PreviewScene {
         }
     }
     // A light as the file lists it.
+    let reach = 0.15 * scene.extends.size.length();
     let named = |kinds: &[&str], index: usize| scene.scene_lights.iter().position(|l| kinds.contains(&l.kind) && l.index == index);
     let mut lights: Vec<PreviewLight> = scene.lights.iter().enumerate().map(|(i, light)| PreviewLight {
         position: light.center.array(),
         color: scene.materials[light.material].color.array(),
         corners: Vec::new(),
         light: named(&["point"], i),
+        aim: None, cone: None, reach,
     }).collect();
     lights.extend(scene.rect_lights.iter().enumerate().map(|(i, light)| PreviewLight {
         position: light.proxy.center.array(),
         color: scene.materials[light.proxy.material].color.array(),
         corners: [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].map(|(u, v)| light.point(u, v).array()).to_vec(),
         light: named(&["rectangle"], i),
+        aim: None, cone: None, reach,
     }));
     lights.extend(scene.bulbs.iter().enumerate().map(|(i, light)| PreviewLight {
         position: light.center.array(),
         color: scene.materials[light.material].color.array(),
         corners: Vec::new(),
         light: named(&["sphere", "spot", "ies"], i),
+        aim: scene.bulb_profiles.get(i).and_then(Option::as_ref).filter(|p| p.cone.is_some() || p.ies.is_some()).map(|p| p.axis.array()),
+        cone: scene.bulb_profiles.get(i).and_then(Option::as_ref).and_then(|p| p.cone).map(|(edge, _)| edge.clamp(-1.0, 1.0).acos()),
+        reach,
     }));
     PreviewScene { objects, meshes: meshes.into_iter().map(|(_, mesh)| mesh).collect(), lights }
 }
@@ -211,6 +223,20 @@ mod tests {
         let scene = Scene::open(&assets("rectangular-lights.far")).unwrap();
         let preview = describe(&scene);
         assert_eq!(preview.lights.iter().filter(|l| l.corners.len() == 4).count(), 2);
+    }
+
+    #[test]
+    fn spotlights_carry_their_aim_and_cone() {
+        let text = br#"{"lights": [
+            {"type": "sphere", "position": [0, 3, 0], "radius": 0.1, "direction": [0, -1, 0], "spot_angle": 40},
+            {"type": "sphere", "position": [2, 3, 0], "radius": 0.1}],
+            "objects": [{"type": "sphere", "center": [0, 0, 5], "radius": 1}]}"#;
+        let preview = describe(&Scene::from_far(text, Path::new("test.far")).unwrap());
+        let spot = &preview.lights[0];
+        assert_eq!(spot.aim, Some([0.0, -1.0, 0.0]));
+        assert!((spot.cone.unwrap() - 20f32.to_radians()).abs() < 1e-4, "half the full angle: {:?}", spot.cone);
+        assert!(spot.reach > 0.0);
+        assert_eq!((preview.lights[1].aim, preview.lights[1].cone), (None, None));
     }
 
     #[test]

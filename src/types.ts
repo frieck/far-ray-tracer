@@ -148,6 +148,8 @@ export interface EntryEdits {
   /** A fog in place of the file's, or none at all. */
   fog?: Record<string, unknown>;
   no_fog?: boolean;
+  /** The camera's scene unit in place of the file's, for lamps given in watts. */
+  scene_unit?: number;
 }
 
 /** What the interface changes in the scene itself, for the commands that look at it. */
@@ -285,8 +287,11 @@ export interface Settings {
   fNumber: number;
   /** The sensor's width in millimetres, which turns the zoom into a focal length. */
   sensorWidth: number;
-  /** How long a scene unit is, in metres, which turns the f-number into an opening. */
+  /** How long a scene unit is, in metres, which turns the f-number into an opening and lamps'
+   * watts into light. */
   sceneUnit: number;
+  /** The scene file's own unit: when `sceneUnit` differs, the scene is read again with it. */
+  fileSceneUnit: number;
   focusDistance: number;
   blades: number;
   bladeRotation: number;

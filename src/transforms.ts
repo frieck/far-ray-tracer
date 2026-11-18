@@ -7,7 +7,7 @@
  */
 import { anchorOf, entryValue, middle, type Vec3 } from "./objectFields";
 
-type Matrix = [Vec3, Vec3, Vec3];
+export type Matrix = [Vec3, Vec3, Vec3];
 type Patch = Record<string, unknown>;
 
 /** A change the gizmo makes, from where the drag began. */
@@ -24,6 +24,10 @@ export interface Transform {
   canRotate: boolean;
   /** Axes it can be scaled along by themselves; it always scales as a whole. */
   scaleAxes: (0 | 1 | 2)[];
+  /** Its own X, Y and Z in the world, as unit vectors: where the scale handles point. */
+  ownAxes: Matrix;
+  /** The world directions that scaling along one of its own axes stretches, for the 3D view. */
+  stretches: (axis: 0 | 1 | 2) => Vec3[];
   canScale: boolean;
   /** The fields a change gives it. */
   apply: (change: Change) => Patch;
@@ -145,6 +149,19 @@ export function transformOf(kind: string, source: Record<string, unknown>, edits
     turn = (m) => ({ direction: roundAll(times(m, direction)) });
   }
 
+  // Its own axes: the columns of its rotation, a panel's edges, else the world's.
+  let ownAxes: Matrix = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+  if (hasRotation) {
+    const m = eulerMatrix((Array.isArray(rotation) ? rotation : [0, 0, 0]) as Vec3);
+    ownAxes = [0, 1, 2].map((k) => [m[0][k], m[1][k], m[2][k]]) as Matrix;
+  } else if (light && (kind === "rectangle" || kind === "portal")) {
+    const [u, v] = [value("edge_u"), value("edge_v")] as (Vec3 | undefined)[];
+    if (u && v) ownAxes = [unit(u), unit(v), unit(cross(u, v))];
+  }
+  // A round shape's radius lies along its X and Z both.
+  const radial = sizeKind === "cylinder" || sizeKind === "tube" || sizeKind === "cone";
+  const stretches = (axis: 0 | 1 | 2): Vec3[] => (radial && axis !== 1 ? [ownAxes[0], ownAxes[2]] : [ownAxes[axis]]);
+
   // What scales: its sizes, a plane's corners about their middle, a panel's edges.
   let canScale = false;
   let scaleAxes: (0 | 1 | 2)[] = [];
@@ -190,6 +207,8 @@ export function transformOf(kind: string, source: Record<string, unknown>, edits
     point,
     canRotate,
     scaleAxes,
+    ownAxes,
+    stretches,
     canScale,
     apply: (change) => {
       if (change.type === "move") return move(change.offset);
@@ -201,16 +220,22 @@ export function transformOf(kind: string, source: Record<string, unknown>, edits
 
 /**
  * A change as a 4 × 4 matrix, row by row, about `pivot`, for the 3D view to show it while it is
- * dragged. Scaling along an axis is shown along the world's, close enough for a preview.
+ * dragged. Scaling along one of its own axes stretches along `stretches`, unit vectors at right
+ * angles to each other, as `Transform.stretches` gives them.
  */
-export function changeMatrix(change: Change, pivot: Vec3): number[][] {
+export function changeMatrix(change: Change, pivot: Vec3, stretches: Vec3[] = []): number[][] {
   let linear: Matrix = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
   let offset: Vec3 = [0, 0, 0];
   if (change.type === "move") offset = change.offset;
   else if (change.type === "rotate") linear = axisMatrix(change.axis, change.radians);
   else {
     const f = Math.max(0.01, change.factor);
-    linear = [0, 1, 2].map((r) => [0, 1, 2].map((c) => (r === c ? (change.axis === null || change.axis === r ? f : 1) : 0))) as Matrix;
+    // L = I + (f - 1) Σ a aᵀ: f along each direction, 1 across them.
+    const along = change.axis === null ? null : stretches;
+    linear = [0, 1, 2].map((r) => [0, 1, 2].map((c) => {
+      if (along === null) return r === c ? f : 0;
+      return (r === c ? 1 : 0) + (f - 1) * along.reduce((sum, a) => sum + a[r] * a[c], 0);
+    })) as Matrix;
   }
   // p' = L (p - pivot) + pivot + offset.
   const moved = add(add(pivot, times(linear, pivot), -1), offset);

@@ -70,6 +70,8 @@ interface OutlinerProps {
   onEditMaterial: (id: number) => void;
   /** Opens the selection in the Object tab. */
   onEditObject: () => void;
+  /** Opens the selected light's settings in the Light tab. */
+  onEditLight: () => void;
   /** Folds the whole panel to its header. */
   collapsed: boolean;
   onCollapsedChange: (collapsed: boolean) => void;
@@ -260,6 +262,12 @@ export function Outliner(props: OutlinerProps) {
                   onClick={props.onEditObject}>
                   <Move3d size={13} aria-hidden="true" />
                 </button>
+                {selectedLight && selectedLight.kind !== "portal" && (
+                  <button type="button" className="outliner-eye" aria-label="Its light: kind, color, intensity" title="Its light: kind, color, intensity"
+                    onClick={props.onEditLight}>
+                    <Sun size={13} aria-hidden="true" />
+                  </button>
+                )}
                 <button type="button" className="outliner-eye" aria-label="Duplicate it" title="Duplicate it (⇧D)" onClick={props.onDuplicate}>
                   <Copy size={13} aria-hidden="true" />
                 </button>

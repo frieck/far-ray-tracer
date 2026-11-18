@@ -21,7 +21,11 @@ export interface PreviewScene {
   /** `object` and `light` are indices in the scene file's objects and lights. */
   objects: { shape: Shape; center: number[]; axes: number[][]; look: Look; object: number | null }[];
   meshes: { positions: number[]; normals: number[]; look: Look; object: number | null }[];
-  lights: { position: number[]; color: number[]; corners: number[][]; light: number | null }[];
+  lights: {
+    position: number[]; color: number[]; corners: number[][]; light: number | null;
+    /** A spotlight's or IES fixture's aim, its cone from the axis to the edge in radians, and how long to draw them. */
+    aim: number[] | null; cone: number | null; reach: number;
+  }[];
 }
 
 /** An object or light of the scene file, as the 3D view moves it: "o3" or "l1". */
@@ -84,7 +88,7 @@ export class SceneView {
 
   load(preview: PreviewScene) {
     this.content.traverse((item) => {
-      if (item instanceof THREE.Mesh) {
+      if (item instanceof THREE.Mesh || item instanceof THREE.Line) {
         item.geometry.dispose();
         (item.material as THREE.Material).dispose();
       }
@@ -119,13 +123,14 @@ export class SceneView {
       shape.setAttribute("normal", new THREE.BufferAttribute(directions, 3));
       keep(object === null ? null : `o${object}`, new THREE.Mesh(shape, material(look)));
     }
-    for (const { position, color, corners, light: index } of preview.lights) {
+    for (const { position, color, corners, light: index, aim, cone, reach } of preview.lights) {
       const tint = new THREE.Color(...color.map((v) => Math.min(v, 1)) as [number, number, number]);
       const light = new THREE.PointLight(tint, 2.5, 0, 0);
       light.position.copy(toThree(position));
       const key = index === null ? null : `l${index}`;
       keep(key, light);
       keep(key, corners.length ? panel(corners, tint) : marker(toThree(position), tint));
+      if (aim) keep(key, beam(position, aim, cone, reach, tint));
     }
   }
 
@@ -177,6 +182,33 @@ function marker(position: THREE.Vector3, color: THREE.Color) {
   const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.12, 16, 8), new THREE.MeshBasicMaterial({ color }));
   mesh.position.copy(position);
   return mesh;
+}
+
+/**
+ * A spotlight's cone as lines, from the lamp to a ring `reach` away, or an IES fixture's aim as
+ * one line: what a turn or an Aim at changes, seen at once.
+ */
+function beam(position: number[], aim: number[], cone: number | null, reach: number, color: THREE.Color) {
+  const apex = toThree(position);
+  const axis = toThree(aim).normalize();
+  const points: THREE.Vector3[] = [];
+  const end = apex.clone().addScaledVector(axis, reach);
+  if (cone === null) {
+    points.push(apex, end);
+  } else {
+    const helper = Math.abs(axis.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+    const u = new THREE.Vector3().crossVectors(axis, helper).normalize();
+    const v = new THREE.Vector3().crossVectors(axis, u);
+    const radius = reach * Math.tan(Math.min(cone, 1.5));
+    const ring = Array.from({ length: SEGMENTS }, (_, k) => {
+      const angle = (k / SEGMENTS) * 2 * Math.PI;
+      return end.clone().addScaledVector(u, radius * Math.cos(angle)).addScaledVector(v, radius * Math.sin(angle));
+    });
+    ring.forEach((p, k) => points.push(p, ring[(k + 1) % SEGMENTS]));
+    for (let k = 0; k < SEGMENTS; k += SEGMENTS / 4) points.push(apex, ring[k]);
+    points.push(apex, end);
+  }
+  return new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineBasicMaterial({ color }));
 }
 
 function panel(corners: number[][], color: THREE.Color) {

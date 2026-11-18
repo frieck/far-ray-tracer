@@ -9,6 +9,7 @@ import { LIGHT_ID, SelectionOverlay, type IdMap } from "./components/SelectionOv
 import { TransformGizmo, type GizmoMode } from "./components/TransformGizmo";
 import type { Vec3 } from "./objectFields";
 import { changeMatrix, transformOf, type Change } from "./transforms";
+import { editedEntry, inWatts } from "./lightKinds";
 import { duplicate, newEntry, newModel, sceneEntries, withAdded, withRemoved, type NewKind } from "./sceneEntries";
 import * as history from "./history";
 import { MaterialStage } from "./components/MaterialStage";
@@ -119,6 +120,8 @@ export function App() {
   const sceneView3d = useRef<SceneView | null>(null);
   /** The scene whose geometry the 3D view holds. */
   const [liveScene, setLiveScene] = useState<SceneInfo | null>(null);
+  // Grows each time the 3D view takes the scene as edited, so it is drawn again.
+  const [geometryVersion, setGeometryVersion] = useState(0);
   const [webgl, setWebgl] = useState(true);
   const [autoRender, setAutoRender] = useState(false);
   const [renderedKey, setRenderedKey] = useState<string | null>(null);
@@ -206,6 +209,7 @@ export function App() {
               : DOF_PRESETS.portrait.fNumber,
             sensorWidth: info.camera.sensor_width,
             sceneUnit: info.camera.scene_unit,
+            fileSceneUnit: info.camera.scene_unit,
             focusDistance: info.camera.focus_distance,
             blades: info.camera.blades,
             bladeRotation: info.camera.blade_rotation,
@@ -371,6 +375,7 @@ export function App() {
         sceneView3d.current?.load(preview);
         geometryScene.current = scene;
         setLiveScene(scene);
+        setGeometryVersion((v) => v + 1);
       }).catch(() => {
         // Without geometry the 3D view cannot stand in for the render; an edit the engine
         // refuses keeps the last view.
@@ -399,7 +404,7 @@ export function App() {
   };
   const addEntry = (kind: NewKind) => {
     if (!settings || !entries) return;
-    const { light, entry } = newEntry(kind, settings.pose, entries);
+    const { light, entry } = newEntry(kind, settings.pose, entries, settings.sceneUnit);
     const { patch, id } = withAdded(settings, entries, light, entry);
     change(patch);
     setSelection({ kind: light ? "light" : "object", id });
@@ -446,13 +451,17 @@ export function App() {
     setPreview(change);
     setMovingCamera(change !== null);
     if (change && settings && transform) {
-      sceneView3d.current?.place(pieceKey, changeMatrix(change, transform.point));
+      const along = change.type === "scale" && change.axis !== null ? transform.stretches(change.axis) : [];
+      sceneView3d.current?.place(pieceKey, changeMatrix(change, transform.point, along));
       sceneView3d.current?.draw(settings.pose, imageWidth / imageHeight);
     }
   };
   const commitGizmo = (change: Change) => {
-    if (!selection || !transform) return;
-    const patch = transform.apply(change);
+    if (!selection || !transform || !selectedEntry) return;
+    // Resizing a lamp keeps the light it gives: it is given by power from then on.
+    const applied = transform.apply(change);
+    const patch = selection.kind === "light" && Object.keys(applied).length > 0
+      ? inWatts(editedEntry(selectedEntry.source, settings?.lightEdits[selection.id]), applied, settings?.sceneUnit ?? 1) : applied;
     if (Object.keys(patch).length === 0) return;
     // Until the 3D view reads the edited scene, it keeps the piece where it was dropped. As any
     // edit, a change moves the light, and the photons with it.
@@ -469,7 +478,7 @@ export function App() {
   useEffect(() => {
     if (showLive && livePose) sceneView3d.current?.draw(livePose, imageWidth / imageHeight);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showLive, liveScene, JSON.stringify(livePose), imageWidth, imageHeight]);
+  }, [showLive, liveScene, geometryVersion, JSON.stringify(livePose), imageWidth, imageHeight]);
 
   // The live view stays until the render has replaced the old framing.
   useEffect(() => {
@@ -577,6 +586,15 @@ export function App() {
       if (lut) setSettings((old) => old && ({ ...old, lut }));
     } catch (error) {
       publish({ status: `Error: ${String(error)}` });
+    }
+  };
+
+  const chooseIes = async () => {
+    try {
+      return await invoke<string | null>("choose_ies");
+    } catch (error) {
+      publish({ status: `Error: ${String(error)}` });
+      return null;
     }
   };
 
@@ -810,6 +828,7 @@ export function App() {
                 <TransformGizmo pose={settings.pose} aspect={imageWidth / imageHeight} point={gizmoPoint}
                   mode={gizmoMode === "rotate" && !transform.canRotate || gizmoMode === "scale" && !transform.canScale ? "move" : gizmoMode}
                   onMode={setGizmoMode} canRotate={transform.canRotate} canScale={transform.canScale} scaleAxes={transform.scaleAxes}
+                  ownAxes={transform.ownAxes}
                   grab={grab} onPreview={previewGizmo} onCommit={commitGizmo} onCancel={() => {
                     // Back as it was, in the 3D view too.
                     sceneView3d.current?.place(null);
@@ -886,6 +905,7 @@ export function App() {
                 showTab("materials");
               }}
               onEditObject={() => showTab("object")}
+              onEditLight={() => showTab("light")}
               collapsed={outlinerCollapsed} onCollapsedChange={setOutlinerCollapsed}
               outline={outline} onOutlineChange={(value) => {
                 setOutline(value);
@@ -924,6 +944,7 @@ export function App() {
             loadingEnvironment={loadingEnvironment}
             onImportEnvironment={() => void importEnvironment()}
             onChooseLut={() => void chooseLut()}
+            onChooseIes={chooseIes}
             scene={shownScene}
             onResetCamera={resetCamera}
             cores={cores}

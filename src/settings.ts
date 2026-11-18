@@ -360,6 +360,7 @@ export function defaultSettings(cores: number): Settings {
     fNumber: DOF_PRESETS.portrait.fNumber,
     sensorWidth: DEFAULT_SENSOR_WIDTH,
     sceneUnit: DEFAULT_SCENE_UNIT,
+    fileSceneUnit: DEFAULT_SCENE_UNIT,
     dofPasses: 256,
     focusDistance: 10,
     blades: 0,
@@ -544,6 +545,8 @@ export function entryEdits(settings: Settings): import("./types").EntryEdits {
     removed_objects: settings.removedObjects,
     removed_lights: settings.removedLights,
     ...(settings.fogEdit === false ? { no_fog: true } : settings.fogEdit ? { fog: settings.fogEdit } : {}),
+    // Lamps given in watts light by metres, so another unit reads them again.
+    ...(settings.sceneUnit !== settings.fileSceneUnit ? { scene_unit: settings.sceneUnit } : {}),
   };
 }
 

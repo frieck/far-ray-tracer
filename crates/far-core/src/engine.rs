@@ -346,6 +346,24 @@ pub(crate) struct Context<'a> {
     pub(crate) rays: u64,
     /// Fixed and Enhanced modes turn this on to use the corrected sphere test.
     pub(crate) corrected: bool,
+    /// Classic mode's factor on each light's color, in the order it walks them: 2008 lights,
+    /// then panels, then bulbs. See `classic_light_scales`.
+    pub(crate) light_scales: Vec<f32>,
+}
+
+/// How Classic mode, which knows only the 2008 point light, lights with panels and bulbs: as
+/// point lights whose color is their glow times the share of it that reaches the scene's
+/// center, so a physical lamp gives about the light it gives in Enhanced mode there, without
+/// the falloff. It is the inverse of how the app turns a 2008 light into a physical one, so
+/// such a light renders here as it did. 2008 lights keep their color.
+pub(crate) fn classic_light_scales(scene: &Scene) -> Vec<f32> {
+    let center = scene.center().map(|[x, y, z]| Vec3::new(x, y, z));
+    let squared = |at: Vec3| center.map_or(1.0, |c| { let d = at - c; d.dot(d) }).max(1e-6);
+    let mut scales = vec![1.0; scene.lights.len()];
+    // A panel seen head-on from the center: its area over π d²; a bulb: r² over d².
+    scales.extend(scene.rect_lights.iter().map(|l| l.area / (std::f32::consts::PI * squared(l.proxy.center))));
+    scales.extend(scene.bulbs.iter().map(|l| l.sq_radius / squared(l.center)));
+    scales
 }
 
 impl<'a> Context<'a> {
@@ -359,6 +377,7 @@ impl<'a> Context<'a> {
             rng: Twister::new(DEFAULT_SEED),
             rays: 0,
             corrected: false,
+            light_scales: Vec::new(),
         }
     }
 
@@ -616,11 +635,11 @@ impl<'a> Context<'a> {
         let color = self.color(prim, pi);
         let n = self.normal(prim, pi);
 
-        for light in scene.lights.iter().chain(scene.rect_lights.iter().map(|r| &r.proxy)).chain(&scene.bulbs) {
+        for (k, light) in scene.lights.iter().chain(scene.rect_lights.iter().map(|r| &r.proxy)).chain(&scene.bulbs).enumerate() {
             let mut l = Vec3::default();
             let shade = self.shadow(kd, light, pi, &mut l);
             if shade > 0.0 {
-                let light_color = scene.sphere_color(light, pi);
+                let light_color = scene.sphere_color(light, pi) * self.light_scales.get(k).copied().unwrap_or(1.0);
                 if m.diff > 0.0 {
                     let dot = l.dot(n);
                     if dot > 0.0 {
@@ -715,7 +734,7 @@ impl<'a> Context<'a> {
         let pi = r.o + r.d * *max_dist;
         let color = self.color(prim, pi);
 
-        for light in scene.lights.iter().chain(scene.rect_lights.iter().map(|r| &r.proxy)).chain(&scene.bulbs) {
+        for (k, light) in scene.lights.iter().chain(scene.rect_lights.iter().map(|r| &r.proxy)).chain(&scene.bulbs).enumerate() {
             let mut l = light.center - pi;
             let mut tdist = l.length();
             l *= 1.0 / tdist;
@@ -731,7 +750,7 @@ impl<'a> Context<'a> {
                 let mut l = light.center - pi;
                 l.normalize();
                 let n = self.normal(prim, pi);
-                let light_color = scene.materials[light.material].color;
+                let light_color = scene.materials[light.material].color * self.light_scales.get(k).copied().unwrap_or(1.0);
                 if m.diff > 0.0 {
                     let dot = l.dot(n);
                     if dot > 0.0 {
@@ -852,8 +871,10 @@ pub fn render(scene: &Scene, kd: Option<&KdTree>, op: &Options, image: &Image, p
     let dy = (p4 - p1) * (1.0 / h as f32);
 
     let next_tile = AtomicUsize::new(0);
+    let scales = classic_light_scales(scene);
     let worker = || {
         let mut ctx = Context::new(scene, kd, op.max_depth);
+        ctx.light_scales = scales.clone();
         loop {
             if progress.cancel.load(Ordering::Relaxed) {
                 break;
@@ -904,6 +925,30 @@ mod tests {
     use super::{view_half_size, Context, Ray};
     use crate::vector::Vec3;
     use crate::{KdTree, Scene};
+
+    #[test]
+    fn a_2008_light_turned_physical_lights_the_2008_stage_as_before() {
+        // As the app converts it: intensity d²/r² for a sphere, π d²/area for a panel, with d
+        // the distance to the scene's center.
+        let path = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/scenes/2008/caustics.far"));
+        let original = Scene::open(path).unwrap();
+        let [x, y, z] = original.center().unwrap();
+        let (p, r) = (original.lights[0].center, original.lights[0].radius);
+        let squared = { let d = p - Vec3::new(x, y, z); d.dot(d) };
+        let mut source: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        for entry in [
+            serde_json::json!({"type": "sphere", "position": [p.x, p.y, p.z], "radius": r, "intensity": squared / (r * r)}),
+            serde_json::json!({"type": "rectangle", "position": [p.x, p.y, p.z], "edge_u": [2.0 * r, 0, 0], "edge_v": [0, 0, 2.0 * r],
+                "intensity": std::f32::consts::PI * squared / (4.0 * r * r)}),
+        ] {
+            source["lights"] = serde_json::json!([entry]);
+            let converted = Scene::from_far(source.to_string().as_bytes(), path).unwrap();
+            assert_eq!(converted.center(), original.center());
+            let material = converted.rect_lights.first().map_or_else(|| converted.bulbs[0].material, |l| l.proxy.material);
+            let color = converted.materials[material].color * super::classic_light_scales(&converted)[0];
+            assert!((color.x - 1.0).abs() < 1e-3, "{entry}: {color:?}");
+        }
+    }
 
     #[test]
     fn the_corrected_tree_keeps_a_wall_that_lies_on_a_split_plane() {

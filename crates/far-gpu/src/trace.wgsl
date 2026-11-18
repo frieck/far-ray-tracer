@@ -1020,7 +1020,7 @@ fn visibility(start: vec3<f32>, l: vec3<f32>, limit: f32) -> vec3<f32> {
 // The light that gets from `start` along `l` to `limit`, as the CPU's surface_visibility:
 // lamps and opaque surfaces block it; glass lets its share through, absorbing along the way.
 fn surface_visibility(start: vec3<f32>, l: vec3<f32>, limit: f32) -> vec3<f32> {
-    if (emitter(start, l, limit).t < limit) { return vec3<f32>(0.0); }
+    if (emitter(start, l, limit, false).t < limit) { return vec3<f32>(0.0); }
     if (!HAS_GLASS || params.has_glass == 0u) {
         if (blocked(start, l, limit)) { return vec3<f32>(0.0); }
         return vec3<f32>(1.0);
@@ -1224,18 +1224,23 @@ struct Lamp {
     index: u32,
 }
 
-// The nearest panel or bulb the ray reaches before `limit`.
-fn emitter(o: vec3<f32>, d: vec3<f32>, limit: f32) -> Lamp {
+// The nearest panel or bulb the ray reaches before `limit`; a camera ray passes through those
+// the camera does not see, flagged by bit 2 of pad2 (lib.rs's UNSEEN), and every ray through
+// a spotlight or IES fixture seen from where it gives no light.
+fn emitter(o: vec3<f32>, d: vec3<f32>, limit: f32, camera: bool) -> Lamp {
     var found = Lamp(vec3<f32>(0.0), limit, params.light_count);
     for (var i = 0u; i < params.light_count; i++) {
         let light = lights[i];
+        if (camera && (light.pad2 & 4u) != 0u) { continue; }
         if (light.kind == 1u) {
             let rel = o - light.pos;
             let b = dot(rel, d);
             let disc = b * b - (dot(rel, rel) - light.radius * light.radius);
             if (disc > 0.0) {
                 let t = -b - sqrt(disc);
-                if (t > OFFSET && t < found.t) { found = Lamp(light.color * bulb_factor(light, -d), t, i); }
+                // A spotlight or IES fixture is there only where it shines, as on the CPU.
+                let factor = bulb_factor(light, -d);
+                if (t > OFFSET && t < found.t && factor > 0.0) { found = Lamp(light.color * factor, t, i); }
             }
         } else if (light.kind == 2u) {
             let denom = dot(d, light.normal);
@@ -2078,7 +2083,7 @@ fn trace(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
             through *= absorption(materials[absorbing], hit.t);
             absorbing = NO_TEXTURE;
         }
-        let lamp = emitter(o, d, hit.t);
+        let lamp = emitter(o, d, hit.t, segment == 0u);
         if (HAS_VOLUMES && params.volume_count > 0u && params.caustics_only == 0u) {
             // What the camera ray meets first guides the denoiser even when it scatters in fog.
             if (segment == 0u && hit.t < FAR) {

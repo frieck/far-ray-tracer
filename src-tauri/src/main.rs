@@ -777,6 +777,19 @@ fn choose_model(app: AppHandle) -> Result<Option<String>, String> {
     Ok(Some(file.into_path().map_err(|e| e.to_string())?.to_string_lossy().into_owned()))
 }
 
+/// Picks an IES file for a light and reads it, so a broken one is reported at once; gives its
+/// full path.
+#[tauri::command(async)]
+fn choose_ies(app: AppHandle) -> Result<Option<String>, String> {
+    let Some(file) = app.dialog().file().add_filter("IES profile", &["ies"]).blocking_pick_file() else {
+        return Ok(None);
+    };
+    let path = file.into_path().map_err(|e| e.to_string())?;
+    let text = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    far_core::light_profile::Ies::parse(&String::from_utf8_lossy(&text)).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
 /// The objects the app added to the open scene, as the scene read with them has them.
 #[tauri::command(async)]
 fn added_objects(entries: far_core::scene_save::EntryEdits, state: State<'_, AppState>) -> Result<AddedObjects, String> {
@@ -1650,6 +1663,7 @@ fn main() {
             choose_environment,
             choose_lut,
             choose_model,
+            choose_ies,
             added_objects,
             pick_object,
             object_ids,

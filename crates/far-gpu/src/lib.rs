@@ -111,6 +111,9 @@ const NORMAL_MAP: u32 = 0x8000_0000;
 /// No texture, in Material::texture.
 const NO_TEXTURE: u32 = u32::MAX;
 
+/// A lamp's flag, in its pad2, that the camera does not see it; trace.wgsl's emitter reads it.
+const UNSEEN: u32 = 4;
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct Light {
@@ -261,7 +264,8 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
     }
     // A bulb's profile, as trace.wgsl's bulb_factor reads it: its axis in normal and the IES
     // table's 0° horizontal direction in u; the cone's edge and inner cosines in v; in pad2, bit
-    // 0 for a cone and bit 1 for any profile; in pad1, where its IES table starts in the texels.
+    // 0 for a cone and bit 1 for any profile, and for bulbs and panels bit 2 when the camera does
+    // not see it; in pad1, where its IES table starts in the texels.
     let mut ies_tables = Vec::new();
     for (i, l) in scene.bulbs.iter().enumerate() {
         let mut light = Light { pos: l.center.array(), kind: 1, color: color(l.material), radius: l.radius, pad1: NO_TEXTURE, ..Zeroable::zeroed() };
@@ -277,12 +281,14 @@ fn pack(scene: &Scene, bvh: &Bvh) -> Packed {
                 ies_tables.push((lights.len(), table));
             }
         }
+        if scene.bulb_unseen.get(i).copied().unwrap_or(false) { light.pad2 |= UNSEEN; }
         lights.push(light);
     }
     for l in &scene.rect_lights {
         lights.push(Light {
             pos: l.proxy.center.array(), kind: 2, color: color(l.proxy.material), radius: 0.0,
-            u: l.edge_u.array(), area: l.area, v: l.edge_v.array(), pad1: 0, normal: l.normal.array(), pad2: 0,
+            u: l.edge_u.array(), area: l.area, v: l.edge_v.array(), pad1: 0, normal: l.normal.array(),
+            pad2: if l.unseen { UNSEEN } else { 0 },
         });
     }
     // Glowing triangles and spheres after the lamps, as trace.wgsl's from_mesh_light reads them:

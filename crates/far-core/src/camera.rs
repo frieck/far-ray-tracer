@@ -299,13 +299,14 @@ fn first_hit(scene: &crate::Scene, kd: Option<&crate::KdTree>, context: &mut cra
     // A light as the file lists it.
     let light = |kinds: &[&str], index: usize| scene.scene_lights.iter()
         .position(|l| kinds.contains(&l.kind) && l.index == index).map(Picked::Light);
-    for (i, rect) in scene.rect_lights.iter().enumerate() {
+    // What the camera does not see is not picked: a click goes to what is behind it.
+    for (i, rect) in scene.rect_lights.iter().enumerate().filter(|(_, r)| !r.unseen) {
         if let Some(hit) = rect.intersect(origin, direction, distance) {
             distance = hit;
             found = Some(light(&["rectangle"], i));
         }
     }
-    for (i, bulb) in scene.bulbs.iter().enumerate() {
+    for (i, bulb) in scene.bulbs.iter().enumerate().filter(|&(i, _)| scene.bulb_seen(i, 1, 0)) {
         if let Some(hit) = bulb.intersect(origin, direction, distance) {
             distance = hit;
             found = Some(light(&["sphere", "spot", "ies"], i));

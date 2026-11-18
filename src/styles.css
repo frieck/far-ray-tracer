@@ -420,6 +420,7 @@ button { font: inherit; color: inherit; cursor: default; }
 .prop-mini[aria-pressed="true"] { background: rgba(108, 141, 255, 0.3); }
 .prop-buttons { display: flex; gap: 4px; }
 .prop-buttons .prop-mini { flex: 1; min-width: 0; overflow: hidden; }
+.light-file { flex: 2; min-width: 0; overflow: hidden; align-self: center; color: var(--text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 
 .prop-color { position: relative; display: flex; align-items: center; gap: 7px; height: 22px; padding: 0 6px 0 3px; border-radius: 6px; background: rgba(0, 0, 0, 0.3); }
 .prop-color input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; }

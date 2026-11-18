@@ -151,6 +151,13 @@ fn bulb_factor(scene: &Scene, index: usize, direction: Vec3) -> f32 {
     }
 }
 
+/// Whether a ray along `direction` meets bulb `index` or passes through it: a spotlight or an
+/// IES fixture is there only where it shines, so seen from outside its beam it hides nothing,
+/// casts no shadow and stops no photon, instead of showing as a dark ball.
+fn bulb_shows(scene: &Scene, index: usize, direction: Vec3) -> bool {
+    bulb_factor(scene, index, -direction) > 0.0
+}
+
 /// Up to this many panels and bulbs, every point samples each of them. With more, as in a room
 /// lit by strings of bulbs, each point samples one, picked by the light it likely brings, and
 /// divides by the chance: one shadow ray instead of dozens, for far less noise in the same time.
@@ -641,7 +648,8 @@ impl<'a> Tracer<'a> {
         let limit = distance * (1.0 - 4.0 * EPSILON);
         let scene = self.ctx.scene;
         if scene.rect_lights.iter().any(|light| light.intersect(start, dir, limit).is_some())
-            || scene.bulbs.iter().any(|light| light.intersect(start, dir, limit).is_some()) {
+            || scene.bulbs.iter().enumerate()
+                .any(|(index, light)| bulb_shows(scene, index, dir) && light.intersect(start, dir, limit).is_some()) {
             return Color::default();
         }
         if !self.has_glass {
@@ -1104,7 +1112,8 @@ impl<'a> Tracer<'a> {
             };
             let scene = self.ctx.scene;
             if scene.rect_lights.iter().any(|light| light.intersect(ray.o, ray.d, dist).is_some())
-                || scene.bulbs.iter().any(|light| light.intersect(ray.o, ray.d, dist).is_some()) {
+                || scene.bulbs.iter().enumerate()
+                    .any(|(index, light)| bulb_shows(scene, index, ray.d) && light.intersect(ray.o, ray.d, dist).is_some()) {
                 return;
             }
             if let Some(m) = inside {
@@ -1273,10 +1282,12 @@ impl<'a> Tracer<'a> {
         }
         let hit = self.nearest(r, MAX_DISTANCE);
         let mut closest = hit.map_or(MAX_DISTANCE, |(_, dist, _)| dist);
-        for light in &scene.rect_lights {
+        let camera = depth <= 1 && bounces == 0;
+        for light in scene.rect_lights.iter().filter(|l| !(camera && l.unseen)) {
             if let Some(dist) = light.intersect(r.o, r.d, closest) { closest = dist; }
         }
-        for light in &scene.bulbs {
+        for (index, light) in scene.bulbs.iter().enumerate() {
+            if !scene.bulb_seen(index, depth, bounces) || !bulb_shows(scene, index, r.d) { continue; }
             if let Some(dist) = light.intersect(r.o, r.d, closest) { closest = dist; }
         }
         let depth_to_surface = volume::optical_depth(&scene.volumes, r.o, r.d, closest);
@@ -1412,7 +1423,10 @@ impl<'a> Tracer<'a> {
         };
         let mut closest = hit.map_or(MAX_DISTANCE, |(_, dist, _)| dist);
         let mut emitter = None;
+        // The camera's own rays pass through invisible lamps.
+        let camera = depth <= 1 && bounces == 0;
         for light in &self.ctx.scene.rect_lights {
+            if camera && light.unseen { continue; }
             if let Some(dist) = light.intersect(r.o, r.d, closest) {
                 closest = dist;
                 emitter = Some(light);
@@ -1420,6 +1434,7 @@ impl<'a> Tracer<'a> {
         }
         let mut bulb = None;
         for (index, light) in self.ctx.scene.bulbs.iter().enumerate() {
+            if !self.ctx.scene.bulb_seen(index, depth, bounces) || !bulb_shows(self.ctx.scene, index, r.d) { continue; }
             if let Some(dist) = light.intersect(r.o, r.d, closest) {
                 closest = dist;
                 bulb = Some((index, light));
@@ -2910,6 +2925,43 @@ mod tests {
             map: std::sync::Arc::new(crate::environment::EnvironmentMap::new(
                 8, 4, vec![Color::new(0.25, 0.25, 0.25); 32]).unwrap()),
         });
+    }
+
+    #[test]
+    fn the_camera_looks_through_invisible_lamps_that_mirrors_still_show() {
+        for (lamp, invisible) in [
+            (r#"{"type": "sphere", "position": [0, 0, 3], "radius": 1, "intensity": 4"#, true),
+            (r#"{"type": "rectangle", "position": [0, 0, 3], "edge_u": [2, 0, 0], "edge_v": [0, -2, 0], "intensity": 4"#, true),
+            (r#"{"type": "sphere", "position": [0, 0, 3], "radius": 1, "intensity": 4"#, false),
+        ] {
+            let flag = if invisible { r#", "invisible": true}"# } else { "}" };
+            let scene = test_scene(&format!(r#"{{"lights": [{lamp}{flag}], "objects": []}}"#));
+            let mut tracer = environment_tracer(&scene, 5);
+            let ray = Ray { o: Vec3::default(), d: Vec3::new(0., 0., 1.) };
+            let camera = tracer.trace(&ray, 1, 0, true).0;
+            let mirrored = tracer.trace(&ray, 2, 0, true).0;
+            assert!(mirrored.x > 1.0, "{lamp}: a mirror shows it, {mirrored:?}");
+            assert_eq!(camera == Color::default(), invisible, "{lamp}: the camera sees {camera:?}");
+        }
+    }
+
+    #[test]
+    fn a_spotlight_seen_from_outside_its_beam_hides_nothing() {
+        for (direction, lit) in [("[0, 0, -1]", true), ("[0, 0, 1]", false)] {
+            let mut scene = test_scene(&format!(r#"{{"lights": [{{"type": "sphere", "position": [0, 0, 3], "radius": 1,
+                "intensity": 4, "direction": {direction}, "spot_angle": 40}}], "objects": []}}"#));
+            set_constant_environment(&mut scene, false);
+            let mut tracer = environment_tracer(&scene, 5);
+            let ray = Ray { o: Vec3::default(), d: Vec3::new(0., 0., 1.) };
+            let seen = tracer.trace(&ray, 2, 0, true).0;
+            if lit {
+                assert!(seen.x > 1.0, "facing the camera it shines, {seen:?}");
+            } else {
+                // Not a dark ball: the environment behind it, as if it were not there.
+                assert_eq!(seen, Color::new(0.25, 0.25, 0.25));
+                assert_eq!(tracer.surface_visibility(Vec3::default(), Vec3::new(0., 0., 1.), 10.0), Color::new(1., 1., 1.));
+            }
+        }
     }
 
     #[test]

@@ -491,14 +491,26 @@ Rectangular lights use two perpendicular vectors for their full width and height
   "edge_u": [5, 0, 0],
   "edge_v": [0, 0, 3],
   "color": [1, 0.9, 0.78],
-  "intensity": 9
+  "power": 4.2
 }
 ```
 
 `position` is the center. The emitting side faces `edge_u × edge_v`; this example
-faces downward. Reverse one edge to flip the panel. `color` defaults to white and
-`intensity` to 1. Intensity scales emitted radiance, so making a panel larger at the
-same intensity also increases its total power.
+faces downward. Reverse one edge to flip the panel. `color` defaults to white.
+
+`power` is the light a lamp gives in all, in watts, as Blender's Power, measured in metres: a
+scene unit is the camera's `scene_unit` metres, 10 cm by default (see Depth of field). A panel
+glows with its power over π times its area in square metres, a sphere with its power over
+4π² r², as Cycles' area and point lights do. About 40 W lights a white wall one metre away,
+and 1000 W one five metres away, the light falling with the square of the distance. Changing
+the scene unit in the app moves the lamps nearer or farther in metres, and their light with
+it, as it changes the blur. The panel above is 50 by 30 cm at the default unit, so 4.2 W makes it
+glow at 9; the bulb below, 1 cm across, glows at 22 with 0.022 W. A spotlight's or IES fixture's power is
+the one it would give shining all around, as in Blender. Resizing a lamp of a given power
+keeps the light it gives: a smaller one is brighter to look at and casts harder shadows.
+Instead of `power`, a lamp may give `intensity`, its surface's glow (1 when it gives
+neither): then a larger lamp gives more light. Older scenes use it, and read as they did. The
+app shows every lamp's power in watts, and a lamp edited there is saved by its power.
 
 In Enhanced mode, panels are sampled across their area for soft shadows, with
 emission-angle and inverse-square distance weighting. They are visible directly,
@@ -511,7 +523,7 @@ Spherical lights are physical bulbs, unlike the legacy lights above, which light
 point equally at any distance:
 
 ```json
-{ "type": "sphere", "position": [0, 3, 6], "radius": 0.05, "color": [1, 0.72, 0.4], "intensity": 22 }
+{ "type": "sphere", "position": [0, 3, 6], "radius": 0.05, "color": [1, 0.72, 0.4], "power": 0.022 }
 ```
 
 In Enhanced mode they are visible to the camera, in reflections and through glass, light
@@ -525,7 +537,7 @@ Open `assets/scenes/christmas.far` for a scene lit by strings of them.
 Any light can take its color from a temperature in kelvin instead, as V-Ray's lights can:
 
 ```json
-{ "type": "sphere", "position": [0, 3, 6], "radius": 0.05, "temperature": 2700, "intensity": 22 }
+{ "type": "sphere", "position": [0, 3, 6], "radius": 0.05, "temperature": 2700, "power": 0.022 }
 ```
 
 The color is that of a black body at that temperature, from 1000 to 40000 K, of the same
@@ -539,10 +551,42 @@ before color temperature refuse a scene that uses it.
 **Light > Lights** lists every light of the scene, as V-Ray's Light Lister: a box turns each
 one on or off, as the outliner's eye does; **Solo** turns every other light off, and again
 turns them all back on; and each has its color, or its temperature with a dot of its color,
-and its intensity. A 2008 point light has no intensity: its color alone sets how bright it is.
-Clicking a name selects the light, to move it with the gizmo or edit the rest in the
-**Object** tab, where **Color by** switches between a color and a temperature, keeping the
-color as it looks. Solo leaves glowing objects and the environment on.
+and its power in watts. A 2008 point light has no power: its color alone sets how bright it is.
+Solo leaves glowing objects and the environment on.
+
+As in Blender, a light's settings are in two places. Clicking a name selects the light, and
+below the list the **Light** tab shows what light it gives; the sun button in the outliner's
+selection bar opens it too. The **Object** tab holds where it is: its position, radius or
+width and height, direction and **Aim at**, which the gizmo also changes. A selected light's
+own section has:
+
+- **Color by**, which switches between a color and a temperature, keeping the color as it
+  looks, and its **Power** in watts; a spotlight's cone and soft edge.
+- **Kind**, which switches a light between a sphere light, a spotlight, an IES light and an
+  area light. It keeps its place, color and power, and where it points: a spotlight
+  becomes a panel that faces the same way, of about the same size. **IES light** asks for the file
+  first, and **IES file** then shows it, with **Choose…** to load another. Saving writes the
+  file's path relative to the scene. A 2008 point light switches too, into a physical light:
+  it keeps its color and gets the power that gives the same light at the scene's center.
+  A 2008 light does not fade with distance and a physical one does, so nearer surfaces get
+  more and farther ones less. **Reset** brings the 2008 light back.
+- **Seen by camera**, off, makes the camera look through the light, as V-Ray's Invisible:
+  its light, its reflections in mirrors and what is seen of it through glass stay. Clicking
+  the image then selects what is behind it. In the scene file it is `"invisible": true`, on an
+  area or sphere light:
+
+```json
+{ "type": "rectangle", "position": [0, 4, 2], "edge_u": [2, 0, 0], "edge_v": [0, 0, 1], "power": 0.38,
+  "invisible": true }
+```
+
+In the Object tab, **Aim at** points a spotlight or IES light at an object of the scene, and
+turns an area light so its front faces it. The quick 3D view draws a spotlight's cone, and an
+IES light's aim as a line, so turning one shows where it shines.
+
+The 2008 stage knows only the 2008 point light, and reads every light as one: a sphere light
+or panel lights with the light it gives at the scene's center, without falloff. A 2008 light
+turned physical in the app renders there as it did.
 
 #### Light portals
 
@@ -588,11 +632,13 @@ A spherical light becomes a spotlight with a cone, or a real fixture with an IES
   at the edge, from 0 (a hard edge) to 1; 0.15 by default.
 - `ies` is an IESNA LM-63 file with type C photometry, relative to the scene: the measured
   light of a fixture, as lighting makers publish them. Its 0° vertical angle is `direction`.
-  The brightest direction keeps the light's intensity, and others follow the file's table;
+  The brightest direction keeps the light's glow, and others follow the file's table;
   horizontal symmetry (one angle, a quadrant or a half) is filled in.
 
 A cone and a file can be combined. The profile dims the light where it shines, in its beam in
-fog and on the bulb itself as the camera sees it. **File > Open Example > Techniques >
+fog and on the bulb itself as the camera sees it. Seen from where it gives no light, outside
+its cone or the file's beam, the bulb is not there at all: rays pass through it, so it hides
+nothing behind it and casts no shadow, instead of showing as a dark ball. **File > Open Example > Techniques >
 Spotlights** shows hard and soft spots and two IES fixtures in haze; `tools/atmosphere.py`
 builds it, with made-up IES files in `assets/scene-data/ies`.
 
@@ -704,9 +750,12 @@ in the scene file:
 | 3DS mesh | Position, rotation, size |
 | Model | Position, rotation, scale (or size, when the file gives one) |
 | Volume | Center, size or radius, rotation, density, color, anisotropy |
-| Point light | Position, radius, color |
-| Area light | Position, color, intensity, width, height |
-| Sphere light, spotlight, IES light | Position, radius, color, intensity; a spotlight's and an IES light's direction, a spotlight's cone and soft edge |
+| Point light | Position, radius |
+| Area light | Position, width, height, aim |
+| Sphere light, spotlight, IES light | Position, radius; a spotlight's and an IES light's direction and aim |
+
+A light's color, power, kind, cone, IES file and whether the camera sees it are in the
+**Light** tab, below the list of lights.
 
 **Moving, turning and scaling on the image.** A selected object or light shows a gizmo, as in
 Blender, in three modes picked at the image's top left:
@@ -717,7 +766,8 @@ Blender, in three modes picked at the image's top left:
   about the view.
 - **Scale** (S): drag a square handle to scale it along one of its own axes, where its kind
   has one (a box's sides, a cylinder's height or radius, a panel's width or height), or the
-  dashed ring to scale it as a whole.
+  dashed ring to scale it as a whole. The handles turn with it, and the quick 3D view stretches
+  it along them.
 
 G, R and S also start moving, turning or scaling from the keyboard, and X, Y or Z starts the
 current mode along that axis: it follows the mouse without a button held, a click or Enter

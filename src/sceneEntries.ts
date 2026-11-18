@@ -42,7 +42,12 @@ export function sceneEntries(scene: SceneInfo, settings: Settings, added?: Added
   const lights: SceneLightInfo[] = [
     ...scene.light_list,
     ...settings.addedLights.map((entry) => ({ name: String(entry.name ?? "Light"), kind: lightKind(entry), source: entry })),
-  ];
+  ].map((light, id) => {
+    // An edit may make a sphere light a spotlight or a panel; see lightKinds.ts.
+    const edits = settings.lightEdits[id];
+    const switched = edits && ["type", "spot_angle", "ies"].some((key) => key in edits);
+    return switched ? { ...light, kind: lightKind(edited(light.source, edits)) } : light;
+  });
   return { objects, lights };
 }
 
@@ -53,6 +58,9 @@ function freeName(base: string, taken: string[]): string {
 }
 
 const round = (v: number) => Math.round(v * 1000) / 1000;
+const watts = (power: number) => Number(power.toPrecision(3));
+/** A bulb's power for an entry sized by `s`: a glow of 120 over a sphere of radius 0.15 s, in metres. */
+const bulbPower = (s: number, unit: number) => watts(4 * Math.PI * Math.PI * (0.15 * s * unit) ** 2 * 120);
 const at = (p: Vec3, dx = 0, dy = 0, dz = 0): Vec3 => [round(p[0] + dx), round(p[1] + dy), round(p[2] + dz)];
 
 export type NewKind = "sphere" | "box" | "cylinder" | "cone" | "torus" | "plane" | "rectangle" | "bulb" | "spot" | "portal";
@@ -76,7 +84,7 @@ export const NEW_LIGHTS: { kind: NewKind; label: string }[] = [
  * A new object or light where the camera looks, sized to how far away that is so it shows
  * whatever the scene's scale: an object at the camera's target, a light above it.
  */
-export function newEntry(kind: NewKind, pose: Pose, entries: Entries): { light: boolean; entry: Entry } {
+export function newEntry(kind: NewKind, pose: Pose, entries: Entries, unit: number): { light: boolean; entry: Entry } {
   const target = pose.target as Vec3;
   const distance = Math.hypot(...pose.target.map((v, k) => v - pose.position[k]));
   const s = round(Math.max(0.01, distance * 0.12));
@@ -99,18 +107,23 @@ export function newEntry(kind: NewKind, pose: Pose, entries: Entries): { light: 
         entry: { type: "plane", name, points: [at(target, -h, 0, -h), at(target, h, 0, -h), at(target, h, 0, h), at(target, -h, 0, h)], material },
       };
     }
-    // A panel facing down, as edge_u × edge_v gives its front.
+    // A panel facing down, as edge_u × edge_v gives its front. Lamps give their light in
+    // watts over metres, `unit` to a scene unit, as bright as a glow of 5 for the panel and 120
+    // for a bulb at this size.
     case "rectangle":
-      return { light: true, entry: { type: "rectangle", name, position: above, edge_u: [2 * s, 0, 0], edge_v: [0, 0, 2 * s], intensity: 5 } };
+      return {
+        light: true,
+        entry: { type: "rectangle", name, position: above, edge_u: [2 * s, 0, 0], edge_v: [0, 0, 2 * s], power: watts(Math.PI * 4 * (s * unit) ** 2 * 5) },
+      };
     // A window's opening facing the camera's target, its size; the environment's light is
     // drawn through it, so put it in a window.
     case "portal":
       return { light: true, entry: { type: "portal", name, position: at(target, 0, s, 0), edge_u: [2 * s, 0, 0], edge_v: [0, 1.5 * s, 0] } };
-    case "bulb": return { light: true, entry: { type: "sphere", name, position: above, radius: round(0.15 * s), intensity: 120 } };
+    case "bulb": return { light: true, entry: { type: "sphere", name, position: above, radius: round(0.15 * s), power: bulbPower(s, unit) } };
     case "spot":
       return {
         light: true,
-        entry: { type: "sphere", name, position: above, radius: round(0.15 * s), intensity: 120, direction: [0, -1, 0], spot_angle: 40 },
+        entry: { type: "sphere", name, position: above, radius: round(0.15 * s), power: bulbPower(s, unit), direction: [0, -1, 0], spot_angle: 40 },
       };
   }
 }

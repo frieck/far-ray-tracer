@@ -135,6 +135,9 @@ pub struct RectLight {
     pub edge_v: Vec3,
     pub normal: Vec3,
     pub area: f32,
+    /// The camera does not see it, as V-Ray's Invisible: reflections, refractions and the
+    /// light it gives stay.
+    pub unseen: bool,
 }
 
 impl RectLight {
@@ -336,6 +339,8 @@ pub struct Scene {
     pub bulbs: Vec<Sphere>,
     /// For each bulb, its spotlight cone or IES distribution; None shines evenly all around.
     pub bulb_profiles: Vec<Option<crate::light_profile::Profile>>,
+    /// For each bulb, whether the camera does not see it; see `RectLight::unseen`.
+    pub bulb_unseen: Vec<bool>,
     /// Openings the environment's light comes in through, as windows; see `portal`.
     pub portals: Vec<crate::portal::Portal>,
     /// The scene file as read, which saving edits and writes back. None for `.3ds`-era scenes
@@ -468,6 +473,12 @@ impl Scene {
         Scene::from_source_adding(source, path, in_file)
     }
 
+    /// Whether a ray `depth` mirrors and `bounces` rebounds from the camera sees bulb `index`:
+    /// the camera's own rays do not see an invisible one.
+    pub fn bulb_seen(&self, index: usize, depth: i32, bounces: u32) -> bool {
+        !(depth <= 1 && bounces == 0 && self.bulb_unseen.get(index).copied().unwrap_or(false))
+    }
+
     /// The object primitive `prim` belongs to, as an index in `objects`.
     pub fn object_of(&self, prim: usize) -> Option<usize> {
         self.prim_objects.get(prim).map(|&o| o as usize).filter(|&o| o < self.objects.len())
@@ -518,6 +529,7 @@ impl Scene {
             scene.rect_lights = filter(&self.rect_lights, &keep_rects);
             scene.bulbs = filter(&self.bulbs, &keep_bulbs);
             scene.bulb_profiles = filter(&self.bulb_profiles, &keep_bulbs);
+            scene.bulb_unseen = filter(&self.bulb_unseen, &keep_bulbs);
             // The lights left keep their names, numbered anew in their lists.
             let mut counts = [0usize; 4];
             scene.scene_lights = self.scene_lights.iter().enumerate().filter(|(k, _)| !lights.contains(k)).map(|(_, l)| {
@@ -558,6 +570,7 @@ impl Scene {
             rect_lights: Vec::new(),
             bulbs: Vec::new(),
             bulb_profiles: Vec::new(),
+            bulb_unseen: Vec::new(),
             portals: Vec::new(),
             source: None,
             material_sources: Vec::new(),

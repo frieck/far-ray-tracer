@@ -9,6 +9,25 @@ and moves under its version when that version is released.
 
 ### Added
 
+- More for lights. A selected light's settings are split as in Blender: the **Light** tab
+  shows, below the list of lights, what light it gives, and the **Object** tab where it is.
+  **Kind** switches a light between a sphere light, a spotlight, an IES light and an area
+  light, keeping its place, color, intensity and aim; an IES light's file is chosen there,
+  and saved relative to the scene. **Aim at** points a spotlight or IES light at an object,
+  or turns an area light to face it. **Seen by camera** off makes the camera look through a
+  light, as V-Ray's Invisible, on the CPU and the GPU; scene files write it as
+  `"invisible": true`. The quick 3D view draws a spotlight's cone and an IES light's aim.
+  A 2008 point light can switch kind too, into a physical light with its color and the
+  power that gives the same light at the scene's center.
+
+- Lamps' power in watts, as Blender's: `"power"` on a sphere or area light is the light it
+  gives in all, so resizing it keeps its light, where `"intensity"` is its surface's glow,
+  which needed hundreds or thousands for a small bulb. Watts are measured in metres, with the
+  camera's scene unit, so 40 W lights a white wall a metre away in any scene whose unit is
+  set, and changing the unit changes how far they reach. The app shows and edits every lamp's
+  power in watts, in the Light tab and the list of lights; a lamp edited there is saved by
+  its power. Scenes with `intensity` read as before, and new lamps are added with a power.
+
 - Caustics from HDRI maps and the physical sun and sky in Enhanced rendering, through
   both glass and reflective objects. Includes an Environment caustics example. Scenes with
   infinite reflective grounds still use path tracing for the environment.
@@ -144,6 +163,10 @@ are not used. The shader is compiled for what
 
 ### Changed
 
+- In the 2008 stage, sphere lights and panels light as point lights with the light they give
+  at the scene's center, instead of their glow at full strength, which washed modern scenes
+  out. A 2008 light turned physical in the app renders there as before.
+
 - The camera has a focal length, a sensor and an f-number, as in V-Ray and Blender: **Camera >
   Lens** shows the zoom as a focal length in millimetres and the aperture as an f-number, which
   a scene's unit (10 cm by default) and the sensor (full frame) turn into the opening. Depth of
@@ -160,6 +183,16 @@ are not used. The shader is compiled for what
 
 ### Fixed
 
+- A spotlight or IES light seen from outside its beam showed as a dark ball, such as a
+  spotlight pointing down seen from the side. Where it gives no light, rays now pass through
+  it, on the CPU and the GPU: it hides nothing and casts no shadow.
+- The quick 3D view kept the old shapes after an edit in a panel, such as a light's kind or
+  an object's size, until the camera moved. It now draws the scene again as soon as it reads
+  the edit.
+- Scaling a turned object along one of its own axes in the 3D view: while the handle was
+  dragged, the quick view stretched it along the world's axis, and the handles pointed along
+  the world's axes too. Both now follow the object's own axes, and a cylinder's or cone's
+  radius grows across both its sides.
 - After adding a plane in the app, edits to other objects' materials could land on the wrong
   material: the scene read with the added object numbered materials anew. Added objects are now
   read after the file's own.
