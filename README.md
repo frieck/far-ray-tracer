@@ -797,9 +797,9 @@ covers all of it.
 
 **Undo.** **Edit > Undo** (⌘Z) and **Redo** (⇧⌘Z) step through edits: to objects and lights,
 what is hidden, materials, the environment and the render and camera settings. A change
-counts once it settles for a moment, so a whole drag or slider move is one step. Where the
-camera looks is left out, as orbiting is looking rather than editing, and a new scene starts a
-new history of up to 200 steps. In a text field, the same keys undo the typing.
+counts once it settles for a moment, so a whole drag or slider move is one step. Moving the
+scene camera counts too, as Save Scene keeps it; moving the free view (below) does not, as it
+is only looking. A new scene starts a new history of up to 200 steps. In a text field, the same keys undo the typing.
 
 Each field drags or takes a typed value; vectors have one per axis. **Reset** goes back to the
 file's values, and **Save Scene** writes the edits into the file. An edit replaces those
@@ -829,11 +829,27 @@ A scene opens in this 3D view and is ray traced only when you press **Render**; 
 **Render after each change** to render again after every change, as soon as you let go of the camera.
 If WebGL is unavailable, that option stays on and a small ray traced image follows the
 camera instead. **Camera > Lens > Focal length** changes the lens and **Reset** returns to the scene's view.
-Camera moves last for the session; to keep one, add it to the scene:
+**Save Scene** keeps where the camera is, or it can be written by hand:
 
 ```json
 "camera": { "position": [6, 3, -4], "target": [0, 0, 6], "zoom": 1.2 }
 ```
+
+#### The free view
+
+To look around the scene while editing without losing the shot, press **0** or the camera
+button under the axes at the image's top right. The image then looks from a free view of its
+own: dragging, panning, scrolling and the axes move it, and the scene camera stays where it
+is, drawn as a small pyramid of its picture with a triangle on its top side. The free view
+renders like the camera, with its lens and settings, but without depth of field, whose focus
+belongs to the camera, and a tag at the bottom left says the camera stays put. Press **0**
+again to look through the camera; the free view is kept where it was left, for the session,
+and is never saved in the scene.
+
+**Camera to view**, the second button in the free view, puts the camera where the free view
+is, with its own lens, and looks through it again. Exporting the image, and picking the focus,
+always use the camera: from the free view they first go back to it, and Export renders the
+camera's image before saving it.
 
 `zoom` 1 is the original field of view. The defaults are the 2008 camera, position
 `(0, 0, -5)` and target `(0, 0, 0)`. Classic and Fixed always keep that camera, so that

@@ -4,7 +4,7 @@ import { MODE_NAMES } from "../settings";
 import type { Area, Mode, Pose, SceneInfo } from "../types";
 import { GlassPanel } from "./GlassPanel";
 import { ViewGizmo } from "./ViewGizmo";
-import { Crop, Image, Shell, Sparkles, X } from "lucide-react";
+import { Crop, Image, Shell, Sparkles, SwitchCamera, Video, X } from "lucide-react";
 
 interface ViewportProps {
   pickingFocus: boolean;
@@ -23,6 +23,10 @@ interface ViewportProps {
   /** The pose the image shows, for the axes gizmo. */
   pose: Pose | null;
   onAlignView: (axis: [number, number, number]) => void;
+  /** Whether the image looks from the free view rather than through the scene camera. */
+  freeView: boolean;
+  onToggleView: () => void;
+  onCameraToView: () => void;
   afterRef: RefObject<HTMLCanvasElement | null>;
   beforeRef: RefObject<HTMLCanvasElement | null>;
   photonRef: RefObject<HTMLCanvasElement | null>;
@@ -179,6 +183,27 @@ export function Viewport(props: ViewportProps) {
           )}
           {props.pose && !comparison && !showPhotonMap && !showMaterial && (
             <ViewGizmo pose={props.pose} onAlign={props.navigable ? props.onAlignView : null} />
+          )}
+          {props.pose && !comparison && !showPhotonMap && !showMaterial && props.navigable && (
+            <div className="view-modes glass" role="group" aria-label="View" onClick={(event) => event.stopPropagation()}
+              onPointerDown={(event) => event.stopPropagation()} onPointerMove={(event) => event.stopPropagation()}>
+              <button type="button" className="icon" aria-pressed={!props.freeView} aria-label="Look through the camera"
+                title={props.freeView
+                  ? "Look through the camera (0) · the image shows what the camera sees again"
+                  : "Look through the camera (0) · on, moving the image moves the camera; off, the image moves around the scene and the camera stays put"}
+                onClick={props.onToggleView}>
+                <Video size={17} aria-hidden="true" />
+              </button>
+              {props.freeView && (
+                <button type="button" className="icon" aria-label="Camera to view" title="Camera to view · puts the camera where you are looking from"
+                  onClick={props.onCameraToView}>
+                  <SwitchCamera size={17} aria-hidden="true" />
+                </button>
+              )}
+            </div>
+          )}
+          {props.freeView && !comparison && !showPhotonMap && !showMaterial && (
+            <span className="view-tag" aria-hidden="true">Free view · the camera stays put</span>
           )}
           {shownRegion && (
             <div className="region" data-drawing={draft ? true : undefined} style={{

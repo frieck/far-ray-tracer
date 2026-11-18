@@ -9,6 +9,13 @@ and moves under its version when that version is released.
 
 ### Added
 
+- A free view, to look around a scene while editing it without moving its camera. **0**, or
+  the camera button under the axes, switches between looking through the camera, where moving
+  the image moves the camera as before, and the free view, where the camera stays put and is
+  drawn as a frame. **Camera to view** puts the camera where the free view is. The free view
+  renders without depth of field, is not saved in the scene, and exporting the image or
+  picking the focus go back to the camera. Moving the camera is now an edit that undo covers.
+
 - More for lights. A selected light's settings are split as in Blender: the **Light** tab
   shows, below the list of lights, what light it gives, and the **Object** tab where it is.
   **Kind** switches a light between a sphere light, a spotlight, an IES light and an area

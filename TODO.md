@@ -156,7 +156,7 @@ experimental.
   and camera presets, EXR passes.
 - **Scene editing**: the outliner with selection, outline and hiding; editing objects and
   lights, with a light's kind, aim, IES file and whether the camera sees it; move, rotate and
-  scale gizmos with G, R and S; undo and redo; the Lights panel with
+  scale gizmos with G, R and S; a free view apart from the camera; undo and redo; the Lights panel with
   color temperature; adding, duplicating and deleting; fog in Light > Atmosphere; adding
   models, with their parts' materials edited and saved in the scene.
 - **Quality and speed**: Sobol sampling, adaptive sampling (command line), Open Image Denoise.

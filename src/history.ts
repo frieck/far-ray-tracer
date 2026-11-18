@@ -1,12 +1,13 @@
 /**
  * Undo and redo: the settings as they were after each change, as snapshots. A change counts
- * once it settles, so a drag or a slider is one step, not one per pixel. Where the camera
- * looks and how the app runs are left out: orbiting is looking, not editing, as in Blender.
+ * once it settles, so a drag or a slider is one step, not one per pixel. Moving the scene
+ * camera is an edit, saved with the scene, and counts; the free view, which is only looking,
+ * lives outside the settings. How the app runs is left out.
  */
 import type { Settings } from "./types";
 
 /** Settings undo does not bring back. */
-const NOT_UNDONE = ["pose", "threads", "device", "evolution", "mode", "comparison"] as const;
+const NOT_UNDONE = ["threads", "device", "evolution", "mode", "comparison"] as const;
 
 /** Most steps kept. */
 const DEPTH = 200;
@@ -24,7 +25,7 @@ export function snapshot(settings: Settings): string {
   return JSON.stringify(kept);
 }
 
-/** The settings with a snapshot brought back, the camera and the rest left as they are. */
+/** The settings with a snapshot brought back, how the app runs left as it is. */
 export function restore(settings: Settings, snapshot: string): Settings {
   return { ...settings, ...(JSON.parse(snapshot) as Partial<Settings>) };
 }

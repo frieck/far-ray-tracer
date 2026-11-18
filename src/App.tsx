@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AboutDialog } from "./components/AboutDialog";
+import { CameraFrame } from "./components/CameraFrame";
 import { ControlPanel } from "./components/ControlPanel";
 import { Outliner } from "./components/Outliner";
 import { LIGHT_ID, SelectionOverlay, type IdMap } from "./components/SelectionOverlay";
@@ -155,6 +156,15 @@ export function App() {
   const environmentRequest = useRef(0);
   const [loadingEnvironment, setLoadingEnvironment] = useState(false);
   const [movingCamera, setMovingCamera] = useState(false);
+  /**
+   * Where the image looks from while the scene camera stays put, or null when it looks through
+   * the camera. Its lens is always the camera's; it is not saved in the scene.
+   */
+  const [freeView, setFreeView] = useState<Pose | null>(null);
+  /** The free view as it was left, to go back to it. */
+  const lastView = useRef<Pose | null>(null);
+  /** Export Image asked for in the free view: saved once the camera's image has rendered. */
+  const saveWhenRendered = useRef<"waiting" | "rendering" | null>(null);
   const pivotChosen = useRef(false);
   const wheelTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const ambientRef = useRef<HTMLCanvasElement>(null);
@@ -215,6 +225,9 @@ export function App() {
             bladeRotation: info.camera.blade_rotation,
           }));
           pivotChosen.current = false;
+          setFreeView(null);
+          lastView.current = null;
+          saveWhenRendered.current = null;
           setRenderedKey(null);
           setAwaitingImage(true);
           publish({ painted: false });
@@ -246,9 +259,16 @@ export function App() {
   // into no change at all, and the view would keep the previous scene's geometry.
   const liveReady = scene !== null && liveScene === scene;
 
+  // In the free view, the image is what the view sees: the scene camera's settings from the
+  // view's place, without depth of field, whose focus belongs to the camera.
+  const viewing = freeView !== null && settings !== null && activeMode(settings) === "enhanced" && !activeComparison(settings);
+  const shown = useMemo(() => settings && (viewing && freeView
+    ? { ...settings, pose: { ...freeView, zoom: settings.pose.zoom }, depthOfField: false } : settings),
+  [settings, viewing, freeView]);
+
   // Without WebGL, a small ray traced image follows the camera instead.
-  const job = useMemo(() => settings && buildJob(settings, movingCamera && !liveReady, region),
-    [settings, movingCamera, liveReady, region]);
+  const job = useMemo(() => shown && buildJob(shown, movingCamera && !liveReady, region),
+    [shown, movingCamera, liveReady, region]);
   const [imageWidth, imageHeight] = settings ? imageSize(settings) : [4, 3];
   const jobKey = JSON.stringify(job);
   // What the objects added here bring, a model's parts and materials among them, as the scene
@@ -275,6 +295,7 @@ export function App() {
     [scene, added]);
   const onDeleteKey = useRef(() => {});
   const onDuplicateKey = useRef(() => {});
+  const onViewKey = useRef<() => boolean>(() => false);
   const openRef = useRef(open);
   openRef.current = open;
 
@@ -290,7 +311,7 @@ export function App() {
   const idHeight = Math.max(1, Math.round((idWidth * imageHeight) / imageWidth));
   const outlinable = scene !== null && settings !== null && activeMode(settings) === "enhanced" && !activeComparison(settings);
   const idArgs = outlinable && settings ? {
-    pose: settings.pose, width: idWidth, height: idHeight, view: sceneView(settings),
+    pose: shown!.pose, width: idWidth, height: idHeight, view: sceneView(settings),
   } : null;
   const idKey = idArgs && scene ? JSON.stringify({ path: scene.path, ...idArgs }) : null;
   const ids = useLatest(idKey, async () => {
@@ -304,7 +325,7 @@ export function App() {
   const xrayKey = idKey && xrayObject !== null ? `${idKey}|${xrayObject}` : null;
   const xrays = useLatest(xrayKey, async () => ({
     path: scene!.path, object: xrayObject!, width: idWidth,
-    mask: new Uint8Array(await invoke<ArrayBuffer>("object_xray", { pose: settings!.pose, width: idWidth, height: idHeight, object: xrayObject, view: sceneView(settings!) })),
+    mask: new Uint8Array(await invoke<ArrayBuffer>("object_xray", { pose: shown!.pose, width: idWidth, height: idHeight, object: xrayObject, view: sceneView(settings!) })),
   }));
   const xray = xrays && idMap && xrays.value.path === idMap.path && xrays.value.object === xrayObject && xrays.value.width === idWidth
     ? xrays.value.mask : null;
@@ -390,7 +411,7 @@ export function App() {
 
   const showLive = liveReady && (movingCamera || awaitingImage);
   // 2008 and Fixed always render from the scene's own camera.
-  const livePose = settings && scene && (activeMode(settings) === "enhanced" ? settings.pose : scenePose(scene));
+  const livePose = shown && scene && (activeMode(shown) === "enhanced" ? shown.pose : scenePose(scene));
 
   // The gizmo, at the selected object or light: moving, turning or scaling it. While it is
   // dragged only the 3D view changes the selection, at once; letting go writes the edit, and
@@ -404,7 +425,7 @@ export function App() {
   };
   const addEntry = (kind: NewKind) => {
     if (!settings || !entries) return;
-    const { light, entry } = newEntry(kind, settings.pose, entries, settings.sceneUnit);
+    const { light, entry } = newEntry(kind, shown!.pose, entries, settings.sceneUnit);
     const { patch, id } = withAdded(settings, entries, light, entry);
     change(patch);
     setSelection({ kind: light ? "light" : "object", id });
@@ -418,7 +439,7 @@ export function App() {
       return;
     }
     if (!path || !settings || !entries) return;
-    const { patch, id } = withAdded(settings, entries, false, newModel(path, settings.pose, entries));
+    const { patch, id } = withAdded(settings, entries, false, newModel(path, shown!.pose, entries));
     change(patch);
     setSelection({ kind: "object", id });
   };
@@ -434,6 +455,12 @@ export function App() {
     if (follow) setGrab((n) => n + 1);
   };
   onDuplicateKey.current = () => duplicateSelection(true);
+  // The 0 key switches views where the image can be moved around; false where it cannot.
+  onViewKey.current = () => {
+    if (!navigable) return false;
+    toggleView();
+    return true;
+  };
   onDeleteKey.current = () => deleteSelection();
   const deleteSelection = () => {
     if (!settings || !selection) return;
@@ -453,7 +480,7 @@ export function App() {
     if (change && settings && transform) {
       const along = change.type === "scale" && change.axis !== null ? transform.stretches(change.axis) : [];
       sceneView3d.current?.place(pieceKey, changeMatrix(change, transform.point, along));
-      sceneView3d.current?.draw(settings.pose, imageWidth / imageHeight);
+      sceneView3d.current?.draw(shown!.pose, imageWidth / imageHeight);
     }
   };
   const commitGizmo = (change: Change) => {
@@ -491,14 +518,49 @@ export function App() {
 
   const outdated = scene !== null && !renderAlone && !view.rendering && renderedKey !== jobKey;
 
-  /** The first move orbits around the objects, not around the original target. */
+  /**
+   * Moves what the image looks from: the free view, or else the scene camera. The first move
+   * orbits around the objects, not around the original target.
+   */
   const moveCamera = (move: (pose: Pose) => Pose) => {
     const center = pivotChosen.current ? null : (scene?.center ?? null);
     pivotChosen.current = true;
     if (!movingCamera) publish({ painted: false });
     setMovingCamera(true);
     setAwaitingImage(true);
-    setSettings((old) => old && { ...old, pose: move(retarget(old.pose, center)) });
+    if (viewing) setFreeView((old) => old && move(retarget(old, center)));
+    else setSettings((old) => old && { ...old, pose: move(retarget(old.pose, center)) });
+  };
+
+  /** Between the free view, where it was left, and the view through the camera. */
+  const toggleView = () => {
+    if (!settings) return;
+    publish({ painted: false });
+    setAwaitingImage(true);
+    if (viewing) {
+      lastView.current = freeView;
+      setFreeView(null);
+    } else {
+      setFreeView(lastView.current ?? settings.pose);
+      setPickingFocus(false);
+    }
+  };
+
+  /** Puts the scene camera where the free view is, and looks through it. */
+  const cameraToView = () => {
+    if (!viewing || !freeView) return;
+    lastView.current = freeView;
+    setSettings((old) => old && { ...old, pose: { ...freeView, zoom: old.pose.zoom } });
+    setFreeView(null);
+  };
+
+  /** Back to the camera, for what only it can do: picking its focus, exporting its image. */
+  const throughCamera = () => {
+    if (!viewing) return;
+    lastView.current = freeView;
+    publish({ painted: false });
+    setAwaitingImage(true);
+    setFreeView(null);
   };
 
   const resetCamera = () => {
@@ -516,7 +578,8 @@ export function App() {
     pivotChosen.current = true;
     publish({ painted: false });
     setAwaitingImage(true);
-    setSettings((old) => old && { ...old, pose: alignView(retarget(old.pose, center), axis) });
+    if (viewing) setFreeView((old) => old && alignView(retarget(old, center), axis));
+    else setSettings((old) => old && { ...old, pose: alignView(retarget(old.pose, center), axis) });
   };
 
   /** Selects in the outliner what is under a point of the image, and its first material. */
@@ -529,13 +592,18 @@ export function App() {
       return;
     }
     try {
-      const picked = await invoke<Selection>("pick_object", { pose: settings.pose, width: imageWidth, height: imageHeight, x, y,
+      const picked = await invoke<Selection>("pick_object", { pose: shown!.pose, width: imageWidth, height: imageHeight, x, y,
         useKd: settings.useKd, view: sceneView(settings) });
       select(picked);
     } catch (error) {
       publish({ status: `Error: ${String(error)}` });
     }
   };
+
+  // Whether the image can be moved around, and so the view switched.
+  const navigable = scene !== null && settings !== null && activeMode(settings) === "enhanced"
+    && !activeComparison(settings) && !pickingFocus && !(showPhotonMap && view.hasPhotonMap) && !showMaterial
+    && !drawingRegion;
 
   const select = (picked: Selection) => {
     setSelection(picked);
@@ -609,6 +677,26 @@ export function App() {
   }, [publish, scene]);
 
   const canSave = view.hasResult && !view.rendering;
+
+  /** Exports the image, which is always the camera's: from the free view, it renders that first. */
+  const exportImage = () => {
+    if (!viewing) {
+      void save();
+      return;
+    }
+    throughCamera();
+    saveWhenRendered.current = "waiting";
+    if (!renderAlone) renderOnNextJob.current = true;
+    publish({ status: "Rendering the camera's image to export it…" });
+  };
+  useEffect(() => {
+    const state = saveWhenRendered.current;
+    if (state === "waiting" && view.rendering && !viewing) saveWhenRendered.current = "rendering";
+    if (state === "rendering" && !view.rendering) {
+      saveWhenRendered.current = null;
+      if (view.hasResult && !viewing) void save();
+    }
+  }, [view.rendering, view.hasResult, viewing, save]);
 
   /** Saves the scene with the edits made here: over its file, or as a new one. True if saved. */
   const saveScene = useCallback(async (choose: boolean, reopen = true) => {
@@ -698,7 +786,7 @@ export function App() {
   onMenu.current = ({ action, path }) => {
     if (action === "open") void open("choose_scene");
     else if (action === "example") void open("load_scene", { path });
-    else if (action === "save" && canSave) void save();
+    else if (action === "save" && canSave) exportImage();
     else if (action === "save_scene") void saveScene(false);
     else if (action === "save_scene_as") void saveScene(true);
     else if (action === "render" && scene) renderNow();
@@ -740,6 +828,12 @@ export function App() {
     setPickingFocus(false);
     publish({ caustics: null, hasPhotonMap: false, status: direction === "undo" ? "Undone" : "Redone" });
     setShowPhotonMap(false);
+    const restored = settings && history.restore(settings, to);
+    // A camera put back shows the quick 3D view from there until the render catches up.
+    if (restored && JSON.stringify(restored.pose) !== JSON.stringify(settings.pose)) {
+      publish({ painted: false });
+      setAwaitingImage(true);
+    }
     setSettings((old) => old && history.restore(old, to));
   };
 
@@ -763,6 +857,11 @@ export function App() {
       }
       const target = event.target as HTMLElement | null;
       if (target && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
+      if (event.key === "0" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.repeat) {
+        if (!onViewKey.current()) return;
+        event.preventDefault();
+        return;
+      }
       if (!selection || event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.key === "Delete" || event.key === "Backspace") {
         event.preventDefault();
@@ -821,31 +920,35 @@ export function App() {
           }}
           overlay={outlinable ? (
             <>
+              {viewing && shown && settings && (
+                <CameraFrame camera={settings.pose} view={shown.pose} aspect={imageWidth / imageHeight} />
+              )}
               {outline && !preview && (
                 <SelectionOverlay map={idMap} selected={selectedCode} hover={hover} xray={xray} onSize={onOverlaySize} />
               )}
               {gizmoPoint && transform && settings && !pickingFocus && !drawingRegion && (
-                <TransformGizmo pose={settings.pose} aspect={imageWidth / imageHeight} point={gizmoPoint}
+                <TransformGizmo pose={shown!.pose} aspect={imageWidth / imageHeight} point={gizmoPoint}
                   mode={gizmoMode === "rotate" && !transform.canRotate || gizmoMode === "scale" && !transform.canScale ? "move" : gizmoMode}
                   onMode={setGizmoMode} canRotate={transform.canRotate} canScale={transform.canScale} scaleAxes={transform.scaleAxes}
                   ownAxes={transform.ownAxes}
                   grab={grab} onPreview={previewGizmo} onCommit={commitGizmo} onCancel={() => {
                     // Back as it was, in the 3D view too.
                     sceneView3d.current?.place(null);
-                    if (settings) sceneView3d.current?.draw(settings.pose, imageWidth / imageHeight);
+                    if (shown) sceneView3d.current?.draw(shown.pose, imageWidth / imageHeight);
                   }} />
               )}
             </>
           ) : null}
-          navigable={scene !== null && settings !== null && activeMode(settings) === "enhanced"
-            && !activeComparison(settings) && !pickingFocus && !(showPhotonMap && view.hasPhotonMap) && !materialStage
-            && !drawingRegion}
+          navigable={navigable}
           onCameraDrag={(panning, dx, dy, stageHeight) => moveCamera((pose) => panning
             ? pan(pose, dx, dy, stageHeight, imageWidth / imageHeight)
             : orbit(pose, dx, dy))}
           onCameraRelease={() => setMovingCamera(false)}
           pose={livePose}
           onAlignView={alignCamera}
+          freeView={viewing}
+          onToggleView={toggleView}
+          onCameraToView={cameraToView}
           onCameraWheel={(amount) => {
             moveCamera((pose) => dolly(pose, amount));
             clearTimeout(wheelTimer.current);
@@ -954,6 +1057,7 @@ export function App() {
             report={view.caustics}
             pickingFocus={pickingFocus}
             onPickFocus={() => {
+              throughCamera();
               setDrawingRegion(false);
               focusRequest.current += 1;
               setPickingFocus(!pickingFocus);
@@ -974,7 +1078,7 @@ export function App() {
             webgl={webgl}
             outdated={outdated && (view.hasResult ? "Changes are not rendered yet." : "This is a quick 3D view. Render to ray trace it.")}
             onCancel={() => void renderer.stop()}
-            onSave={() => void save()}
+            onSave={exportImage}
             onSaveScene={() => void saveScene(false)}
             unsaved={unsaved}
             selectedMaterial={selectedMaterial}
