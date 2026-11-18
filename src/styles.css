@@ -493,6 +493,7 @@ button { font: inherit; color: inherit; cursor: default; }
 .outliner-row[data-hidden] .outliner-pick { color: var(--faint); }
 .outliner-pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; height: 24px; padding: 0 6px; border: 0; border-radius: 6px; background: none; color: var(--text); font: inherit; font-size: 12px; text-align: left; }
 .outliner-pick svg { flex: none; color: var(--muted); }
+.outliner-rename { flex: 1; min-width: 0; height: 20px; padding: 0 5px; border: 1px solid var(--accent); border-radius: 5px; background: rgba(0, 0, 0, 0.35); color: var(--text); font: inherit; font-size: 12px; outline: none; }
 .outliner-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .outliner-glow { color: var(--warning) !important; }
 .outliner-eye { display: grid; place-items: center; flex: none; width: 24px; height: 22px; padding: 0; border: 0; border-radius: 5px; background: none; color: var(--faint); }

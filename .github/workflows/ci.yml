@@ -1,5 +1,5 @@
 # Checks every push to main on the systems the app ships for, including the ones nobody on the
-# project has at hand: Windows and Intel Macs.
+# project has at hand: Windows. Intel Macs are not built since 3.0.0-rc.2.
 #
 # On each system it runs the engine's tests, fetches Open Image Denoise as the release does, and
 # renders every example scene with the command line, small and denoised. It fails if a scene
@@ -27,9 +27,6 @@ jobs:
           - name: macOS (Apple Silicon)
             runner: macos-latest
             oidn: macos-arm64
-          - name: macOS (Intel)
-            runner: macos-15-intel
-            oidn: macos-x86_64
           - name: Windows
             runner: windows-latest
             oidn: windows-x64

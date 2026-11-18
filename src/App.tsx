@@ -462,6 +462,22 @@ export function App() {
     return true;
   };
   onDeleteKey.current = () => deleteSelection();
+  /** Renames an object or light; back to its file's name, the edit goes away. */
+  const rename = (picked: NonNullable<Selection>, name: string) => {
+    if (!scene) return;
+    const light = picked.kind === "light";
+    // As sceneEntries lists them: the file's own first, the fog left out.
+    const own = light ? scene.light_list : scene.objects.filter((object) => object.kind !== "fog");
+    const original = own[picked.id]?.name;
+    const key = light ? "lightEdits" : "objectEdits";
+    setSettings((old) => {
+      if (!old) return old;
+      const fields: Record<string, unknown> = { ...old[key][picked.id] };
+      if (name === original) delete fields.name;
+      else fields.name = name;
+      return { ...old, [key]: { ...old[key], [picked.id]: fields } };
+    });
+  };
   const deleteSelection = () => {
     if (!settings || !selection) return;
     change(withRemoved(settings, selection.kind === "light", selection.id));
@@ -992,6 +1008,7 @@ export function App() {
           <>
             <Outliner scene={shownScene!} hiddenObjects={settings.hiddenObjects} hiddenLights={settings.hiddenLights}
               objects={entries!.objects} lights={entries!.lights}
+              onRename={rename}
               removedObjects={settings.removedObjects} removedLights={settings.removedLights}
               onAdd={addEntry} onAddModel={() => void addModel()} onDuplicate={() => duplicateSelection(false)} onDelete={deleteSelection}
               onHiddenChange={(hiddenObjects, hiddenLights) => {

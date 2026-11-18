@@ -50,7 +50,6 @@ The [releases page](https://github.com/frieck/far-ray-tracer/releases) has the a
 | System | File |
 | --- | --- |
 | macOS, Apple Silicon (M1 and later) | `…_aarch64.dmg` |
-| macOS, Intel | `…_x64.dmg` |
 | Windows 10 and 11 | `…_x64-setup.exe` |
 
 The builds are not signed with an Apple or Microsoft certificate, so each system asks
@@ -728,6 +727,10 @@ Objects groups, or find things by name with the magnifier.
   opens in the Materials tab, which also follows the selection. `Esc` clears it. The camera
   and environment rows open their settings. A model with several materials unfolds to list
   them as its parts; a part opens its material, and the model moves as one.
+- **Rename** an object or light by double-clicking its name, or with `F2` for the selection:
+  type the new name and press Enter, or Esc to keep the old one. Every panel shows the new
+  name, undo takes it back, and Save Scene writes it into the entry's `name`; typing the
+  file's own name again drops the change.
 - **See** the selection on the image: a blue outline and a light fill where it shows, and a
   fainter outline where something in front hides it, as Blender's X-ray does; a thin white
   outline marks what the pointer is over. The outline lies over the image, on the render as on
@@ -877,8 +880,9 @@ Rules for all scenes:
 
 ## Known limits
 
-- Only macOS on Apple Silicon has been tested. The Windows and Intel Mac builds are
-  unverified, including Open Image Denoise on Windows and the translucent window.
+- Only macOS on Apple Silicon has been tested. The Windows build is unverified, including
+  Open Image Denoise on Windows and the translucent window.
+- There is no build for Intel Macs since 3.0.0-rc.2.
 - The builds are not signed with a developer certificate: macOS and Windows ask before the
   first launch (see the release notes).
 - Lights, objects and volumes are edited in the scene file; the app edits the camera,

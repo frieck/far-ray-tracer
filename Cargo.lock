@@ -912,7 +912,7 @@ dependencies = [
 
 [[package]]
 name = "far-app"
-version = "3.0.0-rc.1"
+version = "3.0.0-rc.2"
 dependencies = [
  "far-core",
  "far-gpu",
@@ -927,7 +927,7 @@ dependencies = [
 
 [[package]]
 name = "far-cli"
-version = "3.0.0-rc.1"
+version = "3.0.0-rc.2"
 dependencies = [
  "far-core",
  "far-gpu",
@@ -937,7 +937,7 @@ dependencies = [
 
 [[package]]
 name = "far-core"
-version = "3.0.0-rc.1"
+version = "3.0.0-rc.2"
 dependencies = [
  "exr",
  "gltf",
@@ -950,7 +950,7 @@ dependencies = [
 
 [[package]]
 name = "far-gpu"
-version = "3.0.0-rc.1"
+version = "3.0.0-rc.2"
 dependencies = [
  "bytemuck",
  "far-core",

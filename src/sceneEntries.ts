@@ -22,6 +22,12 @@ export function lightKind(entry: Entry): string {
   return typeof entry.spot_angle === "number" ? "spot" : "sphere";
 }
 
+/** An object or light with the name the outliner gave it, if it was renamed. */
+function renamed<T extends { name: string }>(entry: T, edits: Record<string, unknown> | undefined): T {
+  const name = edits?.name;
+  return typeof name === "string" && name !== entry.name ? { ...entry, name } : entry;
+}
+
 /**
  * The file's objects and lights, then the added ones; `added` gives the materials and parts
  * of those, as the scene read with them has them, once it is read.
@@ -46,9 +52,9 @@ export function sceneEntries(scene: SceneInfo, settings: Settings, added?: Added
     // An edit may make a sphere light a spotlight or a panel; see lightKinds.ts.
     const edits = settings.lightEdits[id];
     const switched = edits && ["type", "spot_angle", "ies"].some((key) => key in edits);
-    return switched ? { ...light, kind: lightKind(edited(light.source, edits)) } : light;
+    return renamed(switched ? { ...light, kind: lightKind(edited(light.source, edits)) } : light, edits);
   });
-  return { objects, lights };
+  return { objects: objects.map((object, id) => renamed(object, settings.objectEdits[id])), lights };
 }
 
 /** A name not yet taken: "Sphere", then "Sphere 2", "Sphere 3" and so on. */

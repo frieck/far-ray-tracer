@@ -7,7 +7,12 @@ and moves under its version when that version is released.
 
 ## [Unreleased]
 
+## [3.0.0-rc.2] - 2026-11-18
+
 ### Added
+
+- Renaming objects and lights in the outliner: double-click a name, or press F2 for the
+  selection. Save Scene writes the new name into the file, and undo takes it back.
 
 - A free view, to look around a scene while editing it without moving its camera. **0**, or
   the camera button under the axes, switches between looking through the camera, where moving
@@ -188,8 +193,16 @@ are not used. The shader is compiled for what
   of the KD-Tree: scenes are ready 20 to 90 times sooner, and meshes render 10% to 35% faster.
   It is also the first step toward rendering on the GPU. The 2008 stage keeps its KD-Tree.
 
+### Removed
+
+- The Intel Mac build. Apple no longer sells Intel Macs and macOS 26 is the last to run on
+  them; the build was never tested on one, and an Intel Mac with 3.0.0-rc.1 stays on it.
+
 ### Fixed
 
+- A graphics card that fails to compile the renderer now gives an error, after a second try,
+  instead of a crash that left every later GPU render failing until the app restarted; the
+  material preview falls back to the CPU.
 - A spotlight or IES light seen from outside its beam showed as a dark ball, such as a
   spotlight pointing down seen from the side. Where it gives no light, rays now pass through
   it, on the CPU and the GPU: it hides nothing and casts no shadow.
@@ -367,7 +380,8 @@ Windows.
 - **Evolution:** compares the 2008, Fixed and Enhanced stages side by side.
 - **Example scenes:** a showcase, materials and techniques.
 
-[Unreleased]: https://github.com/frieck/far-ray-tracer/compare/v3.0.0-rc.1...HEAD
+[Unreleased]: https://github.com/frieck/far-ray-tracer/compare/v3.0.0-rc.2...HEAD
+[3.0.0-rc.2]: https://github.com/frieck/far-ray-tracer/compare/v3.0.0-rc.1...v3.0.0-rc.2
 [3.0.0-rc.1]: https://github.com/frieck/far-ray-tracer/compare/v3.0.0-beta.4...v3.0.0-rc.1
 [3.0.0-beta.4]: https://github.com/frieck/far-ray-tracer/compare/v3.0.0-beta.3...v3.0.0-beta.4
 [3.0.0-beta.3]: https://github.com/frieck/far-ray-tracer/compare/v3.0.0-beta.2...v3.0.0-beta.3

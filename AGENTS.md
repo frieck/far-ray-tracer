@@ -24,9 +24,10 @@ The README explains every feature and the scene format; `TODO.md` lists what is 
 
 ## Ground rules
 
-- **3.0.0 ships with GPU rendering.** 3.0.0-rc.1 was tested and approved by hand, and the
-  user then chose to hold 3.0.0 for the GPU work in `TODO.md`. Until it is out, the GPU steps
-  and fixes go in; other new features are noted in `TODO.md` for later.
+- **3.0.0 ships with GPU rendering and the scene editing since 3.0.0-rc.1.** The user held
+  3.0.0 after rc.1 for the GPU work, then added scene editing to it (lights by kind and in
+  watts, the free view and more). 3.0.0-rc.2 carries all of it and is tested by hand before
+  3.0.0; until then, fixes go in and new features are noted in `TODO.md` for later.
 
 - **Language.** Everything in the repository is in English: code, comments, docs, commit
   messages, release notes. Talk to the user in the user's language.
@@ -67,7 +68,7 @@ Before calling a change done, run what it touches:
 | Every example renders and is denoised by Open Image Denoise | `tools/smoke.sh` |
 
 `.github/workflows/ci.yml` runs the tests and `tools/smoke.sh` on every push to `main`, on
-macOS (Apple Silicon and Intel) and Windows; check it after pushing (`gh run list`).
+macOS (Apple Silicon) and Windows; check it after pushing (`gh run list`).
 
 Render a scene to look at the result, which tests do not judge:
 
@@ -146,10 +147,10 @@ Versions follow [Semantic Versioning](https://semver.org/). Pre-releases carry a
    git tag vX.Y.Z && git push origin vX.Y.Z
    ```
    The workflow stops if the tag and the app version differ. Never move or reuse a tag.
-5. **Build.** `.github/workflows/release.yml` tests the engine, builds macOS (Apple Silicon and
-   Intel) and Windows, signs the update bundles and makes a draft release whose notes come from
+5. **Build.** `.github/workflows/release.yml` tests the engine, builds macOS (Apple Silicon) and
+   Windows, signs the update bundles and makes a draft release whose notes come from
    the changelog. Follow it with `gh run watch`.
-6. **Publish.** Check the draft (`gh release view vX.Y.Z`: three installers, the update
+6. **Publish.** Check the draft (`gh release view vX.Y.Z`: two installers, the update
    bundles and `latest.json`), then publish it: `gh release edit vX.Y.Z --draft=false`. A
    version with a label is published as a pre-release. Before publishing a release the user
    will rely on (any 3.0 candidate and later), ask the user to run

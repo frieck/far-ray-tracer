@@ -45,8 +45,8 @@ pub struct EntryEdits {
     pub scene_unit: Option<f32>,
 }
 
-/// Fields an edit cannot change.
-const FIXED_FIELDS: [&str; 5] = ["type", "file", "material", "ies", "name"];
+/// Fields an edit cannot change. A name can: the outliner renames objects and lights.
+const FIXED_FIELDS: [&str; 4] = ["type", "file", "material", "ies"];
 
 /// Of those, the ones a light's edit may change: switching its kind, as from a sphere to a
 /// panel, loading an IES profile, and dropping a 2008 light's material when it becomes a
@@ -389,10 +389,11 @@ mod tests {
                 }),
             ],
             render: Some(json!({"samples": 256})),
-            // The second sphere moved, the light grew brighter; `type` cannot change.
+            // The second sphere moved and was renamed, the light grew brighter; `type` cannot
+            // change.
             entries: EntryEdits {
-                objects: vec![(1, json!({"center": [3, 1, 5], "type": "box"}).as_object().unwrap().clone())],
-                lights: vec![(0, json!({"intensity": 4}).as_object().unwrap().clone()), (7, Map::new())],
+                objects: vec![(1, json!({"center": [3, 1, 5], "type": "box", "name": "Big ball"}).as_object().unwrap().clone())],
+                lights: vec![(0, json!({"intensity": 4, "name": "Key light"}).as_object().unwrap().clone()), (7, Map::new())],
                 // A box added, and the first sphere deleted after its material was edited.
                 added_objects: vec![json!({"type": "box", "name": "Crate", "center": [0, 0, 8], "size": [1, 1, 1]})],
                 removed_objects: vec![0],
@@ -417,8 +418,10 @@ mod tests {
         assert_eq!(saved["objects"][0]["material"]["emission"], json!({"color": [1.0, 0.5, 0.0], "strength": 3.0}));
         assert_eq!(saved["objects"][0]["center"], json!([3, 1, 5]));
         assert_eq!(saved["objects"][0]["type"], "sphere");
+        assert_eq!(saved["objects"][0]["name"], "Big ball");
         assert_eq!(saved["objects"][1]["name"], "Crate");
         assert_eq!(saved["lights"][0]["intensity"], 4);
+        assert_eq!(saved["lights"][0]["name"], "Key light");
         let name = dir.file_name().unwrap().to_string_lossy().into_owned();
         assert_eq!(saved["lights"][0]["ies"], format!("../{name}/scenes/lamp.ies"));
         assert_eq!(saved["data_folder"], format!("../{name}/scene-data"));

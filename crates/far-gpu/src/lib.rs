@@ -553,16 +553,35 @@ impl Gpu {
         })
     }
 
-    /// The shader compiled for `features`, kept for later renders.
-    fn pipeline(&self, features: &Features) -> wgpu::ComputePipeline {
-        let mut pipelines = self.pipelines.lock().unwrap();
-        pipelines.entry(features.0).or_insert_with(|| {
-            self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("trace"), layout: Some(&self.pipeline_layout), module: &self.shader, entry_point: Some("main"),
-                compilation_options: wgpu::PipelineCompilationOptions { constants: &features.constants(), ..Default::default() },
-                cache: None,
-            })
-        }).clone()
+    /// The shader compiled for `features`, kept for later renders. A card that fails to compile
+    /// it gives an error, not a crash, after one more try: the virtual cards of CI machines fail
+    /// at times and then succeed. A failure is not kept, so the next render tries again.
+    fn pipeline(&self, features: &Features) -> Result<wgpu::ComputePipeline, String> {
+        if let Some(pipeline) = self.pipelines.lock().unwrap().get(&features.0) {
+            return Ok(pipeline.clone());
+        }
+        let constants = features.constants();
+        let pipeline = self.compile(&constants).or_else(|_| self.compile(&constants))?;
+        self.pipelines.lock().unwrap().insert(features.0, pipeline.clone());
+        Ok(pipeline)
+    }
+
+    /// The shader compiled with its override `constants`, or why the card would not.
+    fn compile(&self, constants: &[(&str, f64)]) -> Result<wgpu::ComputePipeline, String> {
+        let internal = self.device.push_error_scope(wgpu::ErrorFilter::Internal);
+        let validation = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let pipeline = self.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("trace"), layout: Some(&self.pipeline_layout), module: &self.shader, entry_point: Some("main"),
+            compilation_options: wgpu::PipelineCompilationOptions { constants, ..Default::default() },
+            cache: None,
+        });
+        // Scopes come off in the reverse order they went on, and both must.
+        let failed = pollster::block_on(validation.pop());
+        match failed.or(pollster::block_on(internal.pop())) {
+            None => Ok(pipeline),
+            Some(e) => Err(format!("the graphics card could not compile the renderer ({}); render on the CPU instead",
+                e.to_string().split_whitespace().collect::<Vec<_>>().join(" "))),
+        }
     }
 
     /// Renders `op.samples` passes of the image, or of `op.region` and a ring of tiles around
@@ -671,7 +690,7 @@ impl Gpu {
             usage: wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[],
         }, wgpu::util::TextureDataOrder::LayerMajor, bytemuck::cast_slice(&env_data));
         let env_view = env.create_view(&wgpu::TextureViewDescriptor::default());
-        let pipeline = self.pipeline(&uses);
+        let pipeline = self.pipeline(&uses)?;
 
         let pixels = (w as usize) * (h as usize);
         let accum_size = (pixels * 16 * stride as usize) as u64;
@@ -978,6 +997,18 @@ mod tests {
         scene.volumes.resize(9, volume);
         let notes = pack(&scene, &Bvh::build(&scene)).notes;
         assert!(notes.iter().any(|n| n.contains("volumes")), "{notes:?}");
+    }
+
+    #[test]
+    fn a_shader_the_card_will_not_compile_is_an_error_and_the_next_one_compiles() {
+        let gpu = match Gpu::new() {
+            Ok(gpu) => gpu,
+            Err(e) => return eprintln!("skipped: {e}"),
+        };
+        // A constant the shader does not have is refused, as a card refuses one it cannot compile.
+        let refused = gpu.compile(&[("NOT_A_CONSTANT", 1.0)]).unwrap_err();
+        assert!(refused.contains("could not compile the renderer"), "{refused}");
+        assert!(gpu.pipeline(&Features(0)).is_ok());
     }
 }
 

@@ -72,6 +72,8 @@ interface OutlinerProps {
   onEditObject: () => void;
   /** Opens the selected light's settings in the Light tab. */
   onEditLight: () => void;
+  /** Gives an object or light a new name, saved into the scene with Save Scene. */
+  onRename: (selection: NonNullable<Selection>, name: string) => void;
   /** Folds the whole panel to its header. */
   collapsed: boolean;
   onCollapsedChange: (collapsed: boolean) => void;
@@ -119,6 +121,34 @@ export function Outliner(props: OutlinerProps) {
   const objects = props.objects.map((object, id) => ({ object, id }))
     .filter(({ object, id }) => !props.removedObjects.includes(id) && shows(object.name));
   const [adding, setAdding] = useState(false);
+  // The object or light whose name is being typed, as "o3" or "l0".
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const keyOf = (picked: NonNullable<Selection>) => `${picked.kind === "light" ? "l" : "o"}${picked.id}`;
+  const rename = (picked: NonNullable<Selection>, old: string) => (name: string | null) => {
+    setRenaming(null);
+    const trimmed = name?.trim();
+    if (trimmed && trimmed !== old) props.onRename(picked, trimmed);
+  };
+  // F2 renames the selection, as in file browsers.
+  const renameKey = useRef(() => {});
+  renameKey.current = () => {
+    if (!selection) return;
+    if (selection.kind === "light") setFolded((old) => old.filter((group) => group !== "lights"));
+    else setFolded((old) => old.filter((group) => group !== "objects"));
+    setFilter("");
+    setRenaming(keyOf(selection));
+  };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (event.key !== "F2" || (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
+      event.preventDefault();
+      renameKey.current();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+  useEffect(() => setRenaming(null), [selection?.kind, selection?.id]);
   // Models whose parts are listed under them, by index; folded at first.
   const [unfolded, setUnfolded] = useState<number[]>([]);
   /** A model's parts that something in it is made of, with their materials. */
@@ -221,6 +251,9 @@ export function Outliner(props: OutlinerProps) {
                 selected={selection?.kind === "light" && selection.id === id}
                 hidden={hiddenLights.includes(id)}
                 onSelect={() => props.onSelect({ kind: "light", id })}
+                renaming={renaming === keyOf({ kind: "light", id })}
+                onStartRename={() => setRenaming(keyOf({ kind: "light", id }))}
+                onRenamed={rename({ kind: "light", id }, light.name)}
                 onToggle={() => props.onHiddenChange(hiddenObjects, toggle(hiddenLights, id))} />
             ))}
             <Group name="Objects" count={objects.length} open={open("objects")} onFold={() => fold("objects")} />
@@ -235,6 +268,9 @@ export function Outliner(props: OutlinerProps) {
                   unfolded={parts.length > 1 ? showParts : undefined}
                   onUnfold={() => setUnfolded(toggle(unfolded, id))}
                   onSelect={() => props.onSelect({ kind: "object", id })}
+                  renaming={renaming === keyOf({ kind: "object", id })}
+                  onStartRename={() => setRenaming(keyOf({ kind: "object", id }))}
+                  onRenamed={rename({ kind: "object", id }, object.name)}
                   onToggle={() => props.onHiddenChange(toggle(hiddenObjects, id), hiddenLights)} />,
                 ...(showParts ? parts.map(({ name, material }) => (
                   <li key={`o${id}-${material.id}`} className="outliner-row outliner-part" data-hidden={hiddenObjects.includes(id) || undefined}>
@@ -340,8 +376,18 @@ function Item(props: {
   onUnfold?: () => void;
   onSelect: () => void;
   onToggle?: () => void;
+  /** Whether its name is being typed; double-clicking it starts, and `onRenamed` ends it. */
+  renaming?: boolean;
+  onStartRename?: () => void;
+  /** The name typed, or null when it was left as it was. */
+  onRenamed?: (name: string | null) => void;
 }) {
   const Icon = props.icon;
+  // Escape keeps the old name; each new rename starts without it.
+  const kept = useRef(false);
+  useEffect(() => {
+    if (props.renaming) kept.current = false;
+  }, [props.renaming]);
   return (
     <li className="outliner-row" data-selected={props.selected || undefined} data-hidden={props.hidden || undefined}>
       {props.unfolded !== undefined && (
@@ -350,11 +396,31 @@ function Item(props: {
           <ChevronRight size={11} aria-hidden="true" />
         </button>
       )}
-      <button type="button" className="outliner-pick" aria-current={props.selected || undefined} onClick={props.onSelect}>
-        <Icon size={13} aria-hidden="true" />
-        <span className="outliner-name">{props.name}</span>
-        {props.glow && <Sparkles size={11} className="outliner-glow" aria-label="glows" />}
-      </button>
+      {props.renaming ? (
+        <div className="outliner-pick">
+          <Icon size={13} aria-hidden="true" />
+          <input className="outliner-rename" autoFocus defaultValue={props.name} aria-label={`New name for ${props.name}`}
+            spellCheck={false}
+            onFocus={(event) => event.currentTarget.select()}
+            onKeyDown={(event) => {
+              // Kept here: Escape would also clear the selection, and letters are shortcuts.
+              event.stopPropagation();
+              if (event.key === "Enter") event.currentTarget.blur();
+              else if (event.key === "Escape") {
+                kept.current = true;
+                event.currentTarget.blur();
+              }
+            }}
+            onBlur={(event) => props.onRenamed?.(kept.current ? null : event.currentTarget.value)} />
+        </div>
+      ) : (
+        <button type="button" className="outliner-pick" aria-current={props.selected || undefined} onClick={props.onSelect}
+          onDoubleClick={props.onStartRename} title={props.onStartRename ? "Double-click or F2 to rename" : undefined}>
+          <Icon size={13} aria-hidden="true" />
+          <span className="outliner-name">{props.name}</span>
+          {props.glow && <Sparkles size={11} className="outliner-glow" aria-label="glows" />}
+        </button>
+      )}
       {props.onToggle && (
         <button type="button" className="outliner-eye" aria-pressed={!props.hidden}
           aria-label={props.hidden ? `Show ${props.name}` : `Hide ${props.name}`} title={props.hidden ? "Show" : "Hide"}

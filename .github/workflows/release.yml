@@ -1,4 +1,4 @@
-# Builds the desktop app for macOS (Apple Silicon and Intel) and Windows, and attaches the
+# Builds the desktop app for macOS (Apple Silicon) and Windows, and attaches the
 # installers to a draft GitHub release named after the app version, for example v3.0.0.
 #
 # Start it by pushing a tag that matches the version (git tag v3.0.0 && git push origin v3.0.0),
@@ -55,11 +55,6 @@ jobs:
             target: aarch64-apple-darwin
             oidn: macos-arm64
             bundles: app,dmg
-          - name: macOS (Intel)
-            runner: macos-latest
-            target: x86_64-apple-darwin
-            oidn: macos-x86_64
-            bundles: app,dmg
           - name: Windows
             runner: windows-latest
             target: x86_64-pc-windows-msvc
@@ -114,7 +109,6 @@ jobs:
             | System | Download |
             | --- | --- |
             | macOS, Apple Silicon (M1 and later) | `Far.Ray.Tracer_*_aarch64.dmg` |
-            | macOS, Intel | `Far.Ray.Tracer_*_x64.dmg` |
             | Windows 10 and 11 | `Far.Ray.Tracer_*_x64-setup.exe` |
 
             These builds are not signed, so each system asks before the first launch:
