@@ -7,6 +7,12 @@ and moves under its version when that version is released.
 
 ## [Unreleased]
 
+### Fixed
+
+- The outliner's add menu opened under the settings panel when the outliner was folded,
+  and a click elsewhere in the window did not close it. It now opens over everything, and a
+  click anywhere else or Escape closes it.
+
 ## [3.0.0-rc.2] - 2026-11-18
 
 ### Added

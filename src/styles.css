@@ -470,6 +470,8 @@ button { font: inherit; color: inherit; cursor: default; }
 
 /* The outliner: the scene's camera, environment, lights and objects, each shown or hidden. */
 .outliner-panel { display: flex; flex-direction: column; flex: none; min-height: 0; padding: 6px 8px 8px; border-radius: 16px; }
+/* Its glass makes it a layer of its own: raised, its add menu shows over the panel below. */
+.outliner-panel:has(.outliner-add-menu) { position: relative; z-index: 30; }
 .outliner-panel[data-collapsed] { padding-bottom: 6px; }
 /* However tall it was dragged, a smaller window keeps room for the settings (MIN_SETTINGS_HEIGHT). */
 .outliner-panel:not([data-collapsed]) { min-height: 120px; max-height: calc(100% - 280px - var(--gap)); }
@@ -551,7 +553,6 @@ button { font: inherit; color: inherit; cursor: default; }
 
 /* The outliner's Add menu. */
 .outliner-add { position: relative; }
-.outliner-add-backdrop { position: fixed; inset: 0; z-index: 20; }
 .outliner-add-menu { position: absolute; top: 26px; right: 0; z-index: 21; display: flex; gap: 10px; padding: 8px; border-radius: 12px; background: rgba(28, 30, 38, 0.92); }
 .outliner-add-menu > div { display: flex; flex-direction: column; gap: 1px; min-width: 104px; }
 .outliner-add-title { margin: 0 0 3px; padding: 0 6px; color: var(--faint); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }

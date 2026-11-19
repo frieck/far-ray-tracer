@@ -121,6 +121,24 @@ export function Outliner(props: OutlinerProps) {
   const objects = props.objects.map((object, id) => ({ object, id }))
     .filter(({ object, id }) => !props.removedObjects.includes(id) && shows(object.name));
   const [adding, setAdding] = useState(false);
+  // A press anywhere else, or Escape, closes the add menu. A backdrop cannot: the outliner's
+  // glass would keep it inside the outliner.
+  const addArea = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!adding) return;
+    const onPress = (event: PointerEvent) => {
+      if (!addArea.current?.contains(event.target as Node)) setAdding(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setAdding(false);
+    };
+    document.addEventListener("pointerdown", onPress, true);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPress, true);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [adding]);
   // The object or light whose name is being typed, as "o3" or "l0".
   const [renaming, setRenaming] = useState<string | null>(null);
   const keyOf = (picked: NonNullable<Selection>) => `${picked.kind === "light" ? "l" : "o"}${picked.id}`;
@@ -172,14 +190,13 @@ export function Outliner(props: OutlinerProps) {
             Show all
           </button>
         )}
-        <div className="outliner-add">
+        <div className="outliner-add" ref={addArea}>
           <button type="button" className="outliner-tool" aria-expanded={adding} aria-label="Add an object or a light"
             title="Add an object or a light where the camera looks" onClick={() => setAdding(!adding)}>
             <Plus size={14} aria-hidden="true" />
           </button>
           {adding && (
             <>
-              <div className="outliner-add-backdrop" onClick={() => setAdding(false)} />
               <div className="outliner-add-menu glass" role="menu">
                 {[["Objects", NEW_OBJECTS], ["Lights", NEW_LIGHTS]].map(([title, items]) => (
                   <div key={title as string} role="group" aria-label={title as string}>
